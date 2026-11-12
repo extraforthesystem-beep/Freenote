@@ -416,7 +416,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         } label: {
             Circle()
                 .fill(Color(color))
-                .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
+                .overlay(Circle().strokeBorder(AppColor.swatchOutline, lineWidth: 1))
                 .frame(width: 24, height: 24)
                 .padding(3)
                 .overlay {

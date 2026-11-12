@@ -10,6 +10,8 @@ import NoteCore
 enum AppSettings {
     /// The stored keys. The prefix keeps these apart from the editor's own keys.
     enum Key {
+        static let theme = "noteapp.settings.theme"
+        static let darkPaper = "noteapp.settings.darkPaper"
         static let showPageNumber = "noteapp.settings.showPageNumber"
         static let openDocumentsAsNewTabs = "noteapp.settings.openDocumentsAsNewTabs"
         static let newNotebookPaperSize = "noteapp.settings.newNotebookPaperSize"
@@ -32,6 +34,19 @@ enum AppSettings {
 
     /// The catalog id of the plain blank template.
     static let defaultTemplateID = "blank"
+
+    // MARK: - Appearance
+
+    /// The app's appearance; `.system` follows the device.
+    static var theme: AppTheme {
+        AppTheme(rawValue: string(Key.theme) ?? "") ?? .system
+    }
+
+    /// When on, and the app is in dark mode, notebook pages are dark grey
+    /// instead of white. Exports always keep light paper.
+    static var usesDarkPaper: Bool {
+        bool(Key.darkPaper, default: false)
+    }
 
     // MARK: - Document editing
 

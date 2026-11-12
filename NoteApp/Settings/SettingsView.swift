@@ -7,6 +7,8 @@ struct SettingsView: View {
 
     let model: AppModel
 
+    @AppStorage(AppSettings.Key.theme) private var theme: AppTheme = .system
+    @AppStorage(AppSettings.Key.darkPaper) private var darkPaper = false
     @AppStorage(AppSettings.Key.showPageNumber) private var showPageNumber = true
     @AppStorage(AppSettings.Key.openDocumentsAsNewTabs) private var openDocumentsAsNewTabs = true
     @AppStorage(AppSettings.Key.newNotebookPaperSize) private var paperSize: PaperSize = .a4
@@ -32,6 +34,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                appearance
                 documentEditing
                 writing
                 #if os(iOS)
@@ -53,6 +56,22 @@ struct SettingsView: View {
     }
 
     // MARK: - Sections
+
+    private var appearance: some View {
+        Section {
+            Picker("Theme", selection: $theme) {
+                ForEach(AppTheme.allCases) { choice in
+                    Text(choice.displayName).tag(choice)
+                }
+            }
+            .pickerStyle(.segmented)
+            Toggle("Dark Paper in Dark Mode", isOn: $darkPaper)
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("System follows the device's Light or Dark appearance. Notebooks keep white paper whatever the appearance; Dark Paper shows pages in dark grey, with template lines and Pencil ink adapted for reading. PDF and PNG exports always use white paper and true ink colours.")
+        }
+    }
 
     private var documentEditing: some View {
         Section {

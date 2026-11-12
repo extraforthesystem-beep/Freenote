@@ -1,13 +1,79 @@
 import InkKit
 import NoteCore
 import SwiftUI
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
+/// The app's appearance choice, stored in the settings. System follows the
+/// device.
+enum AppTheme: String, CaseIterable, Identifiable, Sendable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    /// `nil` follows the device.
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+/// The app's chrome colours. Everything that is not paper goes through the
+/// system's semantic colours (or a dynamic provider here), so it follows the
+/// appearance; paper keeps its own tokens because it does not.
 enum AppColor {
     static var groupedBackground: Color {
         #if os(iOS)
         Color(uiColor: .systemGroupedBackground)
         #else
         Color(nsColor: .windowBackgroundColor)
+        #endif
+    }
+
+    /// A notebook page's paper. Pages stay white whatever the appearance,
+    /// like paper on a desk; Dark Paper is the opt-in exception.
+    static func paper(usesDarkPaper: Bool) -> Color {
+        usesDarkPaper ? Color(PaperAppearance.darkPaper) : .white
+    }
+
+    /// Text printed on the paper, such as the page number. It reads against
+    /// the paper, so it cannot use the interface's label colour: in dark mode
+    /// that would be light text on white paper.
+    static func pageAnnotation(usesDarkPaper: Bool) -> Color {
+        usesDarkPaper ? Color.white.opacity(0.55) : Color.black.opacity(0.45)
+    }
+
+    /// The ring around an ink colour dot. It is light on dark chrome so a
+    /// black swatch still has an edge, and dark on light chrome.
+    static var swatchOutline: Color {
+        #if os(iOS)
+        Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(white: 1, alpha: 0.32)
+                : UIColor(white: 0, alpha: 0.20)
+        })
+        #else
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor(white: 1, alpha: 0.32)
+                : NSColor(white: 0, alpha: 0.20)
+        })
         #endif
     }
 }

@@ -20,8 +20,9 @@ import UIKit.UIGestureRecognizerSubclass
 //   so zoom belongs to the page and a zoomed page pans to its edge before the
 //   outer scroll view pages (UIKit's nested scroll hand-off).
 //
-// Each page is a `PageSlotView` (white paper with a shadow) in page points.
-// Only the active page (`session.page`) hosts the live SwiftUI page content
+// Each page is a `PageSlotView` (the page's paper with a shadow; white unless
+// Dark Paper is on) in page points. Only the active page (`session.page`) hosts
+// the live SwiftUI page content
 // (paper, PencilKit canvas, elements, laser, tape) through one
 // `UIHostingController`, whose view moves into the active slot. Other slots
 // show an image rendered off the main actor with `PageRenderer`, cached in
@@ -109,6 +110,8 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
     let fitMargin: CGFloat
     /// Fingers needed to scroll, zoom-pan or page. The Pencil never scrolls.
     let panTouches: Int
+    /// Pages are shown as dark paper; inactive pages are rendered to match.
+    let usesDarkPaper: Bool
     let inkCapture: InkCapture
     let onActivate: @MainActor (Int) async -> Void
     let content: Content
@@ -121,6 +124,7 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
         controller: PageZoomController,
         fitMargin: CGFloat,
         panTouches: Int,
+        usesDarkPaper: Bool = false,
         inkCapture: InkCapture,
         onActivate: @escaping @MainActor (Int) async -> Void,
         @ViewBuilder content: () -> Content
@@ -132,6 +136,7 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
         self.controller = controller
         self.fitMargin = fitMargin
         self.panTouches = panTouches
+        self.usesDarkPaper = usesDarkPaper
         self.inkCapture = inkCapture
         self.onActivate = onActivate
         self.content = content()
@@ -164,6 +169,8 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
     private func apply(to view: PagesView) {
         view.fitMargin = fitMargin
         view.panTouches = panTouches
+        // Before the page update, so renders for the new paper start fresh.
+        view.usesDarkPaper = usesDarkPaper
         view.inkCapture = inkCapture
         view.onActivate = onActivate
         view.update(pageOrder: pageOrder, activePage: activePage, source: source)
@@ -206,6 +213,18 @@ class PagesView: UIView {
         didSet { if oldValue != panTouches { panTouchesDidChange() } }
     }
     var onActivate: (@MainActor (Int) async -> Void)?
+    /// Pages are drawn as dark paper, so background and page images follow.
+    var usesDarkPaper = false {
+        didSet {
+            guard oldValue != usesDarkPaper else { return }
+            for slot in slots.values {
+                slot.usesDarkPaper = usesDarkPaper
+                slot.renderedScale = 0
+            }
+            refreshSlots()
+            scheduleRenders()
+        }
+    }
     var inkCapture: InkCapture? {
         didSet {
             if oldValue?.capturesFingers != inkCapture?.capturesFingers {
@@ -453,6 +472,7 @@ class PagesView: UIView {
             self?.strokeEnded(on: id, samples: samples, tool: tool)
         }
         slot.capturesFingers = inkCapture?.capturesFingers ?? false
+        slot.usesDarkPaper = usesDarkPaper
         slots[pageID] = slot
         configure(slot)
         return slot
@@ -575,7 +595,7 @@ class PagesView: UIView {
     // MARK: Rendering
 
     private func key(for pageID: UUID, source: PageImageSource) -> String {
-        "\(source.notebookID.uuidString)/\(source.token.uuidString)/\(pageID.uuidString)"
+        "\(source.notebookID.uuidString)/\(source.token.uuidString)/\(pageID.uuidString)\(usesDarkPaper ? "/dark" : "")"
     }
 
     /// Queues renders for nearby pages whose image is missing or too coarse.
@@ -623,8 +643,14 @@ class PagesView: UIView {
 
         let scale = desiredRenderScale()
         let assetsDirectory = source.assetsDirectory
+        let usesDarkPaper = usesDarkPaper
         let image = await Task.detached(priority: .userInitiated) {
-            PageRenderer.image(page: page, assetsDirectory: assetsDirectory, scale: scale)
+            PaperAppearance.image(
+                page: page,
+                assetsDirectory: assetsDirectory,
+                scale: scale,
+                usesDarkPaper: usesDarkPaper
+            )
         }.value
         guard let image,
               self.source?.token == source.token,
@@ -1223,6 +1249,17 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
     /// The scale of the image shown; 0 when it is missing or stale.
     var renderedScale: CGFloat = 0
 
+    /// The page is shown as dark paper: the slot follows it and caught-stroke
+    /// previews are drawn light-on-dark.
+    var usesDarkPaper = false {
+        didSet {
+            guard oldValue != usesDarkPaper else { return }
+            backgroundColor = PaperAppearance.pageBackgroundColor(usesDarkPaper: usesDarkPaper)
+            imageView.image = nil
+            renderedScale = 0
+        }
+    }
+
     private let imageView = UIImageView()
     private var placeholder: UIView?
     private let pencilDown = InkCaptureRecognizer()
@@ -1257,8 +1294,8 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
     init(pageID: UUID) {
         self.pageID = pageID
         super.init(frame: .zero)
-        // Paper is white whatever the appearance.
-        backgroundColor = .white
+        // Paper is the page's own colour whatever the appearance.
+        backgroundColor = PaperAppearance.pageBackgroundColor(usesDarkPaper: false)
         layer.shadowColor = UIColor.black.cgColor
         layer.shadowOpacity = 0.14
         layer.shadowRadius = 18
@@ -1339,7 +1376,8 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
             if let tool = liveStrokeTool {
                 let layer = CAShapeLayer()
                 layer.fillColor = nil
-                layer.strokeColor = tool.color.previewColor.cgColor
+                let preview = usesDarkPaper ? tool.color.forDarkPaper : tool.color
+                layer.strokeColor = preview.previewColor.cgColor
                 layer.lineWidth = CGFloat(tool.width)
                 layer.lineCap = .round
                 layer.lineJoin = .round

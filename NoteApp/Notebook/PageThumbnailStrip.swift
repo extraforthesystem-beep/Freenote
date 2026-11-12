@@ -64,6 +64,8 @@ private struct PageThumbnailCell: View {
     let index: Int
     let isCurrent: Bool
 
+    @AppStorage(AppSettings.Key.darkPaper) private var darkPaperInDarkMode = false
+    @Environment(\.colorScheme) private var colorScheme
     @State private var image: InkImage?
     @State private var failed = false
 
@@ -73,11 +75,16 @@ private struct PageThumbnailCell: View {
             : nil
     }
 
+    /// Pages follow Dark Paper, so a thumbnail matches the page it opens.
+    private var usesDarkPaper: Bool {
+        darkPaperInDarkMode && colorScheme == .dark
+    }
+
     var body: some View {
         ZStack {
-            // Paper is white whatever the appearance.
+            // Paper is the page's own colour whatever the appearance.
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(.white)
+                .fill(AppColor.paper(usesDarkPaper: usesDarkPaper))
 
             if let image {
                 Image(inkImage: image)
@@ -119,7 +126,7 @@ private struct PageThumbnailCell: View {
     private var taskKey: String {
         guard let pageID else { return "missing-\(index)" }
         // The current page re-renders after edits; others only when they load.
-        return "\(pageID)-\(isCurrent ? session.revision : 0)"
+        return "\(pageID)-\(isCurrent ? session.revision : 0)-\(usesDarkPaper)"
     }
 
     /// Small enough to be cheap, sharp enough for a 54 pt cell on Retina.
@@ -132,7 +139,11 @@ private struct PageThumbnailCell: View {
             failed = true
             return
         }
-        if let cached = ThumbnailCache.image(notebookID: session.notebookID, pageID: pageID) {
+        if let cached = ThumbnailCache.image(
+            notebookID: session.notebookID,
+            pageID: pageID,
+            usesDarkPaper: usesDarkPaper
+        ) {
             image = cached
             failed = false
             return
@@ -163,14 +174,13 @@ private struct PageThumbnailCell: View {
 
         let assetsDirectory = session.assetsDirectory
         let scale = Self.renderScale
+        let usesDarkPaper = usesDarkPaper
         let rendered = await Task.detached(priority: .utility) {
-            PageRenderer.image(
-                strokes: page.renderStrokes,
-                pageSize: CGSize(width: page.width, height: page.height),
-                template: page.template,
-                elements: page.visibleElements,
+            PaperAppearance.image(
+                page: page,
                 assetsDirectory: assetsDirectory,
-                scale: scale
+                scale: scale,
+                usesDarkPaper: usesDarkPaper
             )
         }.value
         guard !Task.isCancelled else { return }
@@ -178,7 +188,12 @@ private struct PageThumbnailCell: View {
             if image == nil { failed = true }
             return
         }
-        ThumbnailCache.store(rendered, notebookID: session.notebookID, pageID: pageID)
+        ThumbnailCache.store(
+            rendered,
+            notebookID: session.notebookID,
+            pageID: pageID,
+            usesDarkPaper: usesDarkPaper
+        )
         image = rendered
         failed = false
     }
@@ -192,11 +207,11 @@ enum ThumbnailCache {
         return cache
     }()
 
-    static func image(notebookID: UUID, pageID: UUID) -> InkImage? {
-        cache.object(forKey: key(notebookID, pageID))
+    static func image(notebookID: UUID, pageID: UUID, usesDarkPaper: Bool = false) -> InkImage? {
+        cache.object(forKey: key(notebookID, pageID, usesDarkPaper: usesDarkPaper))
     }
 
-    static func store(_ image: InkImage, notebookID: UUID, pageID: UUID) {
+    static func store(_ image: InkImage, notebookID: UUID, pageID: UUID, usesDarkPaper: Bool = false) {
         #if os(iOS)
         let pixels = image.size.width * image.size.height * image.scale * image.scale
         #else
@@ -204,17 +219,18 @@ enum ThumbnailCache {
         #endif
         cache.setObject(
             image,
-            forKey: key(notebookID, pageID),
+            forKey: key(notebookID, pageID, usesDarkPaper: usesDarkPaper),
             cost: Int(pixels * 4)
         )
     }
 
     static func invalidate(notebookID: UUID, pageID: UUID) {
-        cache.removeObject(forKey: key(notebookID, pageID))
+        cache.removeObject(forKey: key(notebookID, pageID, usesDarkPaper: false))
+        cache.removeObject(forKey: key(notebookID, pageID, usesDarkPaper: true))
     }
 
-    private static func key(_ notebookID: UUID, _ pageID: UUID) -> NSString {
-        "\(notebookID.uuidString)/\(pageID.uuidString)" as NSString
+    private static func key(_ notebookID: UUID, _ pageID: UUID, usesDarkPaper: Bool) -> NSString {
+        "\(notebookID.uuidString)/\(pageID.uuidString)\(usesDarkPaper ? "/dark" : "")" as NSString
     }
 }
 
