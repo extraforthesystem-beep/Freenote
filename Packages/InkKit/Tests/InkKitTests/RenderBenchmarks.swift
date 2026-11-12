@@ -119,6 +119,20 @@ struct RenderBenchmarks {
             }
         }
         print("BENCH realPDF (\(pageCount) pages): \(indices.count) opens \(opening), \(indices.count) thumbnails \(rendering)")
+
+        // The live page's paper is drawn at 2x on the main actor when it is
+        // not cached (PaperBackground): what activating a page costs.
+        let sample = Array(indices.prefix(10))
+        let paper = clock.measure {
+            for index in sample {
+                _ = PageRenderer.image(
+                    page: Self.page(assetName: "real.pdf", pageIndex: index),
+                    assetsDirectory: directory,
+                    scale: 2
+                )
+            }
+        }
+        print("BENCH realPDF 2x paper: \(sample.count) pages \(paper)")
     }
 
     /// What one finished stroke costs on a busy page: the converter's change

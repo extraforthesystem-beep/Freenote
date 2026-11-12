@@ -27,7 +27,9 @@ import UIKit.UIGestureRecognizerSubclass
 // `UIHostingController`, whose view moves into the active slot. Other slots
 // show an image rendered off the main actor with `PageRenderer`, cached in
 // `PageImageCache` by notebook token + page id at a scale that follows the
-// settled zoom.
+// settled zoom. A nearby page with a PDF page or photo also gets its live
+// paper pre-rendered (`PageBackgroundCache.prewarm`), so activating it does
+// not draw that paper on the main actor.
 //
 // Slots are created lazily for the pages near the viewport (plus the active
 // page) and dropped as they scroll away, so a 300-page notebook only has a
@@ -659,6 +661,14 @@ class PagesView: UIView {
         PageImageCache.store(image, scale: scale, key: key(for: pageID, source: source))
         if pageID != activePageID {
             slots[pageID]?.show(image, scale: scale)
+            // Not awaited: the next page image should not wait for it.
+            Task {
+                await PageBackgroundCache.prewarm(
+                    page.withoutTape,
+                    assetsDirectory: assetsDirectory,
+                    usesDarkPaper: usesDarkPaper
+                )
+            }
         }
     }
 

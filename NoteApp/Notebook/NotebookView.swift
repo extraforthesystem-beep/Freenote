@@ -604,15 +604,6 @@ struct NotebookPane: View {
         .disabled(session.currentPageID == nil)
     }
 
-    private static func removingTape(from page: Page) -> Page {
-        var page = page
-        page.elements.removeAll { element in
-            if case .tape = element.content { return true }
-            return false
-        }
-        return page
-    }
-
     private static let stickyColorNames = [
         "Pink", "Peach", "Yellow", "Green", "Mint", "Blue", "Lavender", "Rose", "Grey", "White",
     ]
@@ -1046,7 +1037,7 @@ struct NotebookPane: View {
             // Tape is drawn by `TapeOverlay` above the ink so it can hide and
             // reveal it; leaving it in the background would show through.
             PaperBackground(
-                page: Self.removingTape(from: page),
+                page: page.withoutTape,
                 assetsDirectory: session.assetsDirectory,
                 zoomScale: zoomController.settledZoom,
                 usesDarkPaper: usesDarkPaper
@@ -1207,7 +1198,7 @@ struct NotebookPane: View {
 
     private func zoomPanel(_ page: Page) -> some View {
         ZoomWindowPanel(
-            page: Self.removingTape(from: page),
+            page: page.withoutTape,
             band: zoomBand(page),
             tape: TapeOverlay(
                 page: page,
