@@ -20,6 +20,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     @ViewBuilder let moreMenu: () -> MoreMenu
 
     @State private var popover: ToolPopover?
+    @State private var showsPalette = false
+    @State private var showsFavoritePens = false
 
     private enum ToolPopover: Hashable {
         case pen, highlighter, eraser, laser
@@ -173,6 +175,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     private var tools: some View {
         HStack(spacing: 2) {
             penChip
+            favoritePensButton
             highlighterButton
             eraserButton
             ToolbarIconButton(
@@ -258,6 +261,24 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         }
     }
 
+    /// Saves the current pen, and recalls, adds or deletes saved pens.
+    private var favoritePensButton: some View {
+        Button {
+            showsFavoritePens = true
+        } label: {
+            ToolbarIcon(systemImage: editor.isCurrentPenSaved ? "star.fill" : "star")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Favourite Pens")
+        .accessibilityHint("Saves this pen, or recalls one with its colour and width")
+        .accessibilityAddTraits(editor.isCurrentPenSaved ? .isSelected : [])
+        .help("Favourite pens: save this pen or recall a saved one")
+        .popover(isPresented: $showsFavoritePens) {
+            FavoritePensPopover(editor: editor)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
     private var highlighterButton: some View {
         ToolbarIconButton(
             "Highlighter",
@@ -314,40 +335,102 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         )
     }
 
+    /// The active ink tool's eight favourites, a free slot while there are
+    /// fewer than eight, then the palette button.
     private var swatches: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(editor.swatches.enumerated()), id: \.offset) { _, color in
-                let isSelected = editor.tool.drawsInk && editor.isCurrentColor(color)
-                Button {
-                    editor.setColor(color)
-                } label: {
-                    Circle()
-                        .fill(Color(color))
-                        .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
-                        .frame(width: 24, height: 24)
-                        .padding(3)
-                        .overlay {
-                            Circle()
-                                .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
-                        }
-                        .frame(width: 40, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Colour")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
+        let favorites = editor.favoriteColors
+        return HStack(spacing: 0) {
+            ForEach(Array(favorites.colors.enumerated()), id: \.element) { index, color in
+                favoriteSwatch(color, index: index)
             }
-            ColorPicker(
-                "Custom colour",
-                selection: Binding(
-                    get: { Color(editor.inkTool.color) },
-                    set: { editor.setColor(RGBAColor($0)) }
-                ),
-                supportsOpacity: false
-            )
-            .labelsHidden()
+            if !favorites.isFull {
+                addFavoriteSlot
+            }
+            paletteButton
+        }
+    }
+
+    private func favoriteSwatch(_ color: RGBAColor, index: Int) -> some View {
+        let isSelected = editor.tool.drawsInk && editor.isCurrentColor(color)
+        return Button {
+            editor.setColor(color)
+        } label: {
+            Circle()
+                .fill(Color(color))
+                .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
+                .frame(width: 24, height: 24)
+                .padding(3)
+                .overlay {
+                    Circle()
+                        .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
+                }
+                .frame(width: 40, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Replace with Current Colour", systemImage: "arrow.triangle.2.circlepath") {
+                editor.replaceFavoriteColor(at: index, with: editor.inkTool.color)
+            }
+            Button("Remove", systemImage: "minus.circle", role: .destructive) {
+                editor.removeFavoriteColor(at: index)
+            }
+        }
+        .accessibilityLabel("\(editor.colorName(for: color)), favourite \(index + 1)")
+        .accessibilityHint("Double-tap to use this colour. Touch and hold to replace or remove it.")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// Shown once a favourite is removed: adds the current colour back.
+    private var addFavoriteSlot: some View {
+        Button {
+            editor.addFavoriteColor(editor.inkTool.color)
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+                .background {
+                    Circle().strokeBorder(
+                        Color.secondary.opacity(0.55),
+                        style: StrokeStyle(lineWidth: 1, dash: [3, 2])
+                    )
+                }
+                .frame(width: 40, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add \(editor.colorName(for: editor.inkTool.color)) to favourites")
+        .help("Add the current colour to the favourites")
+    }
+
+    private var paletteButton: some View {
+        Button {
+            showsPalette = true
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(AngularGradient(
+                        colors: [.red, .orange, .yellow, .green, .teal, .blue, .purple, .red],
+                        center: .center
+                    ))
+                Circle()
+                    .fill(Color(editor.inkTool.color))
+                    .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+                    .frame(width: 10, height: 10)
+            }
+            .frame(width: 24, height: 24)
+            .padding(3)
             .frame(width: 44, height: 44)
-            .accessibilityLabel("Custom colour")
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Colour palette, \(editor.colorName(for: editor.inkTool.color))")
+        .accessibilityHint("Opens presets, recent colours and a hex field")
+        .help("Colour palette")
+        .popover(isPresented: $showsPalette) {
+            ColorPalettePopover(editor: editor)
+                .presentationCompactAdaptation(.popover)
         }
     }
 

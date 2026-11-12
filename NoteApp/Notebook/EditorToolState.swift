@@ -94,20 +94,18 @@ final class EditorToolState {
     private(set) var eraserKind: EraserMode
     private(set) var eraserWidth: Double
     private(set) var laserMode: LaserMode
-    /// Most recent first. Starts with the standard colours.
-    private(set) var swatches: [RGBAColor]
+    /// The eight colours the pen shows in the toolbar.
+    private(set) var penFavorites: ColorFavorites
+    /// The eight colours the highlighter shows in the toolbar.
+    private(set) var highlighterFavorites: ColorFavorites
+    /// The last eight colours used by either ink tool, newest first.
+    private(set) var recentColors: ColorRecents
+    /// Saved pens: style, colour and width. Owns its own persistence.
+    let favoritePens: FavoritePens
     /// The ink tool colour and width changes go to when no ink tool is active.
     @ObservationIgnored private var lastInkTool: EditorTool = .pen
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
-    static let swatchCount = 5
-    static let standardColors: [RGBAColor] = [
-        .black,
-        RGBAColor(r: 0.0, g: 0.36, b: 0.86),
-        RGBAColor(r: 0.85, g: 0.13, b: 0.15),
-        RGBAColor(r: 0.09, g: 0.56, b: 0.27),
-        RGBAColor(r: 0.96, g: 0.55, b: 0.05),
-    ]
     static let eraserWidths: [Double] = [6, 12, 24, 48]
     static let highlighterAlpha = 0.35
     /// Shared with the eraser popover's `@AppStorage` toggle.
@@ -118,23 +116,49 @@ final class EditorToolState {
         static let eraserKind = "noteapp.editor.eraserKind"
         static let eraserWidth = "noteapp.editor.eraserWidth"
         static let laserMode = "noteapp.editor.laserMode"
-        static let swatches = "noteapp.editor.swatches.v1"
+        static let penFavorites = "noteapp.editor.penFavorites.v1"
+        static let highlighterFavorites = "noteapp.editor.highlighterFavorites.v1"
+        static let recentColors = "noteapp.editor.recentColors.v1"
+        /// The pre-palette list of five recent colours, migrated once.
+        static let legacySwatches = "noteapp.editor.swatches.v1"
     }
 
     init(defaults: UserDefaults = .standard) {
         presets = PenPresets.load()
+        favoritePens = FavoritePens(defaults: defaults)
         penStyle = defaults.string(forKey: Keys.penStyle).flatMap(PenStyle.init(rawValue:)) ?? .pen
         eraserKind = defaults.string(forKey: Keys.eraserKind).flatMap(EraserMode.init(rawValue:)) ?? .stroke
         laserMode = defaults.string(forKey: Keys.laserMode).flatMap(LaserMode.init(rawValue:)) ?? .line
         let storedWidth = defaults.double(forKey: Keys.eraserWidth)
         eraserWidth = storedWidth > 0 ? storedWidth : 12
-        if let data = defaults.data(forKey: Keys.swatches),
-           let stored = try? JSONDecoder().decode([RGBAColor].self, from: data),
-           !stored.isEmpty {
-            swatches = Array(stored.prefix(Self.swatchCount))
+
+        let legacySwatches = defaults.data(forKey: Keys.legacySwatches)
+            .flatMap { try? JSONDecoder().decode([RGBAColor].self, from: $0) }
+
+        if let data = defaults.data(forKey: Keys.penFavorites),
+           let stored = try? JSONDecoder().decode(ColorFavorites.self, from: data) {
+            penFavorites = stored
+        } else if let legacySwatches {
+            // The old recents become the first pen favourites.
+            penFavorites = ColorFavorites(migrating: legacySwatches, defaults: InkColorDefaults.pen)
         } else {
-            swatches = Self.standardColors
+            penFavorites = ColorFavorites(InkColorDefaults.pen)
         }
+
+        if let data = defaults.data(forKey: Keys.highlighterFavorites),
+           let stored = try? JSONDecoder().decode(ColorFavorites.self, from: data) {
+            highlighterFavorites = stored
+        } else {
+            highlighterFavorites = ColorFavorites(InkColorDefaults.highlighter)
+        }
+
+        if let data = defaults.data(forKey: Keys.recentColors),
+           let stored = try? JSONDecoder().decode(ColorRecents.self, from: data) {
+            recentColors = stored
+        } else {
+            recentColors = ColorRecents(legacySwatches ?? [])
+        }
+
         tool = .pen
     }
 
@@ -143,10 +167,20 @@ final class EditorToolState {
     var penTool: InkTool { presets.tool(for: penStyle) }
     var highlighterTool: InkTool { presets.highlighter }
 
+    /// The ink tool the toolbar edits: the current one, or the last one used
+    /// while erasing, lassoing or in another non-drawing tool.
+    var activeInkTool: EditorTool {
+        tool.drawsInk ? tool : lastInkTool
+    }
+
+    /// The favourites of the active ink tool.
+    var favoriteColors: ColorFavorites {
+        activeInkTool == .highlighter ? highlighterFavorites : penFavorites
+    }
+
     /// The ink tool shown on the canvas and edited by colour and width.
     var inkTool: InkTool {
-        let target = tool.drawsInk ? tool : lastInkTool
-        return target == .highlighter ? highlighterTool : penTool
+        activeInkTool == .highlighter ? highlighterTool : penTool
     }
 
     #if os(iOS)
@@ -229,6 +263,60 @@ final class EditorToolState {
         newColor.a = updated.isHighlighter ? Self.highlighterAlpha : 1
         updated.color = newColor
         presets.update(updated)
+        recentColors.record(newColor)
+        scheduleSave()
+    }
+
+    // MARK: - Favourite colours
+
+    /// Adds the colour to the active ink tool's favourites. Fails when the
+    /// eight slots are full.
+    @discardableResult
+    func addFavoriteColor(_ color: RGBAColor) -> Bool {
+        var favorites = favoriteColors
+        guard favorites.add(color) else { return false }
+        setFavorites(favorites)
+        return true
+    }
+
+    /// Swaps one favourite for another, keeping its place in the row. If the
+    /// colour is already another favourite, that slot goes so the row never
+    /// shows the same colour twice.
+    func replaceFavoriteColor(at index: Int, with color: RGBAColor) {
+        var favorites = favoriteColors
+        guard favorites.colors.indices.contains(index) else { return }
+        var target = index
+        if let existing = favorites.index(of: color), existing != index {
+            favorites.remove(at: existing)
+            if existing < index { target -= 1 }
+        }
+        guard favorites.replace(at: target, with: color) else { return }
+        setFavorites(favorites)
+    }
+
+    /// Leaves the seven remaining favourites in place; the toolbar then shows
+    /// a free slot.
+    func removeFavoriteColor(at index: Int) {
+        var favorites = favoriteColors
+        guard favorites.remove(at: index) else { return }
+        setFavorites(favorites)
+    }
+
+    func isFavoriteColor(_ color: RGBAColor) -> Bool {
+        favoriteColors.contains(color)
+    }
+
+    /// A spoken colour name for VoiceOver, e.g. "Blue".
+    func colorName(for color: RGBAColor) -> String {
+        ColorPalette.name(for: color)
+    }
+
+    private func setFavorites(_ favorites: ColorFavorites) {
+        if activeInkTool == .highlighter {
+            highlighterFavorites = favorites
+        } else {
+            penFavorites = favorites
+        }
         scheduleSave()
     }
 
@@ -260,27 +348,22 @@ final class EditorToolState {
     func saveNow() {
         saveTask?.cancel()
         saveTask = nil
-        rememberSwatch(inkTool.color)
+        recentColors.record(inkTool.color)
         presets.save()
+        favoritePens.save()
         let defaults = UserDefaults.standard
         defaults.set(penStyle.rawValue, forKey: Keys.penStyle)
         defaults.set(eraserKind.rawValue, forKey: Keys.eraserKind)
         defaults.set(eraserWidth, forKey: Keys.eraserWidth)
         defaults.set(laserMode.rawValue, forKey: Keys.laserMode)
-        if let data = try? JSONEncoder().encode(swatches) {
-            defaults.set(data, forKey: Keys.swatches)
+        if let data = try? JSONEncoder().encode(penFavorites) {
+            defaults.set(data, forKey: Keys.penFavorites)
         }
-    }
-
-    /// A custom colour becomes the first swatch; a colour already shown stays put.
-    private func rememberSwatch(_ color: RGBAColor) {
-        var opaque = color
-        opaque.a = 1
-        let isShown = swatches.contains {
-            abs($0.r - opaque.r) < 0.01 && abs($0.g - opaque.g) < 0.01 && abs($0.b - opaque.b) < 0.01
+        if let data = try? JSONEncoder().encode(highlighterFavorites) {
+            defaults.set(data, forKey: Keys.highlighterFavorites)
         }
-        guard !isShown else { return }
-        swatches.insert(opaque, at: 0)
-        swatches = Array(swatches.prefix(Self.swatchCount))
+        if let data = try? JSONEncoder().encode(recentColors) {
+            defaults.set(data, forKey: Keys.recentColors)
+        }
     }
 }
