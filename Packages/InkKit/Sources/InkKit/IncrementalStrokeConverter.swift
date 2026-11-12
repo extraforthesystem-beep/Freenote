@@ -111,24 +111,32 @@ public final class IncrementalStrokeConverter {
         signatures: [StrokeSignature],
         layerID: (UUID) -> UUID
     ) -> [StrokeRecord] {
-        var next: [UUID: Entry] = [:]
-        next.reserveCapacity(strokes.count)
+        // `entries` is updated in place rather than rebuilt: a rebuild copies
+        // every record into a new dictionary for each finished stroke.
         var records: [StrokeRecord] = []
         records.reserveCapacity(strokes.count)
         for (stroke, signature) in zip(strokes, signatures) {
             let layer = layerID(stroke.id)
-            var record: StrokeRecord
             if let entry = entries[stroke.id], entry.signature == signature {
-                record = entry.record
-                record.layerID = layer
+                var record = entry.record
+                if record.layerID != layer {
+                    record.layerID = layer
+                    entries[stroke.id]?.record.layerID = layer
+                }
+                records.append(record)
             } else {
-                record = StrokeCodec.record(from: stroke, layerID: layer)
+                let record = StrokeCodec.record(from: stroke, layerID: layer)
                 conversionCount += 1
+                entries[stroke.id] = Entry(signature: signature, record: record)
+                records.append(record)
             }
-            next[stroke.id] = Entry(signature: signature, record: record)
-            records.append(record)
         }
-        entries = next
+        // Drop strokes that are gone (erased, undone). Every live stroke has
+        // an entry, so a larger dictionary means some are stale.
+        if entries.count > strokes.count {
+            let live = Set(strokes.map(\.id))
+            entries = entries.filter { live.contains($0.key) }
+        }
         return records
     }
 }

@@ -37,6 +37,23 @@ struct StrokeOrderTests {
     }
 
     @Test
+    func aNewHighlighterAfterOrderedInkStillMovesUnderIt() {
+        // An ordered page plus one new stroke at the end: the shape of every
+        // merge. The in-order shortcut must not keep a highlighter on top.
+        let layer = UUID()
+        let ordered = StrokeOrder.renderOrder([pen(layer), highlighter(layer), pen(layer)], layerOrder: [layer])
+        let newHighlighter = highlighter(layer)
+        let merged = StrokeOrder.merge(
+            existing: ordered,
+            canvas: ordered + [newHighlighter],
+            hiddenLayerIDs: [],
+            layerOrder: [layer]
+        )
+        #expect(merged.strokes.map(\.id) == [ordered[0].id, newHighlighter.id, ordered[1].id, ordered[2].id])
+        #expect(merged.addedIDs == [newHighlighter.id])
+    }
+
+    @Test
     func movingALayerChangesTheDrawingOrder() {
         let a = UUID(), b = UUID()
         let inkA = pen(a), inkB = pen(b)
