@@ -325,6 +325,11 @@ public actor LibraryStore {
         layout.assetsDirectory(notebookID).appendingPathComponent(name)
     }
 
+    /// The folder holding a notebook's immutable binary assets.
+    public nonisolated func assetsDirectoryURL(for notebookID: UUID) -> URL {
+        layout.assetsDirectory(notebookID)
+    }
+
     // MARK: - Folder tree
 
     public func loadFolderTree() throws -> FolderTree {

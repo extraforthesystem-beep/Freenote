@@ -170,6 +170,20 @@ final class AppModel {
         }
     }
 
+    func importPDF(from url: URL) async {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let imported = try await PDFImporter.importPDF(at: url, into: store)
+            await reload()
+            if let notebook = notebook(withID: imported.id) {
+                await open(notebook)
+            }
+        } catch {
+            notice = Notice(title: "Could not import the PDF", message: error.localizedDescription)
+        }
+    }
+
     func rename(_ notebook: NotebookManifest, to title: String) async {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != notebook.title else { return }
@@ -328,6 +342,7 @@ enum PageDefaults {
 @Observable
 final class NotebookSession {
     let store: LibraryStore
+    let assetsDirectory: URL?
     var notebookID: UUID { manifest.id }
     private(set) var manifest: NotebookManifest
     private(set) var page: Page?
@@ -346,6 +361,7 @@ final class NotebookSession {
 
     init(store: LibraryStore, snapshot: LibraryStore.NotebookSnapshot) {
         self.store = store
+        self.assetsDirectory = store.assetsDirectoryURL(for: snapshot.manifest.id)
         self.manifest = snapshot.manifest
     }
 
@@ -471,6 +487,102 @@ final class NotebookSession {
             try await store.savePage(updated, in: manifest.id)
         } catch {
             // The old template stays on screen; a later edit saves the new one.
+        }
+    }
+
+    // MARK: - Page elements
+
+    func addTextElement(_ text: String, fontSize: Double = 16, color: RGBAColor = .black) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, var updated = page else { return }
+        await commitPendingSave()
+
+        let lines = max(1, trimmed.components(separatedBy: .newlines).count)
+        let width = updated.width * 0.7
+        let height = max(fontSize * 1.5 * Double(lines) + 16, fontSize * 2)
+        let layerID = updated.layers.first?.id ?? UUID()
+        updated.elements.append(
+            PageElement(
+                id: UUID(),
+                layerID: layerID,
+                frame: ElementFrame(
+                    x: (updated.width - width) / 2,
+                    y: updated.height * 0.18,
+                    width: width,
+                    height: height
+                ),
+                zIndex: (updated.elements.map(\.zIndex).max() ?? 0) + 1,
+                updatedAt: Date(),
+                content: .text(trimmed, fontName: "System", fontSize: fontSize, color: color)
+            )
+        )
+        await saveEditedPage(updated)
+    }
+
+    func addImageElement(data: Data, fileExtension: String) async {
+        guard var updated = page else { return }
+        await commitPendingSave()
+
+        do {
+            let assetName = try await store.addAsset(data, fileExtension: fileExtension, to: manifest.id)
+            let pixelSize = ImageSizeReader.size(of: data) ?? CGSize(width: 1000, height: 1000)
+            let maxWidth = updated.width * 0.75
+            let maxHeight = updated.height * 0.6
+            let ratio = min(maxWidth / pixelSize.width, maxHeight / pixelSize.height, 1)
+            let width = pixelSize.width * ratio
+            let height = pixelSize.height * ratio
+            let layerID = updated.layers.first?.id ?? UUID()
+            updated.elements.append(
+                PageElement(
+                    id: UUID(),
+                    layerID: layerID,
+                    frame: ElementFrame(
+                        x: (updated.width - width) / 2,
+                        y: updated.height * 0.15,
+                        width: width,
+                        height: height
+                    ),
+                    zIndex: (updated.elements.map(\.zIndex).max() ?? 0) + 1,
+                    updatedAt: Date(),
+                    content: .image(assetName: assetName)
+                )
+            )
+            await saveEditedPage(updated)
+        } catch {
+            // The caller reports errors through the page's loadError mechanism.
+            loadError = error.localizedDescription
+        }
+    }
+
+    func updateTextElement(_ elementID: UUID, text: String) async {
+        guard var updated = page,
+              let index = updated.elements.firstIndex(where: { $0.id == elementID })
+        else { return }
+        guard case let .text(_, fontName, fontSize, color) = updated.elements[index].content else { return }
+        updated.elements[index].content = .text(
+            text,
+            fontName: fontName,
+            fontSize: fontSize,
+            color: color
+        )
+        updated.elements[index].updatedAt = Date()
+        await saveEditedPage(updated)
+    }
+
+    func removeElement(_ elementID: UUID) async {
+        guard var updated = page else { return }
+        updated.elements.removeAll { $0.id == elementID }
+        await saveEditedPage(updated)
+    }
+
+    private func saveEditedPage(_ updated: Page) async {
+        page = updated
+        revision &+= 1
+        ThumbnailCache.invalidate(notebookID: manifest.id, pageID: updated.id)
+        do {
+            try await store.savePage(updated, in: manifest.id)
+        } catch {
+            loadError = error.localizedDescription
         }
     }
 

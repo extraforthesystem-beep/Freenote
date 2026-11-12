@@ -73,6 +73,8 @@ public actor SearchIndex {
     private struct InkSnapshot: Encodable {
         var strokes: [StrokeRecord]
         var deletedStrokeIDs: [String]
+        /// Typed text boxes are searchable too, and changing one must re-index.
+        var typedText: String
     }
 
     private static let indexFileName = "search-index.json"
@@ -173,11 +175,16 @@ public actor SearchIndex {
             return nil
         }
 
-        var text = ""
+        var parts: [String] = []
+        let typed = Self.typedText(in: page)
+        if !typed.isEmpty { parts.append(typed) }
         if !page.strokes.isEmpty {
             let recognized = await recognizer.text(for: page.strokes)
-            text = recognized?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if let recognized, !recognized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append(recognized.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
         }
+        let text = parts.joined(separator: "\n")
 
         let record = PageSearchRecord(
             notebookID: notebookID,
@@ -276,10 +283,20 @@ public actor SearchIndex {
 
     /// A stable hash of the ink alone: strokes plus deleted IDs, independent of
     /// page template, size and layers, so those edits do not trigger recognition.
+    private static func typedText(in page: Page) -> String {
+        page.elements.compactMap { element -> String? in
+            guard case let .text(text, _, _, _) = element.content else { return nil }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        .joined(separator: "\n")
+    }
+
     private static func contentHash(of page: Page) -> String {
         let snapshot = InkSnapshot(
             strokes: page.strokes,
-            deletedStrokeIDs: page.deletedStrokeIDs.map(\.uuidString).sorted()
+            deletedStrokeIDs: page.deletedStrokeIDs.map(\.uuidString).sorted(),
+            typedText: typedText(in: page)
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys

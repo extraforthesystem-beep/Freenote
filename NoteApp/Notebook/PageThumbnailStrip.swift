@@ -135,6 +135,8 @@ private struct PageThumbnailCell: View {
                 strokes: page.strokes,
                 pageSize: CGSize(width: page.width, height: page.height),
                 template: page.template,
+                elements: page.elements,
+                assetsDirectory: session.assetsDirectory,
                 scale: 1
             ) else {
                 failed = true

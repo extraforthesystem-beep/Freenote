@@ -226,3 +226,28 @@ private func makePage(id: UUID = UUID(), strokeCount: Int = 2) -> Page {
     #expect(snippet.hasPrefix("…"))
     #expect(snippet.hasSuffix("…"))
 }
+
+@Test func typedTextBoxesAreSearchableAndReindex() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let notebookID = UUID()
+    var page = makePage(strokeCount: 0)
+    let layerID = page.layers[0].id
+    page.elements = [
+        PageElement(
+            id: UUID(),
+            layerID: layerID,
+            frame: ElementFrame(x: 20, y: 20, width: 200, height: 60),
+            zIndex: 0,
+            updatedAt: Date(),
+            content: .text("Quarterly meeting notes", fontName: "System", fontSize: 14, color: .black)
+        )
+    ]
+
+    _ = try await index.update(page: page, in: notebookID, using: FakeRecognizer(text: nil))
+    #expect(await index.search("quarterly").count == 1)
+
+    page.elements[0].content = .text("Holiday plans", fontName: "System", fontSize: 14, color: .black)
+    _ = try await index.update(page: page, in: notebookID, using: FakeRecognizer(text: nil))
+    #expect(await index.search("quarterly").isEmpty)
+    #expect(await index.search("holiday").count == 1)
+}

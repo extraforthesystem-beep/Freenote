@@ -75,6 +75,8 @@ enum NotebookExporter {
                 strokes: page.strokes,
                 pageSize: size,
                 template: page.template,
+                elements: page.elements,
+                assetsDirectory: session.assetsDirectory,
                 scale: scale
             ), let cgImage = image.cgImageForExport else {
                 context.endPDFPage()
@@ -82,12 +84,9 @@ enum NotebookExporter {
                 throw NotebookExportError.couldNotRenderPage(index + 1)
             }
 
-            // PDF pages grow upwards while the rendered page grows downwards.
-            context.saveGState()
-            context.translateBy(x: 0, y: size.height)
-            context.scaleBy(x: 1, y: -1)
+            // The bitmap already has page orientation; CGImage draws upright in
+            // the PDF's y-up space, so no extra flip here.
             context.draw(cgImage, in: CGRect(origin: .zero, size: size))
-            context.restoreGState()
             context.endPDFPage()
         }
 

@@ -13,15 +13,23 @@ import AppKit
 public typealias InkImage = NSImage
 #endif
 
-/// Renders a page's strokes onto its paper, for thumbnails and the read-only Mac view.
+/// Renders a whole page — paper, elements and ink — for the live page,
+/// thumbnails, the Mac reader and PDF export.
 public enum PageRenderer {
-    /// Draws `template` and then the strokes of `strokes`, at `scale`.
+    /// Draws `template`, then `elements`, then the strokes of `strokes`, at `scale`.
+    ///
+    /// Elements are drawn by `zIndex` ascending, ties broken by `id`, and are
+    /// looked up by file name in `assetsDirectory`; a missing asset skips only
+    /// that element. Passing `nil` for `assetsDirectory` skips every element
+    /// that needs a file.
     ///
     /// Returns `nil` for an empty page size or when a bitmap cannot be created.
     public static func image(
         strokes: [StrokeRecord],
         pageSize: CGSize,
         template: PageTemplate,
+        elements: [PageElement] = [],
+        assetsDirectory: URL? = nil,
         scale: CGFloat = 2
     ) -> InkImage? {
         guard pageSize.width > 0, pageSize.height > 0, scale > 0 else { return nil }
@@ -45,6 +53,7 @@ public enum PageRenderer {
         context.scaleBy(x: scale, y: -scale)
 
         TemplateRenderer.draw(template, in: context, pageSize: pageSize)
+        PageElementRenderer.draw(elements, in: context, assetsDirectory: assetsDirectory)
         drawInk(in: context, strokes: strokes, pageSize: pageSize, scale: scale)
 
         guard let cgImage = context.makeImage() else { return nil }
@@ -68,7 +77,7 @@ public enum PageRenderer {
         let drawing = StrokeCodec.drawing(from: strokes)
         guard !drawing.strokes.isEmpty else { return }
         let inkImage = drawing.image(from: CGRect(origin: .zero, size: pageSize), scale: scale)
-        guard let ink = inkCGImage(inkImage) else { return }
+        guard let ink = cgImage(of: inkImage) else { return }
 
         // The context is flipped for page coordinates, so undo the flip locally
         // or the ink would land upside down relative to the paper.
@@ -79,13 +88,12 @@ public enum PageRenderer {
         context.restoreGState()
     }
 
-    private static func inkCGImage(_ image: InkImage) -> CGImage? {
+    /// The underlying `CGImage` of a rendered page.
+    static func cgImage(of image: InkImage) -> CGImage? {
         #if os(iOS)
         image.cgImage
         #else
         image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         #endif
     }
-
-
 }

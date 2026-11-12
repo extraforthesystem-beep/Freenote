@@ -1,6 +1,7 @@
 import InkKit
 import NoteCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct NotebookView: View {
     let session: NotebookSession
@@ -15,6 +16,9 @@ struct NotebookView: View {
     @State private var exportError: String?
     @State private var showsTemplatePicker = false
     @State private var showsCoverPicker = false
+    @State private var showsTextComposer = false
+    @State private var showsElements = false
+    @State private var showsImageImporter = false
     @State private var tool = InkTool(.pen)
     @State private var presets = PenPresets.load()
     #if os(iOS)
@@ -96,6 +100,26 @@ struct NotebookView: View {
                 }
             }
         }
+        .sheet(isPresented: $showsTextComposer) {
+            TextElementComposer { text, fontSize in
+                Task { await session.addTextElement(text, fontSize: fontSize) }
+            }
+        }
+        .sheet(isPresented: $showsElements) {
+            PageElementsSheet(session: session)
+        }
+        .fileImporter(
+            isPresented: $showsImageImporter,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else { return }
+            let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+            Task { await session.addImageElement(data: data, fileExtension: ext) }
+        }
     }
 
     private var exportFilename: String {
@@ -155,6 +179,18 @@ struct NotebookView: View {
                 Button("Add Page After", systemImage: "plus") {
                     Task { await session.addPage() }
                 }
+                Button("Add Text Box…", systemImage: "text.alignleft") {
+                    showsTextComposer = true
+                }
+                .disabled(session.page == nil)
+                Button("Add Image…", systemImage: "photo") {
+                    showsImageImporter = true
+                }
+                .disabled(session.page == nil)
+                Button("Page Elements…", systemImage: "square.on.square.dashed") {
+                    showsElements = true
+                }
+                .disabled(session.page == nil)
                 Button("Export PDF", systemImage: "square.and.arrow.up") {
                     Task {
                         isExporting = true
@@ -345,7 +381,7 @@ struct NotebookView: View {
         if let page = session.page {
             #if os(iOS)
             ZStack {
-                PaperBackground(template: page.template, pageSize: CGSize(width: page.width, height: page.height))
+                PaperBackground(page: page, assetsDirectory: session.assetsDirectory)
                 PencilCanvasView(
                     strokes: page.strokes,
                     pageSize: CGSize(width: page.width, height: page.height),
@@ -362,13 +398,15 @@ struct NotebookView: View {
             if let image = PageRenderer.image(
                 strokes: page.strokes,
                 pageSize: CGSize(width: page.width, height: page.height),
-                template: page.template
+                template: page.template,
+                elements: page.elements,
+                assetsDirectory: session.assetsDirectory
             ) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
             } else {
-                PaperBackground(template: page.template, pageSize: CGSize(width: page.width, height: page.height))
+                PaperBackground(page: page, assetsDirectory: session.assetsDirectory)
             }
             #endif
         } else if session.isLoadingPage {
@@ -456,21 +494,5 @@ struct NotebookView: View {
             .padding(.vertical, 6)
         }
         .background(.bar)
-    }
-}
-
-/// The printed part of a page, drawn by InkKit so the canvas, thumbnails and PDF agree.
-struct PaperBackground: View {
-    let template: PageTemplate
-    var pageSize: CGSize = PageTemplateCatalog.pageSize
-
-    var body: some View {
-        if let image = TemplateImageCache.image(for: template, pageSize: pageSize) {
-            Image(inkImage: image)
-                .resizable()
-                .interpolation(.high)
-        } else {
-            Color.white
-        }
     }
 }

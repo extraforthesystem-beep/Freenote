@@ -2,6 +2,7 @@ import InkKit
 import NoteCore
 import SearchKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Bindable var model: AppModel
@@ -16,6 +17,7 @@ struct LibraryView: View {
     @State private var renameFolderTarget: Folder?
     @State private var renameFolderText = ""
     @State private var deleteFolderTarget: Folder?
+    @State private var showPDFImporter = false
     @State private var tagTarget: NotebookManifest?
     @State private var tagsText = ""
 
@@ -210,11 +212,35 @@ struct LibraryView: View {
             if model.selectedLocation != .trash {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
+                        showPDFImporter = true
+                    } label: {
+                        Label("Import PDF", systemImage: "square.and.arrow.down")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
                         Task { await model.createNotebook() }
                     } label: {
                         Label("New Notebook", systemImage: "plus")
                     }
                 }
+            }
+        }
+        .fileImporter(
+            isPresented: $showPDFImporter,
+            allowedContentTypes: [.pdf],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    Task { await model.importPDF(from: url) }
+                }
+            case .failure(let error):
+                model.notice = AppModel.Notice(
+                    title: "Could not open the PDF",
+                    message: error.localizedDescription
+                )
             }
         }
     }
@@ -601,6 +627,8 @@ private struct NotebookCard: View {
                   strokes: page.strokes,
                   pageSize: CGSize(width: page.width, height: page.height),
                   template: page.template,
+                  elements: page.elements,
+                  assetsDirectory: store.assetsDirectoryURL(for: notebook.id),
                   scale: 1
               )
         else { return }
