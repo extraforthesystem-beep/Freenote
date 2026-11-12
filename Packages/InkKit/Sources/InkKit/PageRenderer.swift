@@ -93,8 +93,19 @@ public enum PageRenderer {
     ) {
         let drawing = StrokeCodec.drawing(from: strokes)
         guard !drawing.strokes.isEmpty else { return }
+        #if os(iOS)
+        // Rendered ink is always shown as stored, whatever the app's
+        // appearance: exports and page images must not inherit the display
+        // inversion PencilKit applies to a canvas in dark mode.
+        var inkImage: UIImage?
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+            inkImage = drawing.image(from: CGRect(origin: .zero, size: pageSize), scale: scale)
+        }
+        guard let inkImage, let ink = cgImage(of: inkImage) else { return }
+        #else
         let inkImage = drawing.image(from: CGRect(origin: .zero, size: pageSize), scale: scale)
         guard let ink = cgImage(of: inkImage) else { return }
+        #endif
 
         // The context is flipped for page coordinates, so undo the flip locally
         // or the ink would land upside down relative to the paper.

@@ -200,6 +200,10 @@ public struct PencilCanvasView: UIViewRepresentable {
     /// viewport canvas does not take over the controller until the Pencil
     /// touches it, so the page canvas keeps undo otherwise.
     public var viewport: CGRect?
+    /// The paper behind the canvas is dark: PencilKit uses dark appearance and
+    /// draws the ink light-on-dark for display. Stored stroke colours are
+    /// untouched, and .light keeps black ink black on white paper.
+    public var usesDarkPaper: Bool
     /// The Pencil or finger started using the current tool.
     public var onToolGestureBegan: (() -> Void)?
     public var onStrokesChanged: ([StrokeRecord]) -> Void
@@ -223,6 +227,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         onPencilDoubleTap: ((PencilDoubleTapAction) -> Void)? = nil,
         eraseHighlighterOnly: Bool = false,
         viewport: CGRect? = nil,
+        usesDarkPaper: Bool = false,
         onToolGestureBegan: (() -> Void)? = nil,
         onStrokesChanged: @escaping ([StrokeRecord]) -> Void
     ) {
@@ -244,6 +249,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.onPencilDoubleTap = onPencilDoubleTap
         self.eraseHighlighterOnly = eraseHighlighterOnly
         self.viewport = viewport
+        self.usesDarkPaper = usesDarkPaper
         self.onToolGestureBegan = onToolGestureBegan
         self.onStrokesChanged = onStrokesChanged
     }
@@ -278,6 +284,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
+        // Black ink stays black on white paper; on dark paper PencilKit
+        // lightens ink for display without touching the stored colours.
+        canvas.overrideUserInterfaceStyle = usesDarkPaper ? .dark : .light
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
         context.coordinator.canvas = canvas
         if viewport == nil {
@@ -361,6 +370,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
+        canvas.overrideUserInterfaceStyle = usesDarkPaper ? .dark : .light
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
         coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
         coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap

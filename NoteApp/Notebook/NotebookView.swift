@@ -153,6 +153,8 @@ struct NotebookPane: View {
     @State private var showsClearPageConfirmation = false
     @AppStorage(AppSettings.Key.showPageNumber) private var showsPageNumber = true
     @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
+    @AppStorage(AppSettings.Key.darkPaper) private var darkPaperInDarkMode = false
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(AppSettings.Key.pageScrollMode) private var defaultScrollMode: PageScrollMode = .vertical
     @State private var showsCoverPicker = false
     @State private var showsTextComposer = false
@@ -182,6 +184,12 @@ struct NotebookPane: View {
     @AppStorage(AppSettings.Key.zoomMagnification) private var zoomMagnification = ZoomBand.defaultMagnification
     @AppStorage(AppSettings.Key.zoomPanelFraction) private var zoomPanelFraction = 0.35
     #endif
+
+    /// Dark Paper is an opt-in, and only in dark mode; pages are white paper
+    /// otherwise.
+    private var usesDarkPaper: Bool {
+        darkPaperInDarkMode && colorScheme == .dark
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -897,6 +905,7 @@ struct NotebookPane: View {
                     controller: zoomController,
                     fitMargin: 20,
                     panTouches: panTouches,
+                    usesDarkPaper: usesDarkPaper,
                     inkCapture: inkCapture,
                     onActivate: { index in await session.goToPage(index) }
                 ) {
@@ -972,13 +981,14 @@ struct NotebookPane: View {
             PaperBackground(
                 page: Self.removingTape(from: page),
                 assetsDirectory: session.assetsDirectory,
-                zoomScale: zoomController.settledZoom
+                zoomScale: zoomController.settledZoom,
+                usesDarkPaper: usesDarkPaper
             )
 
             if showsPageNumber {
                 Text("\(session.currentPageNumber)")
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppColor.pageAnnotation(usesDarkPaper: usesDarkPaper))
                     .padding([.bottom, .trailing], 14)
                     // Bottom-trailing, clear of the page counter pill at the bottom centre.
                     .frame(width: page.width, height: page.height, alignment: .bottomTrailing)
@@ -1006,6 +1016,7 @@ struct NotebookPane: View {
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
                 eraseHighlighterOnly: eraserHighlighterOnly,
+                usesDarkPaper: usesDarkPaper,
                 onStrokesChanged: { session.strokesChanged($0) }
             )
             .id(page.id)
@@ -1095,6 +1106,7 @@ struct NotebookPane: View {
             assetsDirectory: session.assetsDirectory,
             height: zoomPanelHeight,
             showsAdvanceArea: zoomAutoAdvance,
+            usesDarkPaper: usesDarkPaper,
             onWritingSizeChange: { zoomView.writingSize = $0 },
             onResize: { height, ended in
                 let total = max(editorHeight, 400)
@@ -1132,6 +1144,7 @@ struct NotebookPane: View {
                 onPencilDoubleTap: nil,
                 eraseHighlighterOnly: eraserHighlighterOnly,
                 viewport: band.rect,
+                usesDarkPaper: usesDarkPaper,
                 onToolGestureBegan: { zoomView.cancelAdvance() },
                 onStrokesChanged: { zoomStrokesChanged($0, on: page) }
             )
@@ -1159,18 +1172,21 @@ struct NotebookPane: View {
     #if os(macOS)
     @ViewBuilder
     private func macPageImage(_ page: Page) -> some View {
-        if let image = PageRenderer.image(
-            strokes: page.renderStrokes,
-            pageSize: CGSize(width: page.width, height: page.height),
-            template: page.template,
-            elements: page.visibleElements,
-            assetsDirectory: session.assetsDirectory
+        if let image = PaperAppearance.image(
+            page: page,
+            assetsDirectory: session.assetsDirectory,
+            scale: 2,
+            usesDarkPaper: usesDarkPaper
         ) {
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
         } else {
-            PaperBackground(page: page, assetsDirectory: session.assetsDirectory)
+            PaperBackground(
+                page: page,
+                assetsDirectory: session.assetsDirectory,
+                usesDarkPaper: usesDarkPaper
+            )
         }
     }
     #endif

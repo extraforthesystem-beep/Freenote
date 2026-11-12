@@ -104,6 +104,8 @@ struct ZoomWindowPanel<Canvas: View>: View {
     let assetsDirectory: URL?
     let height: CGFloat
     let showsAdvanceArea: Bool
+    /// The band's paper is dark paper.
+    var usesDarkPaper: Bool = false
     let onWritingSizeChange: (CGSize) -> Void
     /// The new panel height while dragging the bar, and whether the drag ended.
     let onResize: (CGFloat, Bool) -> Void
@@ -198,12 +200,17 @@ struct ZoomWindowPanel<Canvas: View>: View {
             .background(alignment: .topLeading) {
                 if let band, band.rect.width > 0 {
                     let scale = band.scale(panelWidth: proxy.size.width)
-                    PaperBackground(page: page, assetsDirectory: assetsDirectory, zoomScale: scale)
+                    PaperBackground(
+                        page: page,
+                        assetsDirectory: assetsDirectory,
+                        zoomScale: scale,
+                        usesDarkPaper: usesDarkPaper
+                    )
                         .frame(width: page.width * scale, height: page.height * scale)
                         .offset(x: -band.rect.minX * scale, y: -band.rect.minY * scale)
                         .allowsHitTesting(false)
                 } else {
-                    Color.white
+                    AppColor.paper(usesDarkPaper: usesDarkPaper)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)

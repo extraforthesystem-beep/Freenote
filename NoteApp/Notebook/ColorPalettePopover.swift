@@ -56,7 +56,7 @@ struct ColorPalettePopover: View {
             Spacer(minLength: 0)
             Circle()
                 .fill(Color(editor.inkTool.color))
-                .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
+                .overlay(Circle().strokeBorder(AppColor.swatchOutline, lineWidth: 1))
                 .frame(width: 26, height: 26)
                 .accessibilityHidden(true)
         }
@@ -74,7 +74,7 @@ struct ColorPalettePopover: View {
                     } label: {
                         Circle()
                             .fill(Color(color))
-                            .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
+                            .overlay(Circle().strokeBorder(AppColor.swatchOutline, lineWidth: 1))
                             .frame(width: 26, height: 26)
                             .frame(width: 30, height: 34)
                             .contentShape(Rectangle())
@@ -96,7 +96,7 @@ struct ColorPalettePopover: View {
                 } label: {
                     Circle()
                         .fill(Color(color))
-                        .overlay(Circle().strokeBorder(.secondary.opacity(0.3), lineWidth: 0.5))
+                        .overlay(Circle().strokeBorder(AppColor.swatchOutline, lineWidth: 1))
                         .overlay {
                             Circle().strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
                         }

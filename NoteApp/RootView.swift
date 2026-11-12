@@ -6,6 +6,8 @@ import UIKit
 struct RootView: View {
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
+    /// The appearance choice; `nil` follows the device.
+    @AppStorage(AppSettings.Key.theme) private var theme: AppTheme = .system
 
     var body: some View {
         Group {
@@ -17,6 +19,7 @@ struct RootView: View {
                 NotebookView(model: model)
             }
         }
+        .preferredColorScheme(theme.colorScheme)
         .task { await model.start() }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
