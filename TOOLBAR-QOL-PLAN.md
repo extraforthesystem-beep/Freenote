@@ -53,3 +53,29 @@ Scope, as asked: the main toolbar and daily writing comfort, usable on any iPad 
 - `xcodebuild` for the iPad simulator and macOS both succeed.
 - Package tests pass (`swift test` in each touched package); new pure logic gets tests.
 - No `print`/`console` logging left in; no unrelated rewrites.
+
+## Status — 2026-11-12
+
+All packages merged on `feat/toolbar-qol` (not pushed). Last verified at `5d07da3`: iPad simulator and macOS builds succeed; NoteCore 79 tests and InkKit 75 tests pass.
+
+| WP | Merged | Built by |
+|---|---|---|
+| A colour palettes, favourite pens | `f0e30c9` | DeepSeek |
+| B writing settings, highlighter-only eraser, Screen (Optimised) paper | `4a75d68` | DeepSeek |
+| C hold to straighten | `b60d0a4` | Opus |
+| D seamless / single-page scrolling | `1357116` | Opus |
+| F remember last tool, hide status bar | `671c836` | DeepSeek |
+| Fix: keep first stroke on a newly touched page | `39295f1` | Opus |
+| E Zoom View | `5d07da3` | Opus |
+
+Not built: lasso recolour (PencilKit exposes no lasso selection; needs a custom lasso), ink stabilisation, eyedropper.
+
+### Hands-on iPad + Pencil checklist (nothing below has been driven on a device)
+- Hold to straighten: one undo restores the freehand stroke; no long flicker; thresholds feel right.
+- Highlighter-only eraser: pen ink survives; undo after a no-op pass.
+- Two/three-finger double-tap undo/redo vs pinch zoom; finger dots with Draw with Finger on.
+- Pencil double-tap actions (2nd gen / Pro only).
+- Seamless scroll: one-finger scroll vs resting palm; first stroke on the next page kept; memory with large PDFs; rotation and split view.
+- Single page: zoomed page pans to its edge before paging; Pencil never pages.
+- Zoom View: ink lands at the right place; auto-advance timing; handles beat page scroll; undo follows the last canvas; Pencil double-tap while writing in the panel.
+- Remember last tool; hidden status bar.
