@@ -151,14 +151,27 @@ private struct PageThumbnailCell: View {
 
 @MainActor
 enum ThumbnailCache {
-    private static let cache = NSCache<NSString, InkImage>()
+    private static let cache: NSCache<NSString, InkImage> = {
+        let cache = NSCache<NSString, InkImage>()
+        cache.totalCostLimit = 64 * 1_024 * 1_024
+        return cache
+    }()
 
     static func image(notebookID: UUID, pageID: UUID) -> InkImage? {
         cache.object(forKey: key(notebookID, pageID))
     }
 
     static func store(_ image: InkImage, notebookID: UUID, pageID: UUID) {
-        cache.setObject(image, forKey: key(notebookID, pageID))
+        #if os(iOS)
+        let pixels = image.size.width * image.size.height * image.scale * image.scale
+        #else
+        let pixels = image.size.width * image.size.height
+        #endif
+        cache.setObject(
+            image,
+            forKey: key(notebookID, pageID),
+            cost: Int(pixels * 4)
+        )
     }
 
     static func invalidate(notebookID: UUID, pageID: UUID) {

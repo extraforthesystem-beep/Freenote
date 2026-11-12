@@ -87,7 +87,11 @@ enum PageTemplateCatalog {
 
 @MainActor
 enum TemplateImageCache {
-    private static let cache = NSCache<NSString, InkImage>()
+    private static let cache: NSCache<NSString, InkImage> = {
+        let cache = NSCache<NSString, InkImage>()
+        cache.totalCostLimit = 64 * 1_024 * 1_024
+        return cache
+    }()
 
     static func image(
         for template: PageTemplate,
@@ -101,7 +105,8 @@ enum TemplateImageCache {
         guard let image = TemplateRenderer.image(template, pageSize: pageSize, scale: scale) else {
             return nil
         }
-        cache.setObject(image, forKey: key)
+        let cost = Int(pageSize.width * pageSize.height * scale * scale * 4)
+        cache.setObject(image, forKey: key, cost: cost)
         return image
     }
 
