@@ -14,7 +14,23 @@ public struct StrokeRecord: Codable, Hashable, Sendable, Identifiable {
     public var randomSeed: UInt32
     public var mask: [PathElement]?
     public var renderGroupID: UUID?
+    /// PencilKit's path identity, kept when the stroke came from a PencilKit canvas.
+    /// nil for strokes produced by a custom engine.
+    public var pathID: UUID?
+    /// PencilKit's grain offset for textured inks. nil when not set.
+    public var grainOffset: GrainOffset?
     public var points: [StrokePoint]
+
+    /// The part of Apple's per-stroke render state that its public API exposes.
+    public struct GrainOffset: Codable, Hashable, Sendable {
+        public var x: Double
+        public var y: Double
+
+        public init(x: Double, y: Double) {
+            self.x = x
+            self.y = y
+        }
+    }
 
     public static let transformElementCount = 6
     public static let identityTransform: [Double] = [1, 0, 0, 1, 0, 0]
@@ -28,6 +44,8 @@ public struct StrokeRecord: Codable, Hashable, Sendable, Identifiable {
         randomSeed: UInt32,
         mask: [PathElement]? = nil,
         renderGroupID: UUID? = nil,
+        pathID: UUID? = nil,
+        grainOffset: GrainOffset? = nil,
         points: [StrokePoint]
     ) {
         self.id = id
@@ -38,11 +56,14 @@ public struct StrokeRecord: Codable, Hashable, Sendable, Identifiable {
         self.randomSeed = randomSeed
         self.mask = mask
         self.renderGroupID = renderGroupID
+        self.pathID = pathID
+        self.grainOffset = grainOffset
         self.points = points
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, layerID, tool, createdAt, transform, randomSeed, mask, renderGroupID, points
+        case id, layerID, tool, createdAt, transform, randomSeed, mask, renderGroupID
+        case pathID, grainOffset, points
     }
 
     public init(from decoder: any Decoder) throws {
@@ -63,6 +84,8 @@ public struct StrokeRecord: Codable, Hashable, Sendable, Identifiable {
         self.randomSeed = try container.decode(UInt32.self, forKey: .randomSeed)
         self.mask = try container.decodeIfPresent([PathElement].self, forKey: .mask)
         self.renderGroupID = try container.decodeIfPresent(UUID.self, forKey: .renderGroupID)
+        self.pathID = try container.decodeIfPresent(UUID.self, forKey: .pathID)
+        self.grainOffset = try container.decodeIfPresent(GrainOffset.self, forKey: .grainOffset)
         self.points = try container.decode([StrokePoint].self, forKey: .points)
     }
 
@@ -85,6 +108,8 @@ public struct StrokeRecord: Codable, Hashable, Sendable, Identifiable {
         try container.encode(randomSeed, forKey: .randomSeed)
         try container.encodeIfPresent(mask, forKey: .mask)
         try container.encodeIfPresent(renderGroupID, forKey: .renderGroupID)
+        try container.encodeIfPresent(pathID, forKey: .pathID)
+        try container.encodeIfPresent(grainOffset, forKey: .grainOffset)
         try container.encode(points, forKey: .points)
     }
 }

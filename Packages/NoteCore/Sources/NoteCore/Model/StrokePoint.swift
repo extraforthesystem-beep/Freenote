@@ -13,6 +13,10 @@ public struct StrokePoint: Codable, Hashable, Sendable {
     public var azimuth: Double
     public var altitude: Double
     public var secondaryScale: Double
+    /// Apple's pencil shading threshold. Zero on engines that do not model it.
+    public var threshold: Double
+    /// Apple's pencil lateral jitter. Zero on engines that do not model it.
+    public var lateralJitter: Double
 
     public init(
         x: Double,
@@ -24,7 +28,9 @@ public struct StrokePoint: Codable, Hashable, Sendable {
         force: Double,
         azimuth: Double,
         altitude: Double,
-        secondaryScale: Double
+        secondaryScale: Double,
+        threshold: Double = 0,
+        lateralJitter: Double = 0
     ) {
         self.x = x
         self.y = y
@@ -36,5 +42,7 @@ public struct StrokePoint: Codable, Hashable, Sendable {
         self.azimuth = azimuth
         self.altitude = altitude
         self.secondaryScale = secondaryScale
+        self.threshold = threshold
+        self.lateralJitter = lateralJitter
     }
 }
