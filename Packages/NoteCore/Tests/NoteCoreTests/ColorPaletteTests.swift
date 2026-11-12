@@ -115,6 +115,42 @@ struct ColorFavoritesTests {
         let favorites = ColorFavorites([RGBAColor(r: 0.5, g: 0.5, b: 0.5, a: 0.35)])
         #expect(favorites.colors.first?.a == 1)
     }
+
+    @Test
+    func moveForwardShiftsTheColoursItPasses() {
+        let colors = (0..<4).map { RGBAColor(r: Double($0) / 10, g: 0, b: 0) }
+        var favorites = ColorFavorites(colors)
+        let moved = favorites.move(from: 0, to: 2)
+        #expect(moved)
+        #expect(favorites.colors == [colors[1], colors[2], colors[0], colors[3]])
+    }
+
+    @Test
+    func moveBackwardShiftsTheColoursItPasses() {
+        let colors = (0..<4).map { RGBAColor(r: Double($0) / 10, g: 0, b: 0) }
+        var favorites = ColorFavorites(colors)
+        let movedToMiddle = favorites.move(from: 3, to: 1)
+        #expect(movedToMiddle)
+        #expect(favorites.colors == [colors[0], colors[3], colors[1], colors[2]])
+        let movedToFront = favorites.move(from: 2, to: 0)
+        #expect(movedToFront)
+        #expect(favorites.colors == [colors[1], colors[0], colors[3], colors[2]])
+    }
+
+    @Test
+    func moveToTheSameSlotOrOutOfRangeChangesNothing() {
+        let colors = (0..<3).map { RGBAColor(r: Double($0) / 10, g: 0, b: 0) }
+        var favorites = ColorFavorites(colors)
+        let sameSlot = favorites.move(from: 1, to: 1)
+        let pastTheEnd = favorites.move(from: 0, to: 3)
+        let negativeDestination = favorites.move(from: 2, to: -1)
+        let negativeSource = favorites.move(from: -1, to: 0)
+        #expect(sameSlot == false)
+        #expect(pastTheEnd == false)
+        #expect(negativeDestination == false)
+        #expect(negativeSource == false)
+        #expect(favorites.colors == colors)
+    }
 }
 
 struct ColorRecentsTests {

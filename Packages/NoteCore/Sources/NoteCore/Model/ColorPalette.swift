@@ -209,6 +209,18 @@ public struct ColorFavorites: Codable, Hashable, Sendable {
         return true
     }
 
+    /// Moves the colour at one slot to another, shifting the colours it passes
+    /// along by one. Returns `false` for the same slot or an out-of-range index.
+    @discardableResult
+    public mutating func move(from source: Int, to destination: Int) -> Bool {
+        guard colors.indices.contains(source),
+              colors.indices.contains(destination),
+              source != destination
+        else { return false }
+        colors.insert(colors.remove(at: source), at: destination)
+        return true
+    }
+
     static func opaque(_ color: RGBAColor) -> RGBAColor {
         var opaque = color
         opaque.a = 1
