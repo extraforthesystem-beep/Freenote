@@ -58,6 +58,11 @@ struct LibraryStoreNotebookTests {
         #expect(renamed.updatedAt >= notebook.updatedAt)
         #expect(renamed.id == notebook.id)
         #expect(renamed.pageOrder == notebook.pageOrder)
+
+        try await store.setCover("ocean", for: notebook.id)
+        #expect(try await store.loadManifest(notebook.id).coverName == "ocean")
+        try await store.setCover(nil, for: notebook.id)
+        #expect(try await store.loadManifest(notebook.id).coverName == nil)
     }
 
     @Test func deletingAndRestoringANotebookKeepsEveryByte() async throws {

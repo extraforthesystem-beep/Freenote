@@ -1,5 +1,6 @@
 import InkKit
 import NoteCore
+import SearchKit
 import SwiftUI
 
 struct LibraryView: View {
@@ -31,7 +32,10 @@ struct LibraryView: View {
         } detail: {
             detail
         }
-        .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search notebooks")
+        .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search notebooks and handwriting")
+        .onChange(of: model.searchText) { _, query in
+            Task { await model.updateHandwritingSearch(query) }
+        }
         .alert("Rename notebook", isPresented: renameAlert) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
@@ -178,10 +182,23 @@ struct LibraryView: View {
 
     // MARK: - Detail
 
+    private var isSearching: Bool {
+        !model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// A deleted page can leave a stale hit until the index is pruned.
+    private var handwritingHits: [SearchKit.SearchHit] {
+        model.search.hits.filter {
+            model.pageNumber(notebookID: $0.notebookID, pageID: $0.pageID) != nil
+        }
+    }
+
     private var detail: some View {
         Group {
             if model.selectedLocation == .trash {
                 trashList
+            } else if isSearching {
+                searchResults
             } else if model.visibleNotebooks.isEmpty {
                 emptyState
             } else {
@@ -200,6 +217,109 @@ struct LibraryView: View {
                 }
             }
         }
+    }
+
+    private var searchResults: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                if !model.visibleNotebooks.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Notebooks")
+                            .font(.headline)
+                        ForEach(model.visibleNotebooks, id: \.id) { notebook in
+                            Button {
+                                Task { await model.open(notebook) }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "book.closed")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 28)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(notebook.title)
+                                            .font(.body.weight(.medium))
+                                        Text("\(notebook.pageOrder.count) page\(notebook.pageOrder.count == 1 ? "" : "s")")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+
+                if !handwritingHits.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("In handwriting")
+                            .font(.headline)
+                        ForEach(handwritingHits) { hit in
+                            handwritingHitRow(hit)
+                            Divider()
+                        }
+                    }
+                }
+
+                if model.visibleNotebooks.isEmpty && handwritingHits.isEmpty {
+                    if model.search.isIndexing {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Reading handwriting… \(model.search.indexedPages) of \(model.search.totalPages)")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 8)
+                    } else {
+                        ContentUnavailableView.search(text: model.searchText)
+                    }
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(AppColor.groupedBackground)
+    }
+
+    @ViewBuilder
+    private func handwritingHitRow(_ hit: SearchKit.SearchHit) -> some View {
+        let notebook = model.notebook(withID: hit.notebookID)
+        let page = model.pageNumber(notebookID: hit.notebookID, pageID: hit.pageID)
+        Button {
+            if let notebook {
+                Task { await model.open(notebook, pageID: hit.pageID) }
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "text.magnifyingglass")
+                    .font(.title3)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(notebook?.title ?? "Notebook")
+                        .font(.body.weight(.medium))
+                    Text(hit.snippet)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    Text(page.map { "Page \($0)" } ?? "Page")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var notebookGrid: some View {
@@ -366,7 +486,12 @@ private struct NotebookCard: View {
 
     @State private var cover: InkImage?
 
+    private var coverStyle: NotebookCoverStyle? {
+        notebook.coverName.flatMap(NotebookCoverStyle.init(rawValue:))
+    }
+
     private var coverColors: [Color] {
+        if let coverStyle { return coverStyle.colors }
         let seed = notebook.id.uuidString.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         let palettes: [[Color]] = [
             [.indigo, .blue],
@@ -376,6 +501,10 @@ private struct NotebookCard: View {
             [.brown, .orange],
         ]
         return palettes[seed % palettes.count]
+    }
+
+    private var titleColor: Color {
+        coverStyle?.prefersLightText == false ? .black.opacity(0.72) : .white
     }
 
     var body: some View {
@@ -391,20 +520,28 @@ private struct NotebookCard: View {
                             )
                         )
 
-                    if let cover {
+                    if let coverStyle {
+                        Image(systemName: coverStyle.symbol)
+                            .font(.system(size: 40, weight: .light))
+                            .foregroundStyle(titleColor.opacity(0.35))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .padding(22)
+                    } else if let cover {
                         Image(inkImage: cover)
                             .resizable()
                             .scaledToFill()
                     }
 
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(cover == nil ? 0.15 : 0.62)],
-                        startPoint: .center,
-                        endPoint: .bottom
-                    )
+                    if coverStyle == nil {
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(cover == nil ? 0.15 : 0.62)],
+                            startPoint: .center,
+                            endPoint: .bottom
+                        )
+                    }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Image(systemName: "book.closed")
+                        Image(systemName: coverStyle?.symbol ?? "book.closed")
                             .font(.title2)
                             .opacity(0.9)
                         Text(notebook.title)
@@ -412,8 +549,12 @@ private struct NotebookCard: View {
                             .lineLimit(3)
                             .multilineTextAlignment(.leading)
                     }
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+                    .foregroundStyle(titleColor)
+                    .shadow(
+                        color: coverStyle?.prefersLightText == false ? .clear : .black.opacity(0.35),
+                        radius: 4,
+                        y: 1
+                    )
                     .padding(18)
                 }
                 .aspectRatio(3 / 4, contentMode: .fit)
@@ -450,7 +591,7 @@ private struct NotebookCard: View {
     }
 
     private func loadCover() async {
-        guard let pageID = notebook.pageOrder.first else { return }
+        guard coverStyle == nil, let pageID = notebook.pageOrder.first else { return }
         if let cached = ThumbnailCache.image(notebookID: notebook.id, pageID: pageID) {
             cover = cached
             return

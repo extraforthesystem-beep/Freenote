@@ -21,6 +21,7 @@ final class AppModel {
     }
 
     let store: LibraryStore
+    let search: HandwritingSearch
 
     var info: LibraryInfo?
     var folderTree = FolderTree()
@@ -34,6 +35,7 @@ final class AppModel {
 
     init(root: URL = AppModel.defaultLibraryRoot()) {
         store = LibraryStore(root: root)
+        search = HandwritingSearch(root: root)
     }
 
     static func defaultLibraryRoot() -> URL {
@@ -54,6 +56,10 @@ final class AppModel {
         do {
             info = try await store.open()
             await reload()
+            Task {
+                await search.indexAll(notebooks: notebooks, store: store)
+                await search.search(searchText)
+            }
         } catch {
             notice = Notice(title: "The library could not be opened", message: error.localizedDescription)
         }
@@ -107,6 +113,21 @@ final class AppModel {
     func folderName(for notebookID: UUID) -> String? {
         guard let folderID = folderTree.notebookFolder[notebookID] else { return nil }
         return folderTree.folder(withID: folderID)?.name
+    }
+
+    func notebook(withID id: UUID) -> NotebookManifest? {
+        notebooks.first { $0.id == id }
+    }
+
+    func pageNumber(notebookID: UUID, pageID: UUID) -> Int? {
+        guard let notebook = notebook(withID: notebookID),
+              let index = notebook.pageOrder.firstIndex(of: pageID)
+        else { return nil }
+        return index + 1
+    }
+
+    func updateHandwritingSearch(_ query: String) async {
+        await search.search(query)
     }
 
     func tags(for notebookID: UUID) -> [String] {
@@ -166,6 +187,7 @@ final class AppModel {
             if session?.notebookID == notebook.id {
                 closeNotebook()
             }
+            await search.removeNotebook(notebook.id)
             await reload()
         } catch {
             notice = Notice(title: "Could not delete the notebook", message: error.localizedDescription)
@@ -187,6 +209,15 @@ final class AppModel {
             await reload()
         } catch {
             notice = Notice(title: "Could not permanently delete the notebook", message: error.localizedDescription)
+        }
+    }
+
+    func setCover(_ name: String?, for notebook: NotebookManifest) async {
+        do {
+            try await store.setCover(name, for: notebook.id)
+            await reload()
+        } catch {
+            notice = Notice(title: "Could not change the cover", message: error.localizedDescription)
         }
     }
 
@@ -246,12 +277,21 @@ final class AppModel {
 
     // MARK: - Notebook session
 
-    func open(_ notebook: NotebookManifest) async {
+    func open(_ notebook: NotebookManifest, pageID: UUID? = nil) async {
         do {
             let snapshot = try await store.loadNotebook(notebook.id)
             let newSession = NotebookSession(store: store, snapshot: snapshot)
+            newSession.onPageDeleted = { [weak self] pageID in
+                guard let self else { return }
+                Task { await self.search.removePage(pageID, notebookID: notebook.id) }
+            }
             session = newSession
             await newSession.loadPage(at: 0)
+            if let pageID,
+               let index = snapshot.manifest.pageOrder.firstIndex(of: pageID),
+               index > 0 {
+                await newSession.goToPage(index)
+            }
             if !snapshot.orphanPageIDs.isEmpty || !snapshot.missingPageIDs.isEmpty {
                 notice = Notice(
                     title: "Some pages needed attention",
@@ -264,8 +304,16 @@ final class AppModel {
     }
 
     func closeNotebook() {
-        session?.flushPendingSave()
+        guard let closing = session else { return }
         session = nil
+        Task {
+            await closing.commitPendingSave()
+            await reload()
+            await search.index(notebook: closing.manifest, store: store)
+            if !searchText.isEmpty {
+                await search.search(searchText)
+            }
+        }
     }
 }
 
@@ -293,6 +341,8 @@ final class NotebookSession {
 
     private var saveTask: Task<Void, Never>?
     private var pendingPage: Page?
+    /// Called after a page file is deleted, so its search record can go too.
+    var onPageDeleted: ((UUID) -> Void)?
 
     init(store: LibraryStore, snapshot: LibraryStore.NotebookSnapshot) {
         self.store = store
@@ -387,6 +437,7 @@ final class NotebookSession {
         guard let page else { return }
         do {
             try await store.deletePage(page.id, in: manifest.id)
+            onPageDeleted?(page.id)
             await reloadManifest()
             await loadPage(at: min(pageIndex, max(0, pageCount - 1)))
         } catch {

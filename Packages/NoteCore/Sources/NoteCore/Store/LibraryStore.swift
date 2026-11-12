@@ -114,6 +114,14 @@ public actor LibraryStore {
         try writeDocument(manifest, to: layout.manifestFile(notebookID))
     }
 
+    /// Sets the cover style name, or clears it to show the first page instead.
+    public func setCover(_ coverName: String?, for notebookID: UUID) throws {
+        var manifest = try loadManifest(notebookID)
+        manifest.coverName = coverName
+        manifest.updatedAt = Date()
+        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+    }
+
     /// Moves the notebook's folder, unchanged, to `trash/`.
     ///
     /// The folder tree is left alone, so a restore puts the notebook back where it was.

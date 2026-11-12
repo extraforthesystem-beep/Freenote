@@ -14,7 +14,9 @@ struct NotebookView: View {
     @State private var showExporter = false
     @State private var exportError: String?
     @State private var showsTemplatePicker = false
+    @State private var showsCoverPicker = false
     @State private var tool = InkTool(.pen)
+    @State private var presets = PenPresets.load()
     #if os(iOS)
     @State private var canvasMode: CanvasMode = .ink
     @State private var controller = PencilCanvasController()
@@ -33,6 +35,13 @@ struct NotebookView: View {
             footer
         }
         .background(AppColor.groupedBackground)
+        .onAppear {
+            tool = presets.tool(for: tool.style)
+        }
+        .onChange(of: tool) { _, newValue in
+            presets.update(newValue)
+            presets.save()
+        }
         .alert("Delete this page?", isPresented: $showsDeletePageConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
@@ -77,6 +86,14 @@ struct NotebookView: View {
                 isApplying: session.isApplyingTemplate
             ) { item, applyToAll in
                 Task { await session.applyTemplate(item.template, toAllPages: applyToAll) }
+            }
+        }
+        .sheet(isPresented: $showsCoverPicker) {
+            NotebookCoverPicker(current: session.manifest.coverName) { name in
+                Task {
+                    await model.setCover(name, for: session.manifest)
+                    await session.reloadManifest()
+                }
             }
         }
     }
@@ -170,6 +187,9 @@ struct NotebookView: View {
                     showsTemplatePicker = true
                 }
                 .disabled(session.page == nil)
+                Button("Notebook Cover…", systemImage: "book.closed") {
+                    showsCoverPicker = true
+                }
                 Divider()
                 Button("Delete Page", systemImage: "trash", role: .destructive) {
                     showsDeletePageConfirmation = true
@@ -200,8 +220,7 @@ struct NotebookView: View {
             HStack(spacing: 6) {
                 ForEach(PenStyle.allCases, id: \.self) { style in
                     Button {
-                        tool.style = style
-                        tool.width = style.defaultWidth
+                        tool = presets.tool(for: style)
                         canvasMode = .ink
                     } label: {
                         Image(systemName: style.symbolName)
