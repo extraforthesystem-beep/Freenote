@@ -176,6 +176,11 @@ struct NotebookPane: View {
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
     @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
+    @State private var zoomView = ZoomViewState()
+    @State private var editorHeight: CGFloat = 0
+    @AppStorage(AppSettings.Key.zoomAutoAdvance) private var zoomAutoAdvance = true
+    @AppStorage(AppSettings.Key.zoomMagnification) private var zoomMagnification = ZoomBand.defaultMagnification
+    @AppStorage(AppSettings.Key.zoomPanelFraction) private var zoomPanelFraction = 0.35
     #endif
 
     var body: some View {
@@ -205,6 +210,12 @@ struct NotebookPane: View {
                     }
                     .padding(.bottom, 12)
                 }
+            #if os(iOS)
+            if showsZoomView, let page = session.page {
+                zoomPanel(page)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            #endif
             if showsThumbnails {
                 Divider()
                 PageThumbnailStrip(session: session) { index in
@@ -214,6 +225,9 @@ struct NotebookPane: View {
             }
         }
         .background(AppColor.groupedBackground)
+        #if os(iOS)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { editorHeight = $0 }
+        #endif
         .animation(.easeInOut(duration: 0.2), value: bannerState)
         .onAppear {
             Task { await session.audio.load() }
@@ -1003,6 +1017,26 @@ struct NotebookPane: View {
                 onTap: { session.toggleTapeRevealed($0) }
             )
 
+            if showsZoomView, let band = zoomBand(page) {
+                ZoomFrameOverlay(
+                    band: band.rect,
+                    showsAdvanceArea: zoomAutoAdvance,
+                    onMove: { origin, _ in
+                        moveZoomBand(page) { $0.move(to: origin) }
+                    },
+                    onResize: { width, ended in
+                        let magnification = ZoomBand.magnification(forWidth: width, pageWidth: page.width)
+                        if ended {
+                            zoomMagnification = magnification
+                            zoomView.liveMagnification = nil
+                        } else {
+                            zoomView.liveMagnification = magnification
+                        }
+                    }
+                )
+                .frame(width: page.width, height: page.height)
+            }
+
             if editor.tool == .laser, !editor.isReadOnly {
                 LaserPointerOverlay(mode: editor.laserMode)
             }
@@ -1030,6 +1064,95 @@ struct NotebookPane: View {
         .frame(width: page.width, height: page.height)
         .clipped()
         // The page slot behind this content draws the paper's shadow.
+    }
+
+    // MARK: - Zoom View
+
+    private var showsZoomView: Bool {
+        editor.isZoomViewShown && !editor.isReadOnly
+    }
+
+    private func zoomBand(_ page: Page) -> ZoomBand? {
+        zoomView.band(for: page, magnification: zoomView.liveMagnification ?? zoomMagnification)
+    }
+
+    private func moveZoomBand(_ page: Page, _ change: (inout ZoomBand) -> Void) {
+        zoomView.update(page: page, magnification: zoomMagnification, change)
+    }
+
+    /// The panel's height: a share of the editor, at least enough to write in
+    /// and never more than most of it.
+    private var zoomPanelHeight: CGFloat {
+        let total = max(editorHeight, 400)
+        let wanted = zoomView.livePanelHeight ?? total * zoomPanelFraction
+        return min(max(wanted, 160), total * 0.6)
+    }
+
+    private func zoomPanel(_ page: Page) -> some View {
+        ZoomWindowPanel(
+            page: Self.removingTape(from: page),
+            band: zoomBand(page),
+            assetsDirectory: session.assetsDirectory,
+            height: zoomPanelHeight,
+            showsAdvanceArea: zoomAutoAdvance,
+            onWritingSizeChange: { zoomView.writingSize = $0 },
+            onResize: { height, ended in
+                let total = max(editorHeight, 400)
+                let clamped = min(max(height, 160), total * 0.6)
+                if ended {
+                    zoomPanelFraction = Double(clamped / total)
+                    zoomView.livePanelHeight = nil
+                } else {
+                    zoomView.livePanelHeight = clamped
+                }
+            },
+            onBack: { moveZoomBand(page) { $0.back() } },
+            onForward: { moveZoomBand(page) { $0.advance() } },
+            onNewLine: { moveZoomBand(page) { $0.newLine() } },
+            onClose: {
+                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
+            }
+        ) { band in
+            PencilCanvasView(
+                strokes: session.visibleStrokes,
+                pageSize: CGSize(width: page.width, height: page.height),
+                tool: editor.inkTool,
+                mode: canvasMode,
+                activeLayerID: session.activeLayerID ?? page.layers.first?.id ?? UUID(),
+                isEditable: canvasIsEditable,
+                controller: controller,
+                drawsWithFinger: drawWithFinger,
+                undoOnTwoFingerDoubleTap: twoFingerDoubleTapUndo,
+                redoOnThreeFingerDoubleTap: threeFingerDoubleTapRedo,
+                pencilDoubleTapAction: pencilDoubleTapAction,
+                onToolGestureEnded: { editor.didEndToolGesture() },
+                holdToDrawShapes: holdToDrawShapes,
+                // The page's canvas answers the Pencil's double-tap; two
+                // answers would switch the tool and straight back.
+                onPencilDoubleTap: nil,
+                eraseHighlighterOnly: eraserHighlighterOnly,
+                viewport: band.rect,
+                onToolGestureBegan: { zoomView.cancelAdvance() },
+                onStrokesChanged: { zoomStrokesChanged($0, on: page) }
+            )
+            .id(page.id)
+        }
+    }
+
+    /// Ink from the panel goes to the page like any other; a new stroke that
+    /// ends in the advance area moves the band on once the Pencil stays up.
+    private func zoomStrokesChanged(_ records: [StrokeRecord], on page: Page) {
+        let known = Set(session.visibleStrokes.map(\.id))
+        session.strokesChanged(records)
+        guard zoomAutoAdvance, editor.tool.drawsInk,
+              let band = zoomBand(page),
+              let newest = records.last(where: { !known.contains($0.id) }),
+              let end = ZoomBand.endPoint(of: newest),
+              band.isInAdvanceArea(end)
+        else { return }
+        zoomView.scheduleAdvance {
+            moveZoomBand(page) { $0.advance() }
+        }
     }
     #endif
 

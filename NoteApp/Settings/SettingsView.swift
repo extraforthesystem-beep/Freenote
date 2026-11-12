@@ -21,6 +21,8 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.pageScrollMode) private var pageScrollMode: PageScrollMode = .vertical
     @AppStorage(AppSettings.Key.rememberLastTool) private var rememberLastTool = true
     @AppStorage(AppSettings.Key.hideStatusBar) private var hideStatusBar = false
+    @AppStorage(AppSettings.Key.zoomAutoAdvance) private var zoomAutoAdvance = true
+    @AppStorage(AppSettings.Key.zoomMagnification) private var zoomMagnification = 2.5
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -33,6 +35,7 @@ struct SettingsView: View {
                 documentEditing
                 writing
                 #if os(iOS)
+                zoomView
                 applePencil
                 #endif
                 newNotebooks
@@ -88,6 +91,16 @@ struct SettingsView: View {
     }
 
     #if os(iOS)
+    private var zoomView: some View {
+        Section {
+            ZoomViewSettingsRows(autoAdvance: $zoomAutoAdvance, magnification: $zoomMagnification)
+        } header: {
+            Text("Zoom View")
+        } footer: {
+            Text("Zoom View magnifies a band of the page to write in. With Auto-Advance on, lifting the Pencil in the shaded right part of the panel moves the band along the line, and at the end of the line to the next one. Drag the frame's corner on the page to change the magnification.")
+        }
+    }
+
     private var applePencil: some View {
         Section {
             Picker("Double-Tap Action", selection: $pencilDoubleTapAction) {
