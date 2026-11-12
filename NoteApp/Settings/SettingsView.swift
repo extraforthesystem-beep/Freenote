@@ -13,6 +13,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.newNotebookOrientation) private var orientation: PageOrientation = .portrait
     @AppStorage(AppSettings.Key.newNotebookTemplateID) private var templateID = AppSettings.defaultTemplateID
     @AppStorage(AppSettings.Key.handwritingRecognitionEnabled) private var handwritingRecognition = true
+    @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -23,6 +24,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 documentEditing
+                writing
                 newNotebooks
                 handwritingRecognitionSection
                 troubleshooting
@@ -47,6 +49,16 @@ struct SettingsView: View {
             Text("Document Editing")
         } footer: {
             Text("When off, opening a notebook replaces the current tab.")
+        }
+    }
+
+    private var writing: some View {
+        Section {
+            Toggle("Hold to Draw Shapes", isOn: $holdToDrawShapes)
+        } header: {
+            Text("Writing")
+        } footer: {
+            Text("Pause at the end of a stroke before lifting the Pencil to turn it into a straight line, rectangle, triangle or ellipse.")
         }
     }
 
