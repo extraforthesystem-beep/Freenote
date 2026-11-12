@@ -147,6 +147,7 @@ struct NotebookPane: View {
     @State private var showsGoToPage = false
     @State private var showsClearPageConfirmation = false
     @AppStorage(AppSettings.Key.showPageNumber) private var showsPageNumber = true
+    @AppStorage(AppSettings.Key.pageScrollMode) private var defaultScrollMode: PageScrollMode = .vertical
     @State private var showsCoverPicker = false
     @State private var showsTextComposer = false
     @State private var showsElements = false
@@ -609,6 +610,10 @@ struct NotebookPane: View {
             .disabled(session.page == nil)
         }
         #if os(iOS)
+        Section("Scrolling") {
+            scrollModeButton("Scroll Vertically", mode: .vertical)
+            scrollModeButton("Scroll Horizontally", mode: .horizontal)
+        }
         Section {
             Toggle("Ruler", systemImage: "ruler", isOn: $isRulerActive)
                 .disabled(session.page == nil)
@@ -679,6 +684,23 @@ struct NotebookPane: View {
                 exportPNG()
             }
             .disabled(session.page == nil)
+        }
+    }
+
+    /// This notebook's direction, or the app default when it has none.
+    private var scrollMode: PageScrollMode {
+        session.pageScrollMode ?? defaultScrollMode
+    }
+
+    private func scrollModeButton(_ title: String, mode: PageScrollMode) -> some View {
+        Button {
+            Task { await session.setPageScrollMode(mode) }
+        } label: {
+            if scrollMode == mode {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
         }
     }
 
@@ -836,14 +858,25 @@ struct NotebookPane: View {
         GeometryReader { proxy in
             if let page = session.page {
                 #if os(iOS)
-                ZoomablePageView(
-                    pageSize: CGSize(width: page.width, height: page.height),
+                PagedNotebookView(
+                    mode: scrollMode,
+                    pageOrder: session.manifest.pageOrder,
+                    activePage: page,
+                    source: PageImageSource(
+                        notebookID: session.notebookID,
+                        store: session.store,
+                        assetsDirectory: session.assetsDirectory,
+                        token: session.otherPagesToken
+                    ),
                     controller: zoomController,
                     fitMargin: 20,
-                    minimumPanTouches: 2
+                    panTouches: panTouches,
+                    onActivate: { index in await session.goToPage(index) }
                 ) {
                     pageContent(page)
                 }
+                // A new scroll container per notebook and direction.
+                .id("\(session.notebookID)-\(scrollMode.rawValue)")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 #else
                 let aspect = page.width / page.height
@@ -869,6 +902,21 @@ struct NotebookPane: View {
     /// scroll, zoom and PDF link taps still work.
     private var canvasMode: CanvasMode {
         editor.isReadOnly ? .links : editor.canvasMode
+    }
+
+    /// Fingers needed to scroll or page. With Pencil-only drawing one finger
+    /// scrolls; tools that drag with a finger (items, laser) and finger
+    /// drawing (the simulator) keep it at two. The Pencil never scrolls.
+    private var panTouches: Int {
+        #if targetEnvironment(simulator)
+        return 2
+        #else
+        if editor.isReadOnly { return 1 }
+        switch editor.tool {
+        case .elements, .laser: return 2
+        default: return 1
+        }
+        #endif
     }
 
     private var canvasIsEditable: Bool {
@@ -952,7 +1000,7 @@ struct NotebookPane: View {
         }
         .frame(width: page.width, height: page.height)
         .clipped()
-        .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
+        // The page slot behind this content draws the paper's shadow.
     }
     #endif
 

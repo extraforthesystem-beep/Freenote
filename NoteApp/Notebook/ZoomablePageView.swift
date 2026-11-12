@@ -31,11 +31,11 @@ final class PageZoomController {
         scrollView.setZoomScale(max(scrollView.zoomScale / 1.35, scrollView.minimumZoomScale), animated: true)
     }
 
-    fileprivate func updateFit(_ scale: CGFloat) {
+    func updateFit(_ scale: CGFloat) {
         fitScale = scale
     }
 
-    fileprivate func settle(at scale: CGFloat) {
+    func settle(at scale: CGFloat) {
         // Ignore tiny changes so the paper is not re-rendered for nothing.
         if abs(settledZoom - scale) / max(settledZoom, 0.0001) > 0.05 {
             settledZoom = scale
@@ -154,7 +154,7 @@ final class PageScrollView: UIScrollView {
     var onFit: ((CGFloat) -> Void)?
     private var didFit = false
     private var lastBoundsSize: CGSize = .zero
-    private var lastFit: CGFloat = 0
+    private(set) var lastFit: CGFloat = 0
 
     override func layoutSubviews() {
         super.layoutSubviews()

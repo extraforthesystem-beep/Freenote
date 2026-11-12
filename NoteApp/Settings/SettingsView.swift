@@ -13,6 +13,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.newNotebookOrientation) private var orientation: PageOrientation = .portrait
     @AppStorage(AppSettings.Key.newNotebookTemplateID) private var templateID = AppSettings.defaultTemplateID
     @AppStorage(AppSettings.Key.handwritingRecognitionEnabled) private var handwritingRecognition = true
+    @AppStorage(AppSettings.Key.pageScrollMode) private var pageScrollMode: PageScrollMode = .vertical
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -43,10 +44,14 @@ struct SettingsView: View {
         Section {
             Toggle("Show Page Number", isOn: $showPageNumber)
             Toggle("Open Documents as New Tabs", isOn: $openDocumentsAsNewTabs)
+            Picker("Page Scrolling", selection: $pageScrollMode) {
+                Text("Vertical (Seamless)").tag(PageScrollMode.vertical)
+                Text("Horizontal (Single Page)").tag(PageScrollMode.horizontal)
+            }
         } header: {
             Text("Document Editing")
         } footer: {
-            Text("When off, opening a notebook replaces the current tab.")
+            Text("When off, opening a notebook replaces the current tab. A notebook can choose its own scrolling from its More menu.")
         }
     }
 
