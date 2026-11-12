@@ -2,9 +2,12 @@ import CoreGraphics
 import Foundation
 import InkKit
 import NoteCore
+import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
-#if os(macOS)
+#if os(iOS)
+import UIKit
+#else
 import AppKit
 #endif
 
@@ -66,6 +69,9 @@ nonisolated enum NotebookExportError: LocalizedError {
 nonisolated struct PDFExportProgress: Sendable, Equatable {
     var pagesCompleted: Int
     var pageCount: Int
+    /// True during the second pass of an editable export, when each page's
+    /// ink is written as annotations.
+    var isAddingAnnotations = false
 
     /// 0...1, for a determinate `ProgressView`.
     var fraction: Double {
@@ -73,22 +79,79 @@ nonisolated struct PDFExportProgress: Sendable, Equatable {
     }
 }
 
+/// What a PDF export contains.
+nonisolated struct PDFExportOptions: Sendable, Equatable {
+    enum Pages: Sendable, Equatable {
+        case all
+        case current
+        /// One-based, inclusive.
+        case range(from: Int, to: Int)
+    }
+
+    enum Ink: String, Sendable, CaseIterable, Identifiable {
+        /// Ink drawn into the page as vector outlines.
+        case flattened
+        /// Ink written as PDF ink annotations other apps can edit.
+        case editable
+
+        var id: String { rawValue }
+    }
+
+    var pages: Pages = .all
+    var includeTemplate = true
+    var ink: Ink = .flattened
+    var includeOutline = true
+
+    /// The zero-based page indices to export, in order, for a notebook of
+    /// `pageCount` pages whose current page is `currentIndex`.
+    func pageIndices(pageCount: Int, currentIndex: Int) -> [Int] {
+        guard pageCount > 0 else { return [] }
+        switch pages {
+        case .all:
+            return Array(0..<pageCount)
+        case .current:
+            return [min(max(currentIndex, 0), pageCount - 1)]
+        case let .range(from, to):
+            let low = min(max(min(from, to), 1), pageCount)
+            let high = min(max(max(from, to), 1), pageCount)
+            return Array((low - 1)...(high - 1))
+        }
+    }
+}
+
 @MainActor
 enum NotebookExporter {
     /// Renders one page at print resolution and returns PNG bytes.
+    ///
+    /// Always rendered in the light appearance: PencilKit draws ink for the
+    /// current appearance, and an export must not come out with dark-mode
+    /// (inverted) ink.
     static func pngData(
         page: Page,
         assetsDirectory: URL?,
         scale: CGFloat = 2
     ) -> Data? {
-        guard let image = PageRenderer.image(
-            strokes: page.renderStrokes,
-            pageSize: CGSize(width: page.width, height: page.height),
-            template: page.template,
-            elements: page.visibleElements,
-            assetsDirectory: assetsDirectory,
-            scale: scale
-        ) else { return nil }
+        var image: InkImage?
+        let render = {
+            image = PageRenderer.image(
+                strokes: page.renderStrokes,
+                pageSize: CGSize(width: page.width, height: page.height),
+                template: page.template,
+                elements: page.visibleElements,
+                assetsDirectory: assetsDirectory,
+                scale: scale
+            )
+        }
+        #if os(iOS)
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent(render)
+        #else
+        if let light = NSAppearance(named: .aqua) {
+            light.performAsCurrentDrawingAppearance(render)
+        } else {
+            render()
+        }
+        #endif
+        guard let image else { return nil }
 
         #if os(iOS)
         return image.pngData()
@@ -100,109 +163,111 @@ enum NotebookExporter {
         #endif
     }
 
-    /// Renders every page in order and returns one PDF, one page per notebook page.
+    /// Exports the pages `options` selects as one vector PDF, one PDF page per
+    /// notebook page.
     ///
-    /// Pages are rendered one at a time off the main actor and drawn straight
-    /// into the PDF as they finish, so a long notebook neither blocks the UI
-    /// nor needs every page bitmap in memory. `progress` is called on the main
-    /// actor after each page.
+    /// Pages are loaded and drawn one at a time off the main actor, straight
+    /// into a temporary file, so a long notebook neither blocks the UI nor
+    /// holds more than one page in memory. Editable exports then reopen the
+    /// file with PDFKit and add each page's ink as annotations, again one page
+    /// at a time. `outlineTitles` maps page IDs to outline entries.
+    /// `progress` is called on the main actor after each page.
     static func pdfData(
         session: NotebookSession,
-        scale: CGFloat = 2,
+        options: PDFExportOptions = PDFExportOptions(),
+        outlineTitles: [UUID: String] = [:],
         progress: (@MainActor @Sendable (PDFExportProgress) -> Void)? = nil
     ) async throws -> Data {
         let order = session.manifest.pageOrder
-        guard !order.isEmpty else { throw NotebookExportError.emptyNotebook }
+        let indices = options.pageIndices(pageCount: order.count, currentIndex: session.pageIndex)
+        guard !indices.isEmpty else { throw NotebookExportError.emptyNotebook }
+        let pageIDs = indices.map { order[$0] }
 
         let store = session.store
         let notebookID = session.notebookID
         let assetsDirectory = session.assetsDirectory
-        let pageCount = order.count
+        let title = session.manifest.title
+        let creator = appName
+        let outline: [(pageIndex: Int, title: String)] = options.includeOutline
+            ? pageIDs.enumerated().compactMap { index, pageID in
+                outlineTitles[pageID].map { (index, $0) }
+            }
+            : []
+        let pageCount = pageIDs.count
 
         return try await Task.detached(priority: .userInitiated) { () throws -> Data in
-            let data = NSMutableData()
-            guard let consumer = CGDataConsumer(data: data as CFMutableData) else {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("export-\(UUID().uuidString).pdf")
+            defer { try? FileManager.default.removeItem(at: url) }
+
+            guard let writer = VectorPDFWriter(url: url, title: title, creator: creator) else {
                 throw NotebookExportError.couldNotCreatePDF
             }
-
-            var context: CGContext?
-            defer { context?.closePDF() }
-
-            for (index, pageID) in order.enumerated() {
+            for (index, pageID) in pageIDs.enumerated() {
                 if Task.isCancelled { throw CancellationError() }
-
                 let page: Page
                 do {
                     page = try await store.loadPage(pageID, in: notebookID)
                 } catch {
-                    throw NotebookExportError.couldNotRenderPage(index + 1)
+                    throw NotebookExportError.couldNotRenderPage(indices[index] + 1)
                 }
-
-                let size = CGSize(width: page.width, height: page.height)
-                guard let cgImage = render(page: page, size: size, assetsDirectory: assetsDirectory, scale: scale) else {
-                    throw NotebookExportError.couldNotRenderPage(index + 1)
+                writer.addPage(
+                    page,
+                    assetsDirectory: assetsDirectory,
+                    includeTemplate: options.includeTemplate,
+                    includeInk: options.ink == .flattened
+                )
+                if let progress {
+                    await progress(PDFExportProgress(pagesCompleted: index + 1, pageCount: pageCount))
                 }
+            }
+            writer.setOutline(outline)
+            writer.close()
 
-                if context == nil {
-                    var mediaBox = CGRect(origin: .zero, size: size)
-                    guard let created = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
-                        throw NotebookExportError.couldNotCreatePDF
-                    }
-                    context = created
+            guard options.ink == .editable else {
+                return try Data(contentsOf: url)
+            }
+
+            guard let document = PDFDocument(url: url) else {
+                throw NotebookExportError.couldNotCreatePDF
+            }
+            for (index, pageID) in pageIDs.enumerated() {
+                if Task.isCancelled { throw CancellationError() }
+                let page: Page
+                do {
+                    page = try await store.loadPage(pageID, in: notebookID)
+                } catch {
+                    throw NotebookExportError.couldNotRenderPage(indices[index] + 1)
                 }
-                guard let context else { throw NotebookExportError.couldNotCreatePDF }
-
-                var box = CGRect(origin: .zero, size: size)
-                let boxData = withUnsafeBytes(of: &box) { Data($0) }
-                context.beginPDFPage([kCGPDFContextMediaBox as String: boxData] as CFDictionary)
-
-                // The bitmap already has page orientation; CGImage draws upright in
-                // the PDF's y-up space, so no extra flip here.
-                context.draw(cgImage, in: CGRect(origin: .zero, size: size))
-                context.endPDFPage()
-
+                if let pdfPage = document.page(at: index) {
+                    VectorPDFAnnotations.addInkAnnotations(
+                        for: page.renderStrokes,
+                        to: pdfPage,
+                        pageHeight: CGFloat(page.height)
+                    )
+                }
                 if let progress {
                     await progress(
-                        PDFExportProgress(pagesCompleted: index + 1, pageCount: pageCount)
+                        PDFExportProgress(
+                            pagesCompleted: index + 1,
+                            pageCount: pageCount,
+                            isAddingAnnotations: true
+                        )
                     )
                 }
             }
-
-            // Finish the PDF before handing the bytes out; the defer above only
-            // covers throwing paths.
-            context?.closePDF()
-            context = nil
-            return data as Data
+            guard let data = document.dataRepresentation() else {
+                throw NotebookExportError.couldNotCreatePDF
+            }
+            return data
         }.value
     }
 
-    /// Renders one page and returns its bitmap, without any actor isolation so
-    /// the export can call it from a background task.
-    private nonisolated static func render(
-        page: Page,
-        size: CGSize,
-        assetsDirectory: URL?,
-        scale: CGFloat
-    ) -> CGImage? {
-        guard let image = PageRenderer.image(
-            strokes: page.renderStrokes,
-            pageSize: size,
-            template: page.template,
-            elements: page.visibleElements,
-            assetsDirectory: assetsDirectory,
-            scale: scale
-        ) else { return nil }
-        return image.cgImageForExport
-    }
-}
-
-private extension InkImage {
-    nonisolated var cgImageForExport: CGImage? {
-        #if os(iOS)
-        cgImage
-        #else
-        var rect = CGRect(origin: .zero, size: size)
-        return cgImage(forProposedRect: &rect, context: nil, hints: nil)
-        #endif
+    /// The app's display name, for the PDF's Creator field.
+    private static var appName: String {
+        let info = Bundle.main.infoDictionary
+        return (info?["CFBundleDisplayName"] as? String)
+            ?? (info?["CFBundleName"] as? String)
+            ?? "NoteApp"
     }
 }
