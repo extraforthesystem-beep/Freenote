@@ -201,6 +201,10 @@ public actor SearchIndex {
     private let root: URL
     private var records: [PageKey: PageSearchRecord] = [:]
     private var loaded = false
+    /// Open `beginDeferringWrites()` calls. While above zero, changes stay in
+    /// memory and `isDirty` records that the file is behind.
+    private var writeDeferrals = 0
+    private var isDirty = false
 
     /// `root` is the library cache directory; the index lives at `root/search-index.json`.
     public init(root: URL) {
@@ -211,6 +215,8 @@ public actor SearchIndex {
 
     /// A missing file is an empty index. A file that cannot be decoded throws.
     public func load() throws {
+        // Reading the file would drop changes still waiting to be written.
+        try flushDeferredWrites()
         let url = indexURL
         guard FileManager.default.fileExists(atPath: url.path) else {
             records = [:]
@@ -247,7 +253,41 @@ public actor SearchIndex {
         try load()
     }
 
+    /// Writes the file now, or marks it stale while writes are deferred.
     private func persist() throws {
+        guard writeDeferrals == 0 else {
+            isDirty = true
+            return
+        }
+        try write()
+    }
+
+    /// Keeps changes in memory until the matching `endDeferringWrites()`.
+    ///
+    /// The index is one JSON file, so writing it after every page makes a
+    /// first pass over N pages cost O(N²) bytes encoded and written. Callers
+    /// that update many pages in a row open a deferral, flush now and then
+    /// with `flushDeferredWrites()`, and close it at the end. Searches see
+    /// every change at once; only the file lags behind.
+    public func beginDeferringWrites() {
+        writeDeferrals += 1
+    }
+
+    /// Closes one deferral and writes the file if it was the last one and
+    /// anything changed.
+    public func endDeferringWrites() throws {
+        writeDeferrals = max(0, writeDeferrals - 1)
+        guard writeDeferrals == 0 else { return }
+        try flushDeferredWrites()
+    }
+
+    /// Writes pending changes now, even while writes are deferred.
+    public func flushDeferredWrites() throws {
+        guard isDirty else { return }
+        try write()
+    }
+
+    private func write() throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
 
@@ -262,6 +302,7 @@ public actor SearchIndex {
         } else {
             try fileManager.moveItem(at: temporaryURL, to: indexURL)
         }
+        isDirty = false
     }
 
     // MARK: Records

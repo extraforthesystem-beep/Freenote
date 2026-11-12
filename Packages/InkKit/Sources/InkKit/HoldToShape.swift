@@ -164,10 +164,13 @@ struct PendingShapeReplacement {
 extension PencilCanvasView.Coordinator {
     func installHoldObserver(on canvas: InkCanvasView) {
         let observer = StrokeHoldObserver(target: nil, action: nil)
-        observer.onTouchBegan = { [weak self, weak canvas] in
-            guard let self, let canvas else { return }
+        observer.onTouchBegan = { [weak self] in
+            guard let self else { return }
             holdDetected = false
-            strokeIDsAtTouchBegan = Set(canvas.drawing.strokes.map(\.id))
+            // The strokes as last seen, not `canvas.drawing.strokes`: that
+            // would bridge every stroke out of PencilKit at each touch-down.
+            // Copying the array is O(1); it is only searched after a hold.
+            strokesAtTouchBegan = baselineStrokes
         }
         observer.onHoldChanged = { [weak self, weak canvas] holding, location in
             guard let self else { return }
@@ -202,9 +205,10 @@ extension PencilCanvasView.Coordinator {
         holdDetected = false
         guard pendingShape == nil, shapeSnappingApplies,
               let canvas = canvas as? InkCanvasView,
-              let stroke = canvas.drawing.strokes.last,
-              canvas.drawing.strokes.count == strokeIDsAtTouchBegan.count + 1,
-              !strokeIDsAtTouchBegan.contains(stroke.id),
+              case let strokes = canvas.drawing.strokes,
+              let stroke = strokes.last,
+              strokes.count == strokesAtTouchBegan.count + 1,
+              !strokesAtTouchBegan.contains(where: { $0.id == stroke.id }),
               let shape = ShapeStrokeBuilder.shapeStroke(replacing: stroke)
         else { return false }
         pendingShape = PendingShapeReplacement(freehand: stroke, shape: shape)

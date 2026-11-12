@@ -27,11 +27,23 @@ final class NotebookSession: Identifiable {
     let audio: NotebookAudio
     let history: VersionHistoryStore
     var notebookID: UUID { manifest.id }
+    /// Reloaded after each save; a reload that only moves `updatedAt` is
+    /// skipped (see `reloadManifest`), so `manifest.updatedAt` may lag.
     private(set) var manifest: NotebookManifest
-    private(set) var page: Page?
+    private(set) var page: Page? {
+        didSet { syncPageChrome() }
+    }
     private(set) var pageIndex = 0
     /// The layer new ink goes to. It is reset when the page has no such layer.
-    private(set) var activeLayerID: UUID?
+    private(set) var activeLayerID: UUID? {
+        didSet { syncPageChrome() }
+    }
+    /// `page?.id`, and the active layer as it is on the page. `page` changes
+    /// with every stroke; these change only when their value does, so the
+    /// editor chrome (banners, menus, toolbar) that reads only them is not
+    /// rebuilt while writing.
+    private(set) var currentPageID: UUID?
+    private(set) var activeLayer: Page.Layer?
     private(set) var isLoadingPage = false
     private(set) var isSaving = false
     private(set) var isApplyingTemplate = false
@@ -116,9 +128,16 @@ final class NotebookSession: Identifiable {
 
     // MARK: - Layers
 
-    var activeLayer: Page.Layer? {
-        guard let page, let activeLayerID else { return nil }
-        return page.layers.first { $0.id == activeLayerID }
+    /// Assigns the derived chrome state only when it changes: an
+    /// observable property notifies on every assignment.
+    private func syncPageChrome() {
+        let pageID = page?.id
+        if currentPageID != pageID { currentPageID = pageID }
+        var layer: Page.Layer?
+        if let page, let activeLayerID {
+            layer = page.layers.first { $0.id == activeLayerID }
+        }
+        if activeLayer != layer { activeLayer = layer }
     }
 
     /// Ink the canvas may show and edit: every stroke on a visible layer, in
@@ -1003,8 +1022,16 @@ final class NotebookSession: Identifiable {
         return saved
     }
 
+    /// Every page save rewrites the manifest's `updatedAt` and calls this.
+    /// Replacing `manifest` re-renders everything that reads it (toolbar,
+    /// thumbnail strip, page pill, page scroller), so a reload that changes
+    /// nothing else keeps the current value. Nothing reads the session's
+    /// `updatedAt`; the library reads its own copy from disk.
     func reloadManifest() async {
-        if let latest = try? await store.loadManifest(manifest.id) {
+        guard let latest = try? await store.loadManifest(manifest.id) else { return }
+        var unchanged = latest
+        unchanged.updatedAt = manifest.updatedAt
+        if unchanged != manifest {
             manifest = latest
         }
     }

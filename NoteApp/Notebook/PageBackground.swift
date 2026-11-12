@@ -275,6 +275,19 @@ struct PaperBackground: View {
     }
 }
 
+extension Page {
+    /// The page as its paper is drawn: tape is an overlay the user reveals,
+    /// not part of the paper. Paper backgrounds and their cache keys use this.
+    var withoutTape: Page {
+        var page = self
+        page.elements.removeAll { element in
+            if case .tape = element.content { return true }
+            return false
+        }
+        return page
+    }
+}
+
 @MainActor
 enum PageBackgroundCache {
     static let baseScale: CGFloat = 2
@@ -314,6 +327,45 @@ enum PageBackgroundCache {
 
         store(image, key: key, scale: baseScale, page: page)
         return image
+    }
+
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
+    /// Renders the 2× paper of a page the user is likely to open next, off
+    /// the main actor, so `image(for:)` finds it cached.
+    ///
+    /// Opening a page draws its paper synchronously on the main actor when it
+    /// is not cached. That is cheap for templates, but a PDF page or photo
+    /// costs tens of milliseconds (a scanned PDF page: ~77 ms at 2× on an
+    /// M-class Mac, release; more on a base iPad), a visible stall just as
+    /// the page activates. Only such pages are pre-rendered; `page` is the
+    /// page as drawn (`withoutTape`).
+    static func prewarm(_ page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) async {
+        let isCostly = page.visibleElements.contains { element in
+            switch element.content {
+            case .pdfPage, .image: true
+            default: false
+            }
+        }
+        guard isCostly else { return }
+        let key = baseKey(for: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
+        guard cached(key: key, scale: baseScale) == nil else { return }
+        let scale = baseScale
+        let rendered = await Task.detached(priority: .utility) {
+            PaperAppearance.image(
+                strokes: [],
+                pageSize: CGSize(width: page.width, height: page.height),
+                template: page.template,
+                elements: page.visibleElements,
+                assetsDirectory: assetsDirectory,
+                scale: scale,
+                usesDarkPaper: usesDarkPaper
+            )
+        }.value
+        guard let rendered, cached(key: key, scale: scale) == nil else { return }
+        store(rendered, key: key, scale: scale, page: page)
     }
 
     static func cached(key: String, scale: CGFloat) -> InkImage? {

@@ -406,15 +406,23 @@ public struct PencilCanvasView: UIViewRepresentable {
         private let converter = IncrementalStrokeConverter()
         /// The canvas strokes as last set or seen. The highlighter-only eraser
         /// puts the strokes it keeps back at their old index from here.
-        private var baselineStrokes: [PKStroke] = []
+        ///
+        /// Every change to the drawing passes through `apply`,
+        /// `reportDrawingChange` or a held stroke, which all update this, so it
+        /// stands in for `canvas.drawing.strokes`: reading that bridges every
+        /// stroke out of PencilKit (about 2 ms for 2,000 strokes on an M-class
+        /// Mac, more on a base iPad), and a stroke used to pay for it several
+        /// times.
+        private(set) var baselineStrokes: [PKStroke] = []
 
         // Hold to straighten (see HoldToShape.swift).
         weak var holdObserver: UIGestureRecognizer?
         var canvasFeedback: UICanvasFeedbackGenerator?
         /// The current touch paused before lifting.
         var holdDetected = false
-        /// Strokes on the canvas when the current touch began.
-        var strokeIDsAtTouchBegan: Set<UUID> = []
+        /// Strokes on the canvas when the current touch began (as last seen,
+        /// see `baselineStrokes`).
+        var strokesAtTouchBegan: [PKStroke] = []
         /// A held stroke waiting to be swapped for its shape.
         var pendingShape: PendingShapeReplacement?
         /// Set while a shape swap writes the drawing, so it is not handled twice.
@@ -440,32 +448,32 @@ public struct PencilCanvasView: UIViewRepresentable {
             for record in strokes {
                 layerIDs[record.id] = record.layerID
             }
-            let current = canvas.drawing.strokes
+            let current = baselineStrokes
             let incomingIDs = strokes.map(\.id)
             let currentIDs = current.map(\.id)
             let contentMatches = strokes.allSatisfy { syncedRecords[$0.id] == RecordSignature($0) }
 
             if contentMatches, incomingIDs == currentIDs { return }
 
-            let drawing: PKDrawing
+            let next: [PKStroke]
             if contentMatches, Set(incomingIDs) == Set(currentIDs), incomingIDs.count == currentIDs.count {
                 var byID: [UUID: PKStroke] = [:]
                 for stroke in current { byID[stroke.id] = stroke }
-                drawing = PKDrawing(strokes: incomingIDs.compactMap { byID[$0] })
+                next = incomingIDs.compactMap { byID[$0] }
             } else {
-                drawing = rebuiltDrawing(from: strokes, reusing: current)
+                next = rebuiltStrokes(from: strokes, reusing: current)
             }
 
             isApplyingInput = true
-            canvas.drawing = drawing
+            canvas.drawing = PKDrawing(strokes: next)
             isApplyingInput = false
-            baselineStrokes = drawing.strokes
-            converter.seed(strokes: drawing.strokes, records: strokes)
+            baselineStrokes = next
+            converter.seed(strokes: next, records: strokes)
             syncedRecords = Dictionary(
                 strokes.map { ($0.id, RecordSignature($0)) },
                 uniquingKeysWith: { _, last in last }
             )
-            let liveIDs = Set(drawing.strokes.map(\.id))
+            let liveIDs = Set(next.map(\.id))
             layerIDs = layerIDs.filter { liveIDs.contains($0.key) }
         }
 
@@ -473,15 +481,15 @@ public struct PencilCanvasView: UIViewRepresentable {
         /// the form of its record is kept instead of decoded again. A stroke
         /// from another view of the page (Zoom View) then costs one decode,
         /// not one per stroke on the page.
-        private func rebuiltDrawing(from records: [StrokeRecord], reusing current: [PKStroke]) -> PKDrawing {
+        private func rebuiltStrokes(from records: [StrokeRecord], reusing current: [PKStroke]) -> [PKStroke] {
             var live: [UUID: PKStroke] = [:]
             for stroke in current { live[stroke.id] = stroke }
-            return PKDrawing(strokes: StrokeOrder.renderOrder(records).compactMap { record in
+            return StrokeOrder.renderOrder(records).compactMap { record in
                 if let stroke = live[record.id], syncedRecords[record.id] == RecordSignature(record) {
                     return stroke
                 }
                 return try? StrokeCodec.stroke(from: record)
-            })
+            }
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -567,13 +575,15 @@ public struct PencilCanvasView: UIViewRepresentable {
         }
 
         func reportDrawingChange(_ canvasView: PKCanvasView) {
-            defer { baselineStrokes = canvasView.drawing.strokes }
+            // Read once: each read bridges every stroke out of PencilKit.
+            let strokes = canvasView.drawing.strokes
+            baselineStrokes = strokes
             let activeLayerID = parent.activeLayerID
             // PencilKit can notify a moment *after* a programmatic change, so a
             // pending guard flag alone is not enough: the converter also
             // reports nil when the strokes match what was last applied.
             guard let records = converter.changedRecords(
-                from: canvasView.drawing.strokes,
+                from: strokes,
                 layerID: { [self] id in
                     if let layer = layerIDs[id] { return layer }
                     layerIDs[id] = activeLayerID

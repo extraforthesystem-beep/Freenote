@@ -93,6 +93,10 @@ enum TemplateImageCache {
         return cache
     }()
 
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
     static func image(
         for template: PageTemplate,
         pageSize: CGSize = PageTemplateCatalog.pageSize,

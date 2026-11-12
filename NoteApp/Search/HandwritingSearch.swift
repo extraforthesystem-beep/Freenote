@@ -57,9 +57,12 @@ final class HandwritingSearch {
             lastError = error.localizedDescription
         }
 
-        for notebook in notebooks {
+        // One index file write per batch of pages, not one per page.
+        let batch = index
+        await batch.beginDeferringWrites()
+        pages: for notebook in notebooks {
             for (offset, pageID) in notebook.pageOrder.enumerated() {
-                if Task.isCancelled { return }
+                if Task.isCancelled { break pages }
                 if let page = try? await store.loadPage(pageID, in: notebook.id) {
                     do {
                         _ = try await index.update(
@@ -74,9 +77,24 @@ final class HandwritingSearch {
                     }
                 }
                 indexedPages += 1
+                if indexedPages % Self.pagesPerWrite == 0, batch === index {
+                    try? await batch.flushDeferredWrites()
+                }
             }
         }
+        await endDeferringWrites(of: batch)
     }
+
+    /// Ends a batch of index writes. An index that `reset()` replaced
+    /// meanwhile is dropped unwritten, so its records cannot come back.
+    private func endDeferringWrites(of batch: SearchIndex) async {
+        guard batch === index else { return }
+        try? await batch.endDeferringWrites()
+    }
+
+    /// How many pages an indexing pass recognises between index file writes:
+    /// few enough that a pass cut short loses little work.
+    private static let pagesPerWrite = 25
 
     /// Re-indexes one notebook after it is closed.
     func index(notebook: NotebookManifest, store: LibraryStore) async {
@@ -86,8 +104,10 @@ final class HandwritingSearch {
         } catch {
             lastError = error.localizedDescription
         }
+        let batch = index
+        await batch.beginDeferringWrites()
         for (offset, pageID) in notebook.pageOrder.enumerated() {
-            if Task.isCancelled { return }
+            if Task.isCancelled { break }
             guard let page = try? await store.loadPage(pageID, in: notebook.id) else { continue }
             try? await index.update(
                 page: page,
@@ -96,7 +116,11 @@ final class HandwritingSearch {
                 using: recognizer,
                 assetsDirectory: store.assetsDirectoryURL(for: notebook.id)
             )
+            if (offset + 1) % Self.pagesPerWrite == 0, batch === index {
+                try? await batch.flushDeferredWrites()
+            }
         }
+        await endDeferringWrites(of: batch)
     }
 
     func search(_ query: String) async {
