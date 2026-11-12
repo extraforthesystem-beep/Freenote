@@ -442,3 +442,90 @@ private func typedPage(_ text: String, strokeCount: Int = 0) -> Page {
     #expect(hit.pageIndex == 7)
 }
 
+
+// MARK: - Deferred writes
+
+@Test func deferredWritesReachTheFileOnlyAtTheEnd() async throws {
+    let root = try makeRoot()
+    let notebookID = UUID()
+    let index = SearchIndex(root: root)
+    let file = root.appendingPathComponent("search-index.json")
+
+    await index.beginDeferringWrites()
+    _ = try await index.update(page: makePage(), in: notebookID, using: FakeRecognizer(text: "deferred words"))
+    // Searches see the change straight away; the file does not exist yet.
+    #expect(await index.search("deferred").count == 1)
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+
+    try await index.endDeferringWrites()
+    let reopened = SearchIndex(root: root)
+    try await reopened.load()
+    #expect(await reopened.search("deferred").count == 1)
+}
+
+@Test func flushWritesWhileStillDeferring() async throws {
+    let root = try makeRoot()
+    let index = SearchIndex(root: root)
+    await index.beginDeferringWrites()
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: "flushed early"))
+    try await index.flushDeferredWrites()
+
+    let reopened = SearchIndex(root: root)
+    try await reopened.load()
+    #expect(await reopened.search("flushed").count == 1)
+    try await index.endDeferringWrites()
+}
+
+@Test func loadKeepsChangesNotYetWritten() async throws {
+    let root = try makeRoot()
+    let index = SearchIndex(root: root)
+    await index.beginDeferringWrites()
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: "pending change"))
+    // A reload during a deferral writes first, so nothing is lost.
+    try await index.load()
+    #expect(await index.search("pending").count == 1)
+    try await index.endDeferringWrites()
+}
+
+@Test func nestedDeferralsWriteOnceTheOuterOneEnds() async throws {
+    let root = try makeRoot()
+    let index = SearchIndex(root: root)
+    let file = root.appendingPathComponent("search-index.json")
+    await index.beginDeferringWrites()
+    await index.beginDeferringWrites()
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: "nested"))
+    try await index.endDeferringWrites()
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    try await index.endDeferringWrites()
+    #expect(FileManager.default.fileExists(atPath: file.path))
+}
+
+/// Off by default; `NOTEAPP_BENCH=1 swift test --filter firstIndexPass`.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["NOTEAPP_BENCH"] != nil))
+func firstIndexPassBenchmark() async throws {
+    // ~2 KB of text per page, like an imported PDF page.
+    let text = String(repeating: "lecture notes about integrals and limits ", count: 50)
+    let recognizer = FakeRecognizer(text: text)
+    let pageCount = 600
+    let notebookID = UUID()
+    let pages = (0..<pageCount).map { _ in makePage(strokeCount: 20) }
+    let clock = ContinuousClock()
+
+    let eachPage = SearchIndex(root: try makeRoot())
+    let perPageWrite = try await clock.measure {
+        for (offset, page) in pages.enumerated() {
+            _ = try await eachPage.update(page: page, in: notebookID, pageIndex: offset + 1, using: recognizer)
+        }
+    }
+
+    let batched = SearchIndex(root: try makeRoot())
+    let deferred = try await clock.measure {
+        await batched.beginDeferringWrites()
+        for (offset, page) in pages.enumerated() {
+            _ = try await batched.update(page: page, in: notebookID, pageIndex: offset + 1, using: recognizer)
+            if offset % 50 == 49 { try await batched.flushDeferredWrites() }
+        }
+        try await batched.endDeferringWrites()
+    }
+    print("BENCH firstIndexPass \(pageCount) pages: write per page \(perPageWrite), deferred (flush every 50) \(deferred)")
+}
