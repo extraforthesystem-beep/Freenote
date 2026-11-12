@@ -175,14 +175,24 @@ private struct PageThumbnailCell: View {
         let assetsDirectory = session.assetsDirectory
         let scale = Self.renderScale
         let usesDarkPaper = usesDarkPaper
-        let rendered = await Task.detached(priority: .utility) {
-            PaperAppearance.image(
+        // A detached task does not inherit this task's cancellation, so pass
+        // it on: a render still waiting for a thread when the cell scrolls
+        // away is skipped. A fling across a scanned PDF otherwise queues a
+        // full-page image decode for every cell it passes.
+        let render = Task.detached(priority: .utility) { () -> InkImage? in
+            guard !Task.isCancelled else { return nil }
+            return PaperAppearance.image(
                 page: page,
                 assetsDirectory: assetsDirectory,
                 scale: scale,
                 usesDarkPaper: usesDarkPaper
             )
-        }.value
+        }
+        let rendered = await withTaskCancellationHandler {
+            await render.value
+        } onCancel: {
+            render.cancel()
+        }
         guard !Task.isCancelled else { return }
         guard let rendered else {
             if image == nil { failed = true }
