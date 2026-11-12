@@ -105,7 +105,9 @@ enum LibraryCovers {
 
     /// Drops renders nothing has asked for in a while. Every page save produces a
     /// new key, so without this the cover folder only grows.
-    static func pruneStaleCovers(store: LibraryStore, olderThan age: TimeInterval = 7 * 24 * 60 * 60) {
+    ///
+    /// Lists and stats every cached cover, so it runs off the main actor.
+    nonisolated static func pruneStaleCovers(store: LibraryStore, olderThan age: TimeInterval = 7 * 24 * 60 * 60) {
         let directory = coversDirectory(store: store)
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else {
             return
@@ -127,7 +129,7 @@ enum LibraryCovers {
         return "\(notebookID.uuidString.lowercased())-\(pageID.uuidString.lowercased())-\(seconds)"
     }
 
-    private static func coversDirectory(store: LibraryStore) -> URL {
+    nonisolated private static func coversDirectory(store: LibraryStore) -> URL {
         store.cacheDirectoryURL.appendingPathComponent("covers", isDirectory: true)
     }
 

@@ -159,7 +159,7 @@ final class AppModel {
             Task {
                 _ = try? await history.prune(keeping: .default)
             }
-            Task {
+            Task.detached(priority: .utility) { [store] in
                 LibraryCovers.pruneStaleCovers(store: store)
             }
             Task {
