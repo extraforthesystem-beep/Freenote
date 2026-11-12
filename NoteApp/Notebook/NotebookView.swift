@@ -491,7 +491,7 @@ struct NotebookPane: View {
     /// Why the active tool cannot change ink right now, if it cannot.
     private var layerBlock: LayerBlock? {
         guard !editor.isReadOnly,
-              session.page != nil, editor.tool.editsInk, !session.canDrawOnActiveLayer
+              session.currentPageID != nil, editor.tool.editsInk, !session.canDrawOnActiveLayer
         else { return nil }
         guard let layer = session.activeLayer else { return .missing }
         return layer.isVisible ? .locked(layer) : .hidden(layer)
@@ -571,11 +571,11 @@ struct NotebookPane: View {
         Button("Text Box…", systemImage: "character.textbox") {
             showsTextComposer = true
         }
-        .disabled(session.page == nil)
+        .disabled(session.currentPageID == nil)
         Button("Image…", systemImage: "photo") {
             showsImageImporter = true
         }
-        .disabled(session.page == nil)
+        .disabled(session.currentPageID == nil)
         Button("Insert PDF Pages…", systemImage: "doc.badge.plus") {
             showsPDFImporter = true
         }
@@ -584,24 +584,24 @@ struct NotebookPane: View {
             Button("Ellipse", systemImage: "circle") { addShape("ellipse") }
             Button("Line", systemImage: "line.diagonal") { addShape("line") }
         }
-        .disabled(session.page == nil)
+        .disabled(session.currentPageID == nil)
         Menu("Sticky Note", systemImage: "note") {
             ForEach(Array(zip(Self.stickyColorNames, NotebookSession.stickyColors)), id: \.0) { name, color in
                 Button(name) { addSticky(color) }
             }
         }
-        .disabled(session.page == nil)
+        .disabled(session.currentPageID == nil)
         Menu("Tape", systemImage: "bandage") {
             ForEach(Array(zip(Self.tapeColorNames, NotebookSession.tapeColors)), id: \.0) { name, color in
                 Button(name) { Task { await session.insertTape(color: color) } }
             }
         }
-        .disabled(session.page == nil)
+        .disabled(session.currentPageID == nil)
         Divider()
         Button("Page Elements…", systemImage: "square.on.square.dashed") {
             showsElements = true
         }
-        .disabled(session.page == nil)
+        .disabled(session.currentPageID == nil)
     }
 
     private static func removingTape(from page: Page) -> Page {
@@ -647,7 +647,7 @@ struct NotebookPane: View {
             Button("Layers…", systemImage: "square.3.layers.3d") {
                 showsLayers = true
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
             Button("Outline…", systemImage: "list.bullet.indent") {
                 showsOutline = true
             }
@@ -659,7 +659,7 @@ struct NotebookPane: View {
             Button("Page Template…", systemImage: "square.grid.3x3") {
                 showsTemplatePicker = true
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
         }
         Section {
             Button(
@@ -683,7 +683,7 @@ struct NotebookPane: View {
             Button("Version History…", systemImage: "clock.arrow.circlepath") {
                 showsHistory = true
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
         }
         #if os(iOS)
         Section("Scrolling") {
@@ -692,7 +692,7 @@ struct NotebookPane: View {
         }
         Section {
             Toggle("Ruler", systemImage: "ruler", isOn: $isRulerActive)
-                .disabled(session.page == nil)
+                .disabled(session.currentPageID == nil)
             Button("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") {
                 zoomController.fit()
             }
@@ -711,15 +711,15 @@ struct NotebookPane: View {
             Button("Duplicate Page", systemImage: "plus.square.on.square") {
                 Task { await session.duplicateCurrentPage() }
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
             Button("Move Page Left", systemImage: "arrow.left") {
                 Task { await session.moveCurrentPage(by: -1) }
             }
-            .disabled(session.page == nil || session.pageIndex == 0)
+            .disabled(session.currentPageID == nil || session.pageIndex == 0)
             Button("Move Page Right", systemImage: "arrow.right") {
                 Task { await session.moveCurrentPage(by: 1) }
             }
-            .disabled(session.page == nil || session.pageIndex + 1 >= session.pageCount)
+            .disabled(session.currentPageID == nil || session.pageIndex + 1 >= session.pageCount)
             Menu("Rotate Page", systemImage: "rotate.right") {
                 Button("Clockwise 90°", systemImage: "rotate.right") {
                     Task { await session.rotateCurrentPage(quarterTurns: 1) }
@@ -731,7 +731,7 @@ struct NotebookPane: View {
                     Task { await session.rotateCurrentPage(quarterTurns: 2) }
                 }
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
             Button("Go to Page…", systemImage: "arrow.right.to.line") {
                 showsGoToPage = true
             }
@@ -741,15 +741,15 @@ struct NotebookPane: View {
             Button("Delete Specific Items…", systemImage: "square.grid.2x2") {
                 showsDeleteItems = true
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
             Button("Clear Page", systemImage: "eraser", role: .destructive) {
                 showsClearPageConfirmation = true
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
             Button("Delete Page", systemImage: "trash", role: .destructive) {
                 showsDeletePageConfirmation = true
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
         }
         Section {
             Button("Export PDF…", systemImage: "square.and.arrow.up") {
@@ -759,7 +759,7 @@ struct NotebookPane: View {
             Button("Export Page as PNG…", systemImage: "photo") {
                 exportPNG()
             }
-            .disabled(session.page == nil)
+            .disabled(session.currentPageID == nil)
         }
     }
 
@@ -783,13 +783,13 @@ struct NotebookPane: View {
     @ViewBuilder
     private var bookmarksMenu: some View {
         Menu("Bookmarks", systemImage: bookmarkedPageIndices.isEmpty ? "bookmark" : "bookmark.fill") {
-            if let page = session.page {
-                let isBookmarked = model.bookmarks.isBookmarked(notebookID: session.notebookID, pageID: page.id)
+            if let pageID = session.currentPageID {
+                let isBookmarked = model.bookmarks.isBookmarked(notebookID: session.notebookID, pageID: pageID)
                 Button(
                     isBookmarked ? "Remove Bookmark" : "Bookmark This Page",
                     systemImage: isBookmarked ? "bookmark.slash" : "bookmark"
                 ) {
-                    model.bookmarks.toggle(notebookID: session.notebookID, pageID: page.id)
+                    model.bookmarks.toggle(notebookID: session.notebookID, pageID: pageID)
                 }
                 Divider()
             }
