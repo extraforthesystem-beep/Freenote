@@ -11,6 +11,7 @@ struct NotebookView: View {
     @State private var renameText = ""
     @State private var tool = InkTool(.pen)
     #if os(iOS)
+    @State private var canvasMode: CanvasMode = .ink
     @State private var controller = PencilCanvasController()
     #endif
 
@@ -114,6 +115,16 @@ struct NotebookView: View {
     }
 
     #if os(iOS)
+    private var isErasing: Bool {
+        if case .eraser = canvasMode { return true }
+        return false
+    }
+
+    private var isLasso: Bool {
+        if case .lasso = canvasMode { return true }
+        return false
+    }
+
     private var toolBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
@@ -121,12 +132,13 @@ struct NotebookView: View {
                     Button {
                         tool.style = style
                         tool.width = style.defaultWidth
+                        canvasMode = .ink
                     } label: {
                         Image(systemName: style.symbolName)
                             .font(.system(size: 16))
                             .frame(width: 34, height: 30)
                             .background(
-                                tool.style == style
+                                canvasMode == .ink && tool.style == style
                                     ? Color.accentColor.opacity(0.18)
                                     : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -158,6 +170,42 @@ struct NotebookView: View {
                 )
                 .frame(width: 110)
                 .accessibilityLabel("Ink width")
+
+                Divider().frame(height: 22)
+
+                Menu {
+                    Button("Stroke Eraser", systemImage: "eraser") {
+                        canvasMode = .eraser(.stroke, width: 12)
+                    }
+                    Button("Pixel Eraser", systemImage: "eraser.fill") {
+                        canvasMode = .eraser(.pixel, width: 12)
+                    }
+                } label: {
+                    Image(systemName: "eraser")
+                        .font(.system(size: 16))
+                        .frame(width: 34, height: 30)
+                        .background(
+                            isErasing ? Color.accentColor.opacity(0.18) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        )
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Eraser")
+
+                Button {
+                    canvasMode = canvasMode == .lasso ? .ink : .lasso
+                } label: {
+                    Image(systemName: "lasso")
+                        .font(.system(size: 16))
+                        .frame(width: 34, height: 30)
+                        .background(
+                            isLasso ? Color.accentColor.opacity(0.18) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Lasso")
 
                 Divider().frame(height: 22)
 
@@ -213,6 +261,7 @@ struct NotebookView: View {
                     strokes: page.strokes,
                     pageSize: CGSize(width: page.width, height: page.height),
                     tool: tool,
+                    mode: canvasMode,
                     activeLayerID: page.layers.first?.id ?? UUID(),
                     isEditable: true,
                     controller: controller,

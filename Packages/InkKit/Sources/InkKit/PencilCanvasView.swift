@@ -50,6 +50,35 @@ public final class InkCanvasView: PKCanvasView {
     }
 }
 
+/// What the Pencil does on the canvas.
+public enum EraserKind: String, Codable, Hashable, Sendable {
+    /// Removes whole strokes (PencilKit's vector eraser).
+    case stroke
+    /// Removes pixels, splitting a stroke with a mask (PencilKit's bitmap eraser).
+    case pixel
+}
+
+public enum CanvasMode: Hashable, Sendable {
+    case ink
+    case eraser(EraserKind, width: Double)
+    case lasso
+
+    var pkTool: PKTool {
+        switch self {
+        case .ink:
+            // Replaced by the caller's current ink tool.
+            return PKInkingTool(.pen)
+        case let .eraser(kind, width):
+            return PKEraserTool(
+                kind == .stroke ? .vector : .bitmap,
+                width: CGFloat(max(1, width))
+            )
+        case .lasso:
+            return PKLassoTool()
+        }
+    }
+}
+
 /// A drawing canvas for one page.
 ///
 /// Strokes flow in as records and come back out as records; the view never
@@ -60,6 +89,7 @@ public struct PencilCanvasView: UIViewRepresentable {
     public var strokes: [StrokeRecord]
     public var pageSize: CGSize
     public var tool: InkTool
+    public var mode: CanvasMode
     public var activeLayerID: UUID
     public var isEditable: Bool
     public var controller: PencilCanvasController?
@@ -69,6 +99,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         strokes: [StrokeRecord],
         pageSize: CGSize,
         tool: InkTool,
+        mode: CanvasMode = .ink,
         activeLayerID: UUID,
         isEditable: Bool = true,
         controller: PencilCanvasController? = nil,
@@ -77,10 +108,16 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.strokes = strokes
         self.pageSize = pageSize
         self.tool = tool
+        self.mode = mode
         self.activeLayerID = activeLayerID
         self.isEditable = isEditable
         self.controller = controller
         self.onStrokesChanged = onStrokesChanged
+    }
+
+    private func canvasTool(for mode: CanvasMode) -> PKTool {
+        if case .ink = mode { return tool.inkingTool }
+        return mode.pkTool
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -102,7 +139,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         #else
         canvas.drawingPolicy = .pencilOnly
         #endif
-        canvas.tool = tool.inkingTool
+        canvas.tool = canvasTool(for: mode)
         context.coordinator.canvas = canvas
         controller?.canvas = canvas
         return canvas
@@ -115,7 +152,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         controller?.canvas = canvas
 
         canvas.isUserInteractionEnabled = isEditable
-        canvas.tool = tool.inkingTool
+        canvas.tool = canvasTool(for: mode)
         canvas.contentSize = pageSize
         if canvas.pageSize != pageSize {
             canvas.pageSize = pageSize
