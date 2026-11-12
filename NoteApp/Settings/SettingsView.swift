@@ -19,6 +19,8 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
     @AppStorage(AppSettings.Key.pageScrollMode) private var pageScrollMode: PageScrollMode = .vertical
+    @AppStorage(AppSettings.Key.rememberLastTool) private var rememberLastTool = true
+    @AppStorage(AppSettings.Key.hideStatusBar) private var hideStatusBar = false
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -29,8 +31,8 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 documentEditing
-                #if os(iOS)
                 writing
+                #if os(iOS)
                 applePencil
                 #endif
                 newNotebooks
@@ -64,20 +66,28 @@ struct SettingsView: View {
         }
     }
 
-    #if os(iOS)
     private var writing: some View {
         Section {
+            Toggle("Remember Last Tool", isOn: $rememberLastTool)
+            #if os(iOS)
             Toggle("Draw with Finger", isOn: $drawWithFinger)
             Toggle("Hold to Draw Shapes", isOn: $holdToDrawShapes)
             Toggle("Two-Finger Double-Tap to Undo", isOn: $twoFingerDoubleTapUndo)
             Toggle("Three-Finger Double-Tap to Redo", isOn: $threeFingerDoubleTapRedo)
+            Toggle("Hide Status Bar in Notebooks", isOn: $hideStatusBar)
+            #endif
         } header: {
             Text("Writing")
         } footer: {
-            Text("With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, rectangle, triangle or ellipse.")
+            #if os(iOS)
+            Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last. With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, rectangle, triangle or ellipse. The status bar stays visible in the library.")
+            #else
+            Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last.")
+            #endif
         }
     }
 
+    #if os(iOS)
     private var applePencil: some View {
         Section {
             Picker("Double-Tap Action", selection: $pencilDoubleTapAction) {

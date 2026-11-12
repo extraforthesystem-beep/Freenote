@@ -8,6 +8,8 @@ import UIKit
 
 struct NotebookView: View {
     @Bindable var model: AppModel
+    /// On, the editor takes the whole screen and the clock and battery hide.
+    @AppStorage(AppSettings.Key.hideStatusBar) private var hideStatusBar = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +30,9 @@ struct NotebookView: View {
             }
         }
         .background(AppColor.groupedBackground)
+        #if os(iOS)
+        .statusBarHidden(hideStatusBar)
+        #endif
     }
 
     private var tabBar: some View {
