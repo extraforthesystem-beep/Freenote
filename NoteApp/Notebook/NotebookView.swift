@@ -13,6 +13,7 @@ struct NotebookView: View {
     @State private var isExporting = false
     @State private var showExporter = false
     @State private var exportError: String?
+    @State private var showsTemplatePicker = false
     @State private var tool = InkTool(.pen)
     #if os(iOS)
     @State private var canvasMode: CanvasMode = .ink
@@ -70,6 +71,14 @@ struct NotebookView: View {
                 exportError = error.localizedDescription
             }
         }
+        .sheet(isPresented: $showsTemplatePicker) {
+            PageTemplatePicker(
+                current: session.page?.template,
+                isApplying: session.isApplyingTemplate
+            ) { item, applyToAll in
+                Task { await session.applyTemplate(item.template, toAllPages: applyToAll) }
+            }
+        }
     }
 
     private var exportFilename: String {
@@ -116,6 +125,15 @@ struct NotebookView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
 
+            Button {
+                showsTemplatePicker = true
+            } label: {
+                Label("Page Template", systemImage: "square.grid.3x3")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .help("Page template")
+
             Menu {
                 Button("Add Page After", systemImage: "plus") {
                     Task { await session.addPage() }
@@ -148,19 +166,10 @@ struct NotebookView: View {
                 }
                 .disabled(session.pageIndex + 1 >= session.pageCount)
                 Divider()
-                Menu("Paper Style", systemImage: "square.grid.3x3") {
-                    ForEach(["blank", "ruled", "grid", "dotted"], id: \.self) { kind in
-                        Button {
-                            Task { await session.setPaperKind(kind) }
-                        } label: {
-                            if session.page?.template.kind == kind {
-                                Label(kind.capitalized, systemImage: "checkmark")
-                            } else {
-                                Text(kind.capitalized)
-                            }
-                        }
-                    }
+                Button("Page Template…", systemImage: "square.grid.3x3") {
+                    showsTemplatePicker = true
                 }
+                .disabled(session.page == nil)
                 Divider()
                 Button("Delete Page", systemImage: "trash", role: .destructive) {
                     showsDeletePageConfirmation = true
@@ -317,7 +326,7 @@ struct NotebookView: View {
         if let page = session.page {
             #if os(iOS)
             ZStack {
-                PaperBackground(template: page.template)
+                PaperBackground(template: page.template, pageSize: CGSize(width: page.width, height: page.height))
                 PencilCanvasView(
                     strokes: page.strokes,
                     pageSize: CGSize(width: page.width, height: page.height),
@@ -340,7 +349,7 @@ struct NotebookView: View {
                     .resizable()
                     .scaledToFit()
             } else {
-                PaperBackground(template: page.template)
+                PaperBackground(template: page.template, pageSize: CGSize(width: page.width, height: page.height))
             }
             #endif
         } else if session.isLoadingPage {
@@ -431,63 +440,18 @@ struct NotebookView: View {
     }
 }
 
-/// The printed part of a page: blank, ruled, grid or dotted.
+/// The printed part of a page, drawn by InkKit so the canvas, thumbnails and PDF agree.
 struct PaperBackground: View {
     let template: PageTemplate
+    var pageSize: CGSize = PageTemplateCatalog.pageSize
 
     var body: some View {
-        Canvas { context, size in
-            let paper = Color(
-                red: template.paperColor.r,
-                green: template.paperColor.g,
-                blue: template.paperColor.b
-            )
-            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(paper))
-
-            let spacing = template.spacing > 0 ? template.spacing : 24
-            let line = Color(
-                red: template.lineColor.r,
-                green: template.lineColor.g,
-                blue: template.lineColor.b
-            )
-            var path = Path()
-
-            switch template.kind {
-            case "ruled":
-                var y = spacing
-                while y < size.height {
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: size.width, y: y))
-                    y += spacing
-                }
-            case "grid":
-                var x = spacing
-                while x < size.width {
-                    path.move(to: CGPoint(x: x, y: 0))
-                    path.addLine(to: CGPoint(x: x, y: size.height))
-                    x += spacing
-                }
-                var y = spacing
-                while y < size.height {
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: size.width, y: y))
-                    y += spacing
-                }
-            case "dotted":
-                var x = spacing
-                while x < size.width {
-                    var y = spacing
-                    while y < size.height {
-                        path.addEllipse(in: CGRect(x: x - 0.8, y: y - 0.8, width: 1.6, height: 1.6))
-                        y += spacing
-                    }
-                    x += spacing
-                }
-            default:
-                break
-            }
-
-            context.stroke(path, with: .color(line.opacity(0.55)), lineWidth: 0.75)
+        if let image = TemplateImageCache.image(for: template, pageSize: pageSize) {
+            Image(inkImage: image)
+                .resizable()
+                .interpolation(.high)
+        } else {
+            Color.white
         }
     }
 }

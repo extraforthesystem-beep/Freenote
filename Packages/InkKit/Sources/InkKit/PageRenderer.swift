@@ -44,7 +44,7 @@ public enum PageRenderer {
         context.translateBy(x: 0, y: CGFloat(pixelHeight))
         context.scaleBy(x: scale, y: -scale)
 
-        drawPaper(in: context, pageSize: pageSize, template: template)
+        TemplateRenderer.draw(template, in: context, pageSize: pageSize)
         drawInk(in: context, strokes: strokes, pageSize: pageSize, scale: scale)
 
         guard let cgImage = context.makeImage() else { return nil }
@@ -57,58 +57,6 @@ public enum PageRenderer {
         #else
         NSImage(cgImage: cgImage, size: pageSize)
         #endif
-    }
-
-    private static func drawPaper(in context: CGContext, pageSize: CGSize, template: PageTemplate) {
-        let page = CGRect(origin: .zero, size: pageSize)
-        context.setFillColor(cgColor(template.paperColor))
-        context.fill(page)
-
-        guard template.spacing > 0 else { return }
-        context.setStrokeColor(cgColor(template.lineColor))
-        context.setLineWidth(1)
-        let lines = CGMutablePath()
-
-        switch template.kind {
-        case "ruled":
-            var y = template.spacing
-            while y < pageSize.height {
-                lines.move(to: CGPoint(x: 0, y: y))
-                lines.addLine(to: CGPoint(x: pageSize.width, y: y))
-                y += template.spacing
-            }
-        case "grid":
-            var y = template.spacing
-            while y < pageSize.height {
-                lines.move(to: CGPoint(x: 0, y: y))
-                lines.addLine(to: CGPoint(x: pageSize.width, y: y))
-                y += template.spacing
-            }
-            var x = template.spacing
-            while x < pageSize.width {
-                lines.move(to: CGPoint(x: x, y: 0))
-                lines.addLine(to: CGPoint(x: x, y: pageSize.height))
-                x += template.spacing
-            }
-        case "dotted":
-            context.setFillColor(cgColor(template.lineColor))
-            var y = template.spacing
-            while y < pageSize.height {
-                var x = template.spacing
-                while x < pageSize.width {
-                    context.fillEllipse(
-                        in: CGRect(x: x - 0.75, y: y - 0.75, width: 1.5, height: 1.5)
-                    )
-                    x += template.spacing
-                }
-                y += template.spacing
-            }
-        default:
-            break
-        }
-
-        context.addPath(lines)
-        context.strokePath()
     }
 
     private static func drawInk(
@@ -139,7 +87,5 @@ public enum PageRenderer {
         #endif
     }
 
-    private static func cgColor(_ color: RGBAColor) -> CGColor {
-        CGColor(srgbRed: color.r, green: color.g, blue: color.b, alpha: color.a)
-    }
+
 }

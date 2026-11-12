@@ -24,7 +24,6 @@ public final class PencilCanvasController: ObservableObject {
 /// A `PKCanvasView` that can be hosted by SwiftUI without losing undo.
 public final class InkCanvasView: PKCanvasView {
     var pageSize: CGSize = .zero
-    private var didFit = false
 
     /// PencilKit registers undo with the canvas's own undo manager, and a
     /// SwiftUI-hosted view has none on its responder chain, so supply one.
@@ -32,14 +31,15 @@ public final class InkCanvasView: PKCanvasView {
     override public var undoManager: UndoManager? { canvasUndoManager }
 
     func fitPageIfNeeded() {
-        guard !didFit,
-              pageSize.width > 0, pageSize.height > 0,
+        guard pageSize.width > 0, pageSize.height > 0,
               bounds.width > 0, bounds.height > 0
         else { return }
-        didFit = true
         let fit = min(bounds.width / pageSize.width, bounds.height / pageSize.height)
-        minimumZoomScale = fit * 0.5
-        maximumZoomScale = max(fit * 4, 1)
+        // The paper is a SwiftUI image behind the canvas, so it cannot zoom with
+        // the ink yet. Lock the zoom until the paper moves into the scroll view.
+        guard minimumZoomScale != fit || maximumZoomScale != fit else { return }
+        minimumZoomScale = fit
+        maximumZoomScale = fit
         zoomScale = fit
         contentOffset = .zero
     }

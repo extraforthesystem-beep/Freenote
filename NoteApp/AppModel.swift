@@ -286,6 +286,7 @@ final class NotebookSession {
     private(set) var pageIndex = 0
     private(set) var isLoadingPage = false
     private(set) var isSaving = false
+    private(set) var isApplyingTemplate = false
     private(set) var loadError: String?
     /// Bumped after an edit so the current page's thumbnail re-renders.
     private(set) var revision = 0
@@ -393,15 +394,25 @@ final class NotebookSession {
         }
     }
 
-    /// Changes the printed background of the current page and saves at once.
-    func setPaperKind(_ kind: String) async {
+    /// Changes the printed background of the current page, or of every page.
+    func applyTemplate(_ template: PageTemplate, toAllPages: Bool) async {
+        await commitPendingSave()
+        if toAllPages {
+            isApplyingTemplate = true
+            defer { isApplyingTemplate = false }
+            for pageID in manifest.pageOrder {
+                guard var stored = try? await store.loadPage(pageID, in: manifest.id) else { continue }
+                stored.template = template
+                try? await store.savePage(stored, in: manifest.id)
+                ThumbnailCache.invalidate(notebookID: manifest.id, pageID: pageID)
+            }
+            await loadPage(at: pageIndex)
+            revision &+= 1
+            return
+        }
+
         guard var updated = page else { return }
-        updated.template = PageTemplate(
-            kind: kind,
-            spacing: kind == "blank" ? 0 : 28,
-            lineColor: RGBAColor(r: 0.72, g: 0.78, b: 0.86),
-            paperColor: .white
-        )
+        updated.template = template
         page = updated
         revision &+= 1
         ThumbnailCache.invalidate(notebookID: manifest.id, pageID: updated.id)
