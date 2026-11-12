@@ -126,6 +126,19 @@ struct ColorFavoritesTests {
     }
 
     @Test
+    func swapTradesTwoSlotsAndKeepsTheLength() {
+        let colors = (0..<4).map { RGBAColor(r: Double($0) / 10, g: 0, b: 0) }
+        var favorites = ColorFavorites(colors)
+        let swapped = favorites.swapAt(0, 3)
+        #expect(swapped)
+        #expect(favorites.colors == [colors[3], colors[1], colors[2], colors[0]])
+        let sameSlot = favorites.swapAt(1, 1)
+        let outOfRange = favorites.swapAt(0, 9)
+        #expect(!sameSlot)
+        #expect(!outOfRange)
+    }
+
+    @Test
     func moveBackwardShiftsTheColoursItPasses() {
         let colors = (0..<4).map { RGBAColor(r: Double($0) / 10, g: 0, b: 0) }
         var favorites = ColorFavorites(colors)

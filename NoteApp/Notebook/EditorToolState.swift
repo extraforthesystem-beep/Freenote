@@ -328,17 +328,18 @@ final class EditorToolState {
     }
 
     /// Swaps one favourite for another, keeping its place in the row. If the
-    /// colour is already another favourite, that slot goes so the row never
-    /// shows the same colour twice.
+    /// colour is already another favourite, the two slots trade places so the
+    /// row never shows the same colour twice and never shifts.
     func replaceFavoriteColor(at index: Int, with color: RGBAColor) {
         var favorites = favoriteColors
         guard favorites.colors.indices.contains(index) else { return }
-        var target = index
         if let existing = favorites.index(of: color), existing != index {
-            favorites.remove(at: existing)
-            if existing < index { target -= 1 }
+            // The colour is already another favourite: the two slots trade
+            // places, so the row keeps its length and nothing shifts.
+            favorites.swapAt(index, existing)
+        } else {
+            guard favorites.replace(at: index, with: color) else { return }
         }
-        guard favorites.replace(at: target, with: color) else { return }
         setFavorites(favorites)
         // The palette shows the new colour in its Recent row straight away.
         recentColors.record(color)

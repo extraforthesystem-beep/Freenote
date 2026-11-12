@@ -202,6 +202,15 @@ public struct ColorFavorites: Codable, Hashable, Sendable {
         return true
     }
 
+    /// Exchanges two slots. Returns `false` for the same slot or an
+    /// out-of-range index.
+    @discardableResult
+    public mutating func swapAt(_ i: Int, _ j: Int) -> Bool {
+        guard colors.indices.contains(i), colors.indices.contains(j), i != j else { return false }
+        colors.swapAt(i, j)
+        return true
+    }
+
     @discardableResult
     public mutating func remove(at index: Int) -> Bool {
         guard colors.indices.contains(index) else { return false }
