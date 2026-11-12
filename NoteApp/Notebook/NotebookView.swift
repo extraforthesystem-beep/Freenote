@@ -171,6 +171,9 @@ struct NotebookPane: View {
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
     @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
+    @AppStorage(AppSettings.Key.zoomViewAutoAdvance) private var zoomViewAutoAdvance = true
+    @AppStorage(AppSettings.Key.zoomViewMagnification) private var zoomViewMagnification = ZoomBand.defaultMagnification
+    @State private var zoomView = ZoomViewModel()
     #endif
 
     var body: some View {
@@ -192,14 +195,24 @@ struct NotebookPane: View {
             macHeader
             #endif
             Divider()
-            pageArea
-                .overlay(alignment: .top) { banners }
-                .overlay(alignment: .bottom) {
-                    PageCounterPill(session: session) { index in
-                        Task { await session.goToPage(index) }
+            GeometryReader { proxy in
+                VStack(spacing: 0) {
+                    pageArea
+                        .overlay(alignment: .top) { banners }
+                        .overlay(alignment: .bottom) {
+                            PageCounterPill(session: session) { index in
+                                Task { await session.goToPage(index) }
+                            }
+                            .padding(.bottom, 12)
+                        }
+                    #if os(iOS)
+                    if isZoomViewOpen, let page = session.page {
+                        zoomPanel(page, availableHeight: proxy.size.height)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    .padding(.bottom, 12)
+                    #endif
                 }
+            }
             if showsThumbnails {
                 Divider()
                 PageThumbnailStrip(session: session) { index in
@@ -535,7 +548,7 @@ struct NotebookPane: View {
         .disabled(session.page == nil)
     }
 
-    private static func removingTape(from page: Page) -> Page {
+    static func removingTape(from page: Page) -> Page {
         var page = page
         page.elements.removeAll { element in
             if case .tape = element.content { return true }
@@ -938,6 +951,76 @@ struct NotebookPane: View {
         }
     }
 
+    /// Zoom View is open and the notebook can be written in.
+    private var isZoomViewOpen: Bool {
+        editor.isZoomViewShown && !editor.isReadOnly
+    }
+
+    private func zoomPanel(_ page: Page, availableHeight: CGFloat) -> some View {
+        ZoomWindowPanel(
+            page: page,
+            assetsDirectory: session.assetsDirectory,
+            zoom: zoomView,
+            availableHeight: availableHeight,
+            onClose: {
+                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
+            }
+        ) { band in
+            // The same strokes, in page points, shown through a viewport. The
+            // toolbar's undo drives this canvas while the panel is open.
+            pageCanvas(
+                page,
+                viewport: band,
+                controller: controller,
+                onToolGestureEnded: {
+                    editor.didEndToolGesture()
+                    zoomView.penLifted(drawsInk: editor.tool.drawsInk, autoAdvance: zoomViewAutoAdvance)
+                },
+                onStrokesChanged: { records in
+                    let before = Set(session.visibleStrokes.map(\.id))
+                    session.strokesChanged(records)
+                    zoomView.noteStrokes(records, before: before, autoAdvance: zoomViewAutoAdvance)
+                }
+            )
+            .id(page.id)
+        }
+    }
+
+    /// A PencilKit canvas over the page's visible strokes, set up with the
+    /// editor's tool and the writing settings. The page shows the whole page;
+    /// Zoom View passes the band as `viewport`.
+    private func pageCanvas(
+        _ page: Page,
+        viewport: CGRect? = nil,
+        controller: PencilCanvasController?,
+        onToolGestureEnded: @escaping () -> Void,
+        onStrokesChanged: @escaping ([StrokeRecord]) -> Void
+    ) -> PencilCanvasView {
+        PencilCanvasView(
+            strokes: session.visibleStrokes,
+            pageSize: CGSize(width: page.width, height: page.height),
+            tool: editor.inkTool,
+            mode: canvasMode,
+            activeLayerID: session.activeLayerID ?? page.layers.first?.id ?? UUID(),
+            isEditable: canvasIsEditable,
+            isRulerActive: isRulerActive,
+            viewport: viewport,
+            controller: controller,
+            drawsWithFinger: drawWithFinger,
+            undoOnTwoFingerDoubleTap: twoFingerDoubleTapUndo,
+            redoOnThreeFingerDoubleTap: threeFingerDoubleTapRedo,
+            pencilDoubleTapAction: pencilDoubleTapAction,
+            onFingerTap: { point in
+                Task { await openPDFLink(at: point) }
+            },
+            onToolGestureEnded: onToolGestureEnded,
+            holdToDrawShapes: holdToDrawShapes,
+            onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
+            eraseHighlighterOnly: eraserHighlighterOnly,
+            onStrokesChanged: onStrokesChanged
+        )
+    }
+
     private func pageContent(_ page: Page) -> some View {
         ZStack(alignment: .topLeading) {
             // Tape is drawn by `TapeOverlay` above the ink so it can hide and
@@ -959,26 +1042,11 @@ struct NotebookPane: View {
                     .accessibilityHidden(true)
             }
 
-            PencilCanvasView(
-                strokes: session.visibleStrokes,
-                pageSize: CGSize(width: page.width, height: page.height),
-                tool: editor.inkTool,
-                mode: canvasMode,
-                activeLayerID: session.activeLayerID ?? page.layers.first?.id ?? UUID(),
-                isEditable: canvasIsEditable,
-                isRulerActive: isRulerActive,
-                controller: controller,
-                drawsWithFinger: drawWithFinger,
-                undoOnTwoFingerDoubleTap: twoFingerDoubleTapUndo,
-                redoOnThreeFingerDoubleTap: threeFingerDoubleTapRedo,
-                pencilDoubleTapAction: pencilDoubleTapAction,
-                onFingerTap: { point in
-                    Task { await openPDFLink(at: point) }
-                },
+            pageCanvas(
+                page,
+                // While Zoom View is open the toolbar's undo belongs to its panel.
+                controller: isZoomViewOpen ? nil : controller,
                 onToolGestureEnded: { editor.didEndToolGesture() },
-                holdToDrawShapes: holdToDrawShapes,
-                onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
-                eraseHighlighterOnly: eraserHighlighterOnly,
                 onStrokesChanged: { session.strokesChanged($0) }
             )
             .id(page.id)
@@ -1013,7 +1081,22 @@ struct NotebookPane: View {
                     }
                 )
             }
+
+            if isZoomViewOpen, let band = zoomView.band(for: page) {
+                ZoomBandFrame(
+                    band: band,
+                    pageZoom: zoomController.settledZoom,
+                    onMove: { zoomView.move(to: $0) },
+                    onResize: { zoomView.resize(toWidth: $0) },
+                    onResizeEnded: {
+                        if let magnification = zoomView.band?.magnification {
+                            zoomViewMagnification = magnification
+                        }
+                    }
+                )
+            }
         }
+        .coordinateSpace(.named(ZoomBandFrame.coordinateSpace))
         .frame(width: page.width, height: page.height)
         .clipped()
         // The page slot behind this content draws the paper's shadow.

@@ -23,6 +23,9 @@ enum AppSettings {
         static let pencilDoubleTapAction = "noteapp.settings.pencilDoubleTapAction"
         static let eraserHighlighterOnly = "noteapp.settings.eraserHighlighterOnly"
         static let pageScrollMode = "noteapp.settings.pageScrollMode"
+        static let zoomViewAutoAdvance = "noteapp.settings.zoomViewAutoAdvance"
+        static let zoomViewMagnification = "noteapp.settings.zoomViewMagnification"
+        static let zoomViewPanelFraction = "noteapp.settings.zoomViewPanelFraction"
     }
 
     /// The catalog id of the plain blank template.

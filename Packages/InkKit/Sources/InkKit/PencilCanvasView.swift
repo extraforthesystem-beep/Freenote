@@ -24,6 +24,9 @@ public final class PencilCanvasController: ObservableObject {
 /// A `PKCanvasView` that can be hosted by SwiftUI without losing undo.
 public final class InkCanvasView: PKCanvasView {
     var pageSize: CGSize = .zero
+    /// When set, the canvas shows only this rectangle of the page (page
+    /// points), scaled to fill its width, instead of fitting the whole page.
+    var viewport: CGRect?
 
     /// PencilKit registers undo with the canvas's own undo manager, and a
     /// SwiftUI-hosted view has none on its responder chain, so supply one.
@@ -34,6 +37,10 @@ public final class InkCanvasView: PKCanvasView {
         guard pageSize.width > 0, pageSize.height > 0,
               bounds.width > 0, bounds.height > 0
         else { return }
+        if let viewport, viewport.width > 0 {
+            showViewport(viewport)
+            return
+        }
         let fit = min(bounds.width / pageSize.width, bounds.height / pageSize.height)
         // The paper is a SwiftUI image behind the canvas, so it cannot zoom with
         // the ink yet. Lock the zoom until the paper moves into the scroll view.
@@ -42,6 +49,23 @@ public final class InkCanvasView: PKCanvasView {
         maximumZoomScale = fit
         zoomScale = fit
         contentOffset = .zero
+    }
+
+    /// Zoom View: the page zoomed so `viewport` fills the width, scrolled to
+    /// its top-left corner. Scrolling is off, so only code moves it.
+    private func showViewport(_ viewport: CGRect) {
+        let scale = bounds.width / viewport.width
+        if minimumZoomScale != scale || maximumZoomScale != scale || zoomScale != scale {
+            minimumZoomScale = min(minimumZoomScale, scale)
+            maximumZoomScale = max(maximumZoomScale, scale)
+            zoomScale = scale
+            minimumZoomScale = scale
+            maximumZoomScale = scale
+        }
+        let size = CGSize(width: pageSize.width * scale, height: pageSize.height * scale)
+        if contentSize != size { contentSize = size }
+        let offset = CGPoint(x: viewport.minX * scale, y: viewport.minY * scale)
+        if contentOffset != offset { contentOffset = offset }
     }
 
     override public func layoutSubviews() {
@@ -109,6 +133,9 @@ public struct PencilCanvasView: UIViewRepresentable {
     public var isEditable: Bool
     /// PencilKit's on-canvas ruler. The page shows it while this is true.
     public var isRulerActive: Bool
+    /// Zoom View: show only this rectangle of the page, in page points,
+    /// magnified to the canvas width. nil fits the whole page.
+    public var viewport: CGRect?
     public var controller: PencilCanvasController?
     /// When on, a finger draws as well as the Pencil; when off, one finger
     /// scrolls and only the Pencil inks. The simulator always draws with any
@@ -143,6 +170,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         activeLayerID: UUID,
         isEditable: Bool = true,
         isRulerActive: Bool = false,
+        viewport: CGRect? = nil,
         controller: PencilCanvasController? = nil,
         drawsWithFinger: Bool = false,
         undoOnTwoFingerDoubleTap: Bool = true,
@@ -162,6 +190,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.activeLayerID = activeLayerID
         self.isEditable = isEditable
         self.isRulerActive = isRulerActive
+        self.viewport = viewport
         self.controller = controller
         self.drawsWithFinger = drawsWithFinger
         self.undoOnTwoFingerDoubleTap = undoOnTwoFingerDoubleTap
@@ -196,6 +225,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.alwaysBounceHorizontal = false
         canvas.contentSize = pageSize
         canvas.pageSize = pageSize
+        canvas.viewport = viewport
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
@@ -282,10 +312,13 @@ public struct PencilCanvasView: UIViewRepresentable {
         coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
         coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap
         coordinator.redoDoubleTap?.isEnabled = redoOnThreeFingerDoubleTap
-        canvas.contentSize = pageSize
+        if viewport == nil {
+            canvas.contentSize = pageSize
+        }
         if canvas.pageSize != pageSize {
             canvas.pageSize = pageSize
         }
+        canvas.viewport = viewport
 
         coordinator.apply(strokes, to: canvas)
         canvas.fitPageIfNeeded()
@@ -356,6 +389,16 @@ public struct PencilCanvasView: UIViewRepresentable {
                 var byID: [UUID: PKStroke] = [:]
                 for stroke in current { byID[stroke.id] = stroke }
                 drawing = PKDrawing(strokes: incomingIDs.compactMap { byID[$0] })
+            } else if incomingIDs.count > currentIDs.count,
+                      Array(incomingIDs.prefix(currentIDs.count)) == currentIDs,
+                      strokes.prefix(currentIDs.count).allSatisfy({ syncedRecords[$0.id] == RecordSignature($0) }) {
+                // Strokes added after the ones already here (written in the
+                // Zoom View panel, or by another canvas on the same page):
+                // decode only the new ones.
+                // The app's strokes are already in render order (the merge
+                // puts them there), so the new ones go on top as given.
+                let added = strokes.dropFirst(currentIDs.count).compactMap { try? StrokeCodec.stroke(from: $0) }
+                drawing = PKDrawing(strokes: current + added)
             } else {
                 drawing = StrokeCodec.drawing(from: strokes)
             }

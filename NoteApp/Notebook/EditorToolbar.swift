@@ -26,7 +26,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     @State private var showsFavoritePens = false
 
     private enum ToolPopover: Hashable {
-        case pen, highlighter, eraser, laser
+        case pen, highlighter, eraser, laser, zoomView
     }
 
     var body: some View {
@@ -68,6 +68,10 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
             shortcut(.highlighter, "h")
             shortcut(.eraser, "e")
             shortcut(.laser, "l")
+            Button("Zoom View") {
+                editor.isZoomViewShown.toggle()
+            }
+            .keyboardShortcut("z", modifiers: [])
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -193,6 +197,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
                 editor.tool = .lasso
             }
             laserButton
+            zoomViewButton
             ToolbarIconButton(
                 "Select Elements",
                 systemImage: "cursorarrow.rays",
@@ -334,6 +339,29 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         .popover(isPresented: popoverBinding(.laser)) {
             LaserSettingsPopover(editor: editor)
                 .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    /// Opens Zoom View; tapped again while open, shows its options.
+    private var zoomViewButton: some View {
+        ToolbarIconButton(
+            "Zoom View",
+            systemImage: "plus.magnifyingglass",
+            isSelected: editor.isZoomViewShown,
+            help: "Zoom View (Z): write in a magnified band; tap again for options"
+        ) {
+            if editor.isZoomViewShown {
+                popover = .zoomView
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = true }
+            }
+        }
+        .popover(isPresented: popoverBinding(.zoomView)) {
+            ZoomViewSettingsPopover {
+                popover = nil
+                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
+            }
+            .presentationCompactAdaptation(.popover)
         }
     }
 

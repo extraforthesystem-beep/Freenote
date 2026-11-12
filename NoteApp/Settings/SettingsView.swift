@@ -19,6 +19,8 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
     @AppStorage(AppSettings.Key.pageScrollMode) private var pageScrollMode: PageScrollMode = .vertical
+    @AppStorage(AppSettings.Key.zoomViewAutoAdvance) private var zoomViewAutoAdvance = true
+    @AppStorage(AppSettings.Key.zoomViewMagnification) private var zoomViewMagnification = ZoomBand.defaultMagnification
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -71,10 +73,24 @@ struct SettingsView: View {
             Toggle("Hold to Draw Shapes", isOn: $holdToDrawShapes)
             Toggle("Two-Finger Double-Tap to Undo", isOn: $twoFingerDoubleTapUndo)
             Toggle("Three-Finger Double-Tap to Redo", isOn: $threeFingerDoubleTapRedo)
+            Toggle("Zoom View Auto-Advance", isOn: $zoomViewAutoAdvance)
+            LabeledContent("Zoom View Magnification") {
+                HStack {
+                    Slider(
+                        value: $zoomViewMagnification,
+                        in: ZoomBand.minimumMagnification...ZoomBand.maximumMagnification,
+                        step: 0.1
+                    )
+                    .frame(maxWidth: 200)
+                    Text("\(zoomViewMagnification, format: .number.precision(.fractionLength(1)))×")
+                        .monospacedDigit()
+                        .frame(minWidth: 36, alignment: .trailing)
+                }
+            }
         } header: {
             Text("Writing")
         } footer: {
-            Text("With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, rectangle, triangle or ellipse.")
+            Text("With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, rectangle, triangle or ellipse. Zoom View Auto-Advance: when a stroke ends in the right part of the Zoom View panel, the band moves on, and at the right margin it starts the next line.")
         }
     }
 
