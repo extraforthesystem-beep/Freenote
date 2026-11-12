@@ -1561,5 +1561,9 @@ enum PageImageCache {
     static func remove(_ key: String) {
         cache.removeObject(forKey: key as NSString)
     }
+
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
 }
 #endif

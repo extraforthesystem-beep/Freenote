@@ -229,6 +229,10 @@ enum ThumbnailCache {
         cache.removeObject(forKey: key(notebookID, pageID, usesDarkPaper: true))
     }
 
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
     private static func key(_ notebookID: UUID, _ pageID: UUID, usesDarkPaper: Bool) -> NSString {
         "\(notebookID.uuidString)/\(pageID.uuidString)\(usesDarkPaper ? "/dark" : "")" as NSString
     }

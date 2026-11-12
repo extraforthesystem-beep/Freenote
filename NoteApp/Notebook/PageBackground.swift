@@ -316,6 +316,10 @@ enum PageBackgroundCache {
         return image
     }
 
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
     static func cached(key: String, scale: CGFloat) -> InkImage? {
         cache.object(forKey: "\(key)@\(scale)" as NSString)
     }

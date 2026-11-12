@@ -86,6 +86,11 @@ enum LibraryCovers {
         return image
     }
 
+    /// Empties the in-memory covers; the disk cache keeps them.
+    static func removeAllFromMemory() {
+        memory.removeAllObjects()
+    }
+
     /// Forgets every render of a notebook, for when it leaves the library.
     static func removeCachedCovers(for notebookID: UUID, store: LibraryStore) {
         let directory = coversDirectory(store: store)

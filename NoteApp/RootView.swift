@@ -20,7 +20,12 @@ struct RootView: View {
             }
         }
         .preferredColorScheme(theme.colorScheme)
-        .task { await model.start() }
+        .task {
+            #if os(iOS)
+            MemoryPressure.purgeCachesOnMemoryWarning()
+            #endif
+            await model.start()
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
             // Leaving the foreground: the app may be suspended or killed with
