@@ -23,7 +23,10 @@ import UIKit
 // whichever canvas the Pencil touched last (`PencilCanvasController`).
 //
 // Behind the panel's canvas the page's paper and elements are the same
-// `PaperBackground` the page uses, scaled and offset to the band.
+// `PaperBackground` the page uses, scaled and offset to the band. Tape is
+// left out of that paper, as on the page, and drawn above the panel's ink by
+// the page's own `TapeOverlay`, scaled and offset the same way, so it hides,
+// reveals (tap) and lines up exactly as on the page.
 //
 // The band's geometry (size from the magnification and the panel's aspect,
 // advance, wrap, clamp) is `ZoomBand` in InkKit, which is unit tested. Only
@@ -40,6 +43,13 @@ import UIKit
 // Auto-advance: when a new ink stroke from the panel ends in the band's right
 // fifth, the band steps on a moment after the Pencil lifts, unless the Pencil
 // touches down again first (dotting an i, crossing a t).
+//
+// Moving on: auto-advance and the ◀ ▶ ↵ buttons step with `ZoomBand.step()`
+// and `wrap()`. A wrap past the bottom margin goes to the next page through
+// `session.goToPage`, where the band starts at the top-left margins; the last
+// page stops at its bottom and no page is added. After each move the page
+// area scrolls the band into view (`PageZoomController.reveal`), unless the
+// user is scrolling or zooming it. Dragging the frame itself does not scroll.
 
 /// Where the Zoom View band is, and the panel's measured writing area.
 @MainActor
@@ -70,11 +80,15 @@ final class ZoomViewState {
         )
     }
 
-    func update(page: Page, magnification: Double, _ change: (inout ZoomBand) -> Void) {
-        guard var band = band(for: page, magnification: magnification) else { return }
-        change(&band)
+    /// Changes the band on `page`; returns what `change` returned, or nil
+    /// before the panel has a size.
+    @discardableResult
+    func update<Result>(page: Page, magnification: Double, _ change: (inout ZoomBand) -> Result) -> Result? {
+        guard var band = band(for: page, magnification: magnification) else { return nil }
+        let result = change(&band)
         origin = band.rect.origin
         pageID = page.id
+        return result
     }
 
     /// Advances once the Pencil has stayed up for a moment.
@@ -101,6 +115,8 @@ final class ZoomViewState {
 struct ZoomWindowPanel<Canvas: View>: View {
     let page: Page
     let band: ZoomBand?
+    /// The page's tape, in page points; drawn magnified over the band.
+    let tape: TapeOverlay
     let assetsDirectory: URL?
     let height: CGFloat
     let showsAdvanceArea: Bool
@@ -189,8 +205,16 @@ struct ZoomWindowPanel<Canvas: View>: View {
                         advanceArea(width: proxy.size.width * ZoomBand.advanceAreaFraction)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                     }
+                    let scale = band.scale(panelWidth: proxy.size.width)
                     canvas(band)
                         .frame(width: proxy.size.width, height: proxy.size.height)
+                        // Above the ink, as on the page. An overlay, so the
+                        // page-sized tape layer cannot change the layout.
+                        .overlay(alignment: .topLeading) {
+                            tape
+                                .scaleEffect(scale, anchor: .topLeading)
+                                .offset(x: -band.rect.minX * scale, y: -band.rect.minY * scale)
+                        }
                 }
             }
             // The paper is far larger than the panel; as a background it
@@ -208,6 +232,8 @@ struct ZoomWindowPanel<Canvas: View>: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .clipped()
+            // Tape outside the band is clipped away; keep its taps in too.
+            .contentShape(Rectangle())
         }
         .onGeometryChange(for: CGSize.self, of: { $0.size }, action: onWritingSizeChange)
     }
@@ -301,6 +327,7 @@ final class ZoomFrameView: UIView {
         press.allowableMovement = .greatestFiniteMagnitude
         addGestureRecognizer(press)
         isAccessibilityElement = false
+        setUpAccessibility()
     }
 
     @available(*, unavailable)
@@ -367,6 +394,70 @@ final class ZoomFrameView: UIView {
         handleLayer.lineWidth = 2 / scale
 
         CATransaction.commit()
+        updateAccessibility(scale: scale)
+    }
+
+    // MARK: VoiceOver
+
+    /// The tab and the corner as VoiceOver elements; the frame itself lets
+    /// everything through to the page, so it is not one.
+    private let moveElement = ZoomFrameAccessibilityElement()
+    private let resizeElement = ZoomFrameAccessibilityElement()
+
+    /// How far one VoiceOver step moves or resizes, as a share of the band.
+    private static let accessibilityStep: CGFloat = 0.25
+
+    private func setUpAccessibility() {
+        moveElement.accessibilityContainer = self
+        moveElement.accessibilityLabel = "Zoom View Frame"
+        moveElement.accessibilityHint = "The part of the page shown magnified. Swipe up or down for actions to move it."
+        moveElement.accessibilityCustomActions = [
+            ("Move Left", CGVector(dx: -1, dy: 0)),
+            ("Move Right", CGVector(dx: 1, dy: 0)),
+            ("Move Up", CGVector(dx: 0, dy: -1)),
+            ("Move Down", CGVector(dx: 0, dy: 1)),
+        ].map { name, direction in
+            UIAccessibilityCustomAction(name: name) { [weak self] _ in
+                self?.accessibilityMove(direction) ?? false
+            }
+        }
+
+        resizeElement.accessibilityContainer = self
+        resizeElement.accessibilityLabel = "Zoom View Frame Size"
+        resizeElement.accessibilityHint = "Swipe up to make the frame bigger and the magnification lower, down for smaller."
+        resizeElement.accessibilityTraits = [.adjustable]
+        resizeElement.onIncrement = { [weak self] in self?.accessibilityResize(by: 1) }
+        resizeElement.onDecrement = { [weak self] in self?.accessibilityResize(by: -1) }
+    }
+
+    override var accessibilityElements: [Any]? {
+        get { band.width > 0 && !isHidden ? [moveElement, resizeElement] : [] }
+        set {}
+    }
+
+    /// Keeps the elements on the tab, the corner and the magnification.
+    private func updateAccessibility(scale: CGFloat) {
+        moveElement.accessibilityFrameInContainerSpace = band
+        resizeElement.accessibilityFrameInContainerSpace = handleRect(scale: scale)
+        // The view is page sized, so its width is the page width.
+        let magnification = ZoomBand.magnification(forWidth: band.width, pageWidth: bounds.width)
+        resizeElement.accessibilityValue = String(format: "Magnification %.1f", magnification)
+    }
+
+    private func accessibilityMove(_ direction: CGVector) -> Bool {
+        guard band.width > 0 else { return false }
+        let origin = CGPoint(
+            x: band.minX + direction.dx * band.width * Self.accessibilityStep,
+            y: band.minY + direction.dy * band.height * Self.accessibilityStep
+        )
+        onMove?(origin, true)
+        UIAccessibility.post(notification: .layoutChanged, argument: moveElement)
+        return true
+    }
+
+    private func accessibilityResize(by direction: CGFloat) {
+        guard band.width > 0 else { return }
+        onResize?(band.width * (1 + direction * Self.accessibilityStep / 2), true)
     }
 
     @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
@@ -399,6 +490,25 @@ final class ZoomFrameView: UIView {
         default:
             break
         }
+    }
+}
+
+/// A VoiceOver element of the frame whose adjustable action is a closure.
+final class ZoomFrameAccessibilityElement: UIAccessibilityElement {
+    var onIncrement: (() -> Void)?
+    var onDecrement: (() -> Void)?
+
+    /// The container is set by the owning view.
+    override init() {
+        super.init(accessibilityContainer: NSObject())
+    }
+
+    override func accessibilityIncrement() {
+        onIncrement?()
+    }
+
+    override func accessibilityDecrement() {
+        onDecrement?()
     }
 }
 

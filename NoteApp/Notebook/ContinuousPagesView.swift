@@ -54,10 +54,19 @@ import UIKit.UIGestureRecognizerSubclass
 // down when the canvas arrives keeps being captured until it lifts. Strokes
 // written before the canvas arrives queue up in order. Only the pen and the
 // highlighter are replayed; an eraser, the lasso or link taps just activate
-// the page. Fingers are captured only when Draw with Finger is on (always in
-// the simulator, like the canvas). A stroke whose page never becomes active
+// the page. Like a stroke on the canvas, a caught stroke reports its lift
+// (`InkCapture.onStrokeEnded`, the tool-gesture-ended hook). Fingers are
+// captured only when Draw with Finger is on (always in the simulator, like
+// the canvas). A stroke whose page never becomes active
 // (another page was touched straight after) or that a locked layer refuses is
 // dropped after a few seconds, with its preview.
+//
+// Revealing a rect: `PageZoomController.reveal(_:onPage:)` asks the container
+// to scroll a rect of a page into view (Zoom View keeps its band on screen
+// this way). The request waits until that page is active and any scroll this
+// view started (to the page) has finished, then scrolls the least that shows
+// the rect with a margin, animated. A user scroll, drag or zoom in progress
+// drops it, so the view never fights a finger.
 //
 // Alternatives weighed: activating pages earlier while scrolling helps only
 // sometimes and still loses the stroke when it doesn't; a live canvas on every
@@ -75,6 +84,10 @@ struct InkCapture {
     let drawsWithFinger: Bool
     /// Drives the live canvas that receives the replayed stroke.
     let canvas: PencilCanvasController
+    /// A caught stroke was lifted: what the live canvas reports as its
+    /// tool gesture ending (Eraser Auto-Deselect), so a caught stroke
+    /// behaves like one drawn on the canvas.
+    var onStrokeEnded: @MainActor () -> Void = {}
 }
 
 /// Where the inactive pages' images come from.
@@ -181,7 +194,13 @@ class PagesView: UIView {
     }
 
     var hostView: UIView?
-    weak var controller: PageZoomController?
+    weak var controller: PageZoomController? {
+        didSet {
+            controller?.revealHandler = { [weak self] rect, pageID in
+                self?.reveal(rect, onPage: pageID)
+            }
+        }
+    }
     var fitMargin: CGFloat = 20
     var panTouches = 2 {
         didSet { if oldValue != panTouches { panTouchesDidChange() } }
@@ -225,6 +244,11 @@ class PagesView: UIView {
     private var canvasAtTouchDown: [UUID: WeakCanvas] = [:]
     private var capturedStrokes: [CapturedStroke] = []
     private var strokeCommitTask: Task<Void, Never>?
+
+    /// A rect waiting to be revealed (see `reveal(_:onPage:)`).
+    private var pendingReveal: (rect: CGRect, pageID: UUID)?
+    /// Until when a scroll this view started is still animating.
+    private var programmaticScrollEnd: ContinuousClock.Instant?
 
     private var renderQueue: [UUID] = []
     private var renderOverrides: [UUID: Page] = [:]
@@ -318,6 +342,82 @@ class PagesView: UIView {
         }
         controller?.scrollView = zoomingScrollView
         scheduleRenders()
+        performPendingReveal()
+    }
+
+    // MARK: Revealing a rect
+
+    /// On-screen points kept around a revealed rect.
+    private static let revealMargin: CGFloat = 24
+
+    /// Scrolls so `rect` (page points) on `pageID` is in view. Waits for the
+    /// page to become active and for this view's own scroll to finish; a
+    /// user scroll or zoom in progress wins and the request is dropped.
+    func reveal(_ rect: CGRect, onPage pageID: UUID) {
+        pendingReveal = (rect, pageID)
+        performPendingReveal()
+    }
+
+    /// Notes that this view started an animated scroll, so a reveal waits
+    /// for it instead of measuring from where the scroll started.
+    func didStartProgrammaticScroll() {
+        programmaticScrollEnd = .now + .milliseconds(600)
+    }
+
+    func programmaticScrollDidEnd() {
+        programmaticScrollEnd = nil
+        performPendingReveal()
+    }
+
+    /// The user took over: an older reveal must not pull the view back.
+    func cancelPendingReveal() {
+        pendingReveal = nil
+        programmaticScrollEnd = nil
+    }
+
+    func performPendingReveal() {
+        guard let request = pendingReveal, request.pageID == activePageID else { return }
+        if let end = programmaticScrollEnd, ContinuousClock.now < end { return }
+        programmaticScrollEnd = nil
+        pendingReveal = nil
+        guard let slot = slots[request.pageID],
+              let scroll = revealScrollView(for: request.pageID),
+              scroll.window != nil,
+              !isUserScrolling
+        else { return }
+        let target = Self.revealedOffset(
+            for: slot.convert(request.rect, to: scroll),
+            in: scroll,
+            margin: Self.revealMargin
+        )
+        guard abs(target.x - scroll.contentOffset.x) > 0.5 || abs(target.y - scroll.contentOffset.y) > 0.5 else {
+            return
+        }
+        didStartProgrammaticScroll()
+        scroll.setContentOffset(target, animated: true)
+    }
+
+    /// The content offset that brings `rect` (in `scroll`'s coordinates)
+    /// into its bounds with `margin`, moving as little as possible.
+    static func revealedOffset(for rect: CGRect, in scroll: UIScrollView, margin: CGFloat) -> CGPoint {
+        let visible = scroll.bounds
+        func axis(_ minR: CGFloat, _ maxR: CGFloat, _ minV: CGFloat, _ maxV: CGFloat, _ length: CGFloat) -> CGFloat {
+            let m = min(margin, max((length - (maxR - minR)) / 2, 0))
+            if maxR - minR + m * 2 > length || minR - m < minV { return minR - m - minV }
+            if maxR + m > maxV { return maxR + m - maxV }
+            return 0
+        }
+        let dx = axis(rect.minX, rect.maxX, visible.minX, visible.maxX, visible.width)
+        let dy = axis(rect.minY, rect.maxY, visible.minY, visible.maxY, visible.height)
+        let inset = scroll.adjustedContentInset
+        let minX = -inset.left
+        let minY = -inset.top
+        let maxX = max(scroll.contentSize.width + inset.right - visible.width, minX)
+        let maxY = max(scroll.contentSize.height + inset.bottom - visible.height, minY)
+        return CGPoint(
+            x: min(max(scroll.contentOffset.x + dx, minX), maxX),
+            y: min(max(scroll.contentOffset.y + dy, minY), maxY)
+        )
     }
 
     // MARK: Subclass hooks
@@ -334,6 +434,10 @@ class PagesView: UIView {
     /// Pages to keep rendered, most important first.
     func renderPriority() -> [UUID] { [] }
     func desiredRenderScale() -> CGFloat { Self.quantized(displayScale) }
+    /// The scroll view that moves `pageID`'s slot, when it is on screen.
+    func revealScrollView(for pageID: UUID) -> UIScrollView? { nil }
+    /// A finger is scrolling or zooming the pages, or they are still moving.
+    var isUserScrolling: Bool { false }
 
     // MARK: Slots
 
@@ -405,6 +509,9 @@ class PagesView: UIView {
     }
 
     private func strokeEnded(on pageID: UUID, samples: [CapturedInkSample], tool: InkTool) {
+        // At the lift, like a stroke on the canvas: the replay may come
+        // later, after the tool has changed for the next stroke.
+        inkCapture?.onStrokeEnded()
         let stale = canvasAtTouchDown.removeValue(forKey: pageID)?.canvas
         capturedStrokes.append(CapturedStroke(
             pageID: pageID,
@@ -636,6 +743,7 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
         let maxY = max(scroll.contentSize.height + scroll.contentInset.bottom - scroll.bounds.height, minY)
         let target = CGPoint(x: scroll.contentOffset.x, y: min(max(y, minY), maxY))
         if abs(target.y - scroll.contentOffset.y) > 0.5 {
+            if animated { didStartProgrammaticScroll() }
             scroll.setContentOffset(target, animated: animated)
         }
     }
@@ -784,6 +892,14 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
         Self.quantized(scroll.zoomScale * displayScale)
     }
 
+    override func revealScrollView(for pageID: UUID) -> UIScrollView? {
+        didFit ? scroll : nil
+    }
+
+    override var isUserScrolling: Bool {
+        scroll.isTracking || scroll.isDragging || scroll.isDecelerating || scroll.isZooming || scroll.isZoomBouncing
+    }
+
     // MARK: Settling
 
     /// A user scroll or zoom came to rest: the page in the middle becomes the
@@ -823,9 +939,14 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
         userScrollDidSettle()
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        cancelPendingReveal()
+    }
+
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         // A programmatic scroll (to the active page) does not pick a page.
         scheduleRenders()
+        programmaticScrollDidEnd()
     }
 }
 
@@ -1007,6 +1128,7 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
         let target = CGPoint(x: CGFloat(index) * stride, y: 0)
         guard abs(pager.contentOffset.x - target.x) > 0.5 else { return }
         let isNeighbour = abs((currentIndex() ?? index) - index) == 1
+        if animated && isNeighbour { didStartProgrammaticScroll() }
         pager.setContentOffset(target, animated: animated && isNeighbour)
         refreshSlots()
     }
@@ -1028,6 +1150,19 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
             (bounds.height - margin * 2) / max(size.height, 1)
         )
         return Self.quantized(fit * displayScale)
+    }
+
+    override func revealScrollView(for pageID: UUID) -> UIScrollView? {
+        guard let index = pageOrder.firstIndex(of: pageID), currentIndex() == index,
+              abs(pager.contentOffset.x - CGFloat(index) * stride) < 1
+        else { return nil }
+        return cells[pageID]
+    }
+
+    override var isUserScrolling: Bool {
+        if pager.isTracking || pager.isDragging || pager.isDecelerating { return true }
+        guard let cell = activePageID.flatMap({ cells[$0] }) else { return false }
+        return cell.isTracking || cell.isDragging || cell.isDecelerating || cell.isZooming || cell.isZoomBouncing
     }
 
     private func pagerDidSettle() {
@@ -1065,8 +1200,13 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
         if scrollView === pager { pagerDidSettle() }
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        cancelPendingReveal()
+    }
+
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         if scrollView === pager { scheduleRenders() }
+        programmaticScrollDidEnd()
     }
 }
 
