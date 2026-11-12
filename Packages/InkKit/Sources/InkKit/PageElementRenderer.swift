@@ -160,6 +160,7 @@ enum PageElementRenderer {
             context.saveGState()
             context.concatenate(transform)
             context.drawPDFPage(pageRef)
+            drawMarkupAnnotations(of: page, in: context)
             context.restoreGState()
             return
         }
@@ -169,6 +170,32 @@ enum PageElementRenderer {
         guard let thumbnail = PageRenderer.cgImage(of: page.thumbnail(of: box.size, for: .mediaBox))
         else { return }
         context.draw(thumbnail, in: box)
+    }
+
+    /// The annotation types another app leaves on a PDF that a reader expects
+    /// to see: highlights, text marks, notes, shapes, stamps and any ink that
+    /// was not turned into strokes on import. Links, form widgets and popups
+    /// are interactive and are left out.
+    private static let visibleAnnotationTypes: Set<String> = [
+        PDFAnnotationSubtype.highlight, .underline, .strikeOut,
+        .freeText, .text, .square, .circle, .line, .ink, .stamp,
+    ].map(\.rawValue).reduce(into: Set<String>()) { result, raw in
+        // `rawValue` carries a leading slash ("/Highlight"); `type` does not.
+        result.insert(raw.hasPrefix("/") ? String(raw.dropFirst()) : raw)
+    }
+
+    /// Draws the page's visible markup in page space: `drawPDFPage` draws
+    /// page content only, so highlights made in another app would be lost on
+    /// screen and in export without this.
+    private static func drawMarkupAnnotations(of page: PDFPage, in context: CGContext) {
+        for annotation in page.annotations {
+            guard let type = annotation.type, visibleAnnotationTypes.contains(type),
+                  annotation.shouldDisplay
+            else { continue }
+            context.saveGState()
+            annotation.draw(with: .mediaBox, in: context)
+            context.restoreGState()
+        }
     }
 
     // MARK: - Images

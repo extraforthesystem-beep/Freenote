@@ -6,6 +6,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import NoteCore
+import PDFKit
 import PencilKit
 import Testing
 @testable import InkKit
@@ -174,6 +175,41 @@ struct PageRendererElementsTests {
                 #expect(meanColumn > bitmap.width / 2, "page 1 draws page 1")
             }
         }
+    }
+
+    @Test("A PDF page keeps the highlights another app made on it")
+    func drawsPDFHighlights() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let assets = try assetsDirectory(in: directory)
+        let url = assets.appendingPathComponent("marked.pdf")
+        try writeTwoPagePDF(to: url)
+
+        // A yellow highlight across the empty lower part of page 0, and a link
+        // over the same spot that must not draw anything.
+        let document = try #require(PDFDocument(url: url))
+        let page = try #require(document.page(at: 0))
+        let bounds = CGRect(x: 30, y: 30, width: 140, height: 40)
+        let highlight = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
+        highlight.color = PlatformColorForTests.yellow
+        page.addAnnotation(highlight)
+        page.addAnnotation(PDFAnnotation(bounds: bounds, forType: .link, withProperties: nil))
+        #expect(document.write(to: url))
+
+        let bitmap = try render(
+            size: CGSize(width: 240, height: 320),
+            elements: [element(
+                .pdfPage(assetName: "marked.pdf", pageIndex: 0),
+                frame: ElementFrame(x: 20, y: 20, width: 200, height: 280)
+            )],
+            assets: assets
+        )
+        // PDF y 30...70 is page rows 230...270 (the element starts at 20 and
+        // the PDF is 280 tall, y growing up).
+        let marked = bitmap.pixel(120, 250)
+        #expect(marked.r > 180 && marked.g > 180 && marked.b < 140, "the highlight shows")
+        let clear = bitmap.pixel(120, 200)
+        #expect(clear.b > 200, "outside the highlight stays paper")
     }
 
     @Test("A PDF element with a bad asset or page index is skipped")
@@ -583,3 +619,11 @@ private struct Pixel {
     var isInk: Bool { isDark }
     var isDark: Bool { r < 100 && g < 100 && b < 100 }
 }
+
+#if canImport(UIKit)
+import UIKit
+private enum PlatformColorForTests { static let yellow = UIColor.systemYellow }
+#else
+import AppKit
+private enum PlatformColorForTests { static let yellow = NSColor.systemYellow }
+#endif
