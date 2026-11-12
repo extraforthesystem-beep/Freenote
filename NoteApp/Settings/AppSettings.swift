@@ -17,6 +17,11 @@ enum AppSettings {
         static let newNotebookTemplateID = "noteapp.settings.newNotebookTemplateID"
         static let handwritingRecognitionEnabled = "noteapp.settings.handwritingRecognitionEnabled"
         static let holdToDrawShapes = "noteapp.settings.holdToDrawShapes"
+        static let drawWithFinger = "noteapp.settings.drawWithFinger"
+        static let twoFingerDoubleTapUndo = "noteapp.settings.twoFingerDoubleTapUndo"
+        static let threeFingerDoubleTapRedo = "noteapp.settings.threeFingerDoubleTapRedo"
+        static let pencilDoubleTapAction = "noteapp.settings.pencilDoubleTapAction"
+        static let eraserHighlighterOnly = "noteapp.settings.eraserHighlighterOnly"
     }
 
     /// The catalog id of the plain blank template.
@@ -56,6 +61,32 @@ enum AppSettings {
     /// The first page's size in points, from the paper size and orientation.
     static var newNotebookPageSize: (width: Double, height: Double) {
         newNotebookPaperSize.size(newNotebookOrientation)
+    }
+
+    // MARK: - Writing input
+
+    /// When on, a finger draws as well as the Pencil; when off, one finger
+    /// scrolls and only the Pencil inks.
+    static var drawWithFinger: Bool {
+        bool(Key.drawWithFinger, default: false)
+    }
+
+    static var twoFingerDoubleTapUndo: Bool {
+        bool(Key.twoFingerDoubleTapUndo, default: true)
+    }
+
+    static var threeFingerDoubleTapRedo: Bool {
+        bool(Key.threeFingerDoubleTapRedo, default: true)
+    }
+
+    static var pencilDoubleTapAction: PencilDoubleTapAction {
+        PencilDoubleTapAction(rawValue: string(Key.pencilDoubleTapAction) ?? "") ?? .system
+    }
+
+    /// Only stroke erasing uses this: highlighter strokes disappear, pen ink
+    /// stays where it is.
+    static var eraserHighlighterOnly: Bool {
+        bool(Key.eraserHighlighterOnly, default: false)
     }
 
     // MARK: - Handwriting recognition

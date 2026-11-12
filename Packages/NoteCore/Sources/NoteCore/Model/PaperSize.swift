@@ -3,6 +3,9 @@ import Foundation
 /// A named paper size. Sizes are in page points (72 per inch), portrait.
 public enum PaperSize: String, CaseIterable, Codable, Sendable, Identifiable {
     case a3, a4, a5, a6, a7, letter, tabloid
+    /// A 3:4 page that fills an iPad screen without letterboxing. Codable
+    /// stores the raw value, so pages saved before it still decode.
+    case screen
 
     public var id: String { rawValue }
 
@@ -15,6 +18,7 @@ public enum PaperSize: String, CaseIterable, Codable, Sendable, Identifiable {
         case .a7: "A7"
         case .letter: "Letter"
         case .tabloid: "Tabloid"
+        case .screen: "Screen (Optimised)"
         }
     }
 
@@ -28,6 +32,8 @@ public enum PaperSize: String, CaseIterable, Codable, Sendable, Identifiable {
         case .a7: (210, 298)
         case .letter: (612, 792)
         case .tabloid: (792, 1224)
+        // 3:4, the shape of an iPad in portrait.
+        case .screen: (768, 1024)
         }
     }
 

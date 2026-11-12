@@ -102,6 +102,9 @@ final class EditorToolState {
     private(set) var recentColors: ColorRecents
     /// Saved pens: style, colour and width. Owns its own persistence.
     let favoritePens: FavoritePens
+    /// Bumped when the Apple Pencil asks for the colour palette. The toolbar
+    /// opens its pen popover and nothing else reads it.
+    private(set) var paletteRequestID = 0
     /// The ink tool colour and width changes go to when no ink tool is active.
     @ObservationIgnored private var lastInkTool: EditorTool = .pen
     @ObservationIgnored private var saveTask: Task<Void, Never>?
@@ -252,6 +255,28 @@ final class EditorToolState {
               UserDefaults.standard.bool(forKey: Self.eraserAutoDeselectKey)
         else { return }
         tool = previousTool
+    }
+
+    /// A double-tap on the Apple Pencil's side. The canvas resolves `.system`
+    /// to the user's Apple Pencil preference before calling this.
+    func handlePencilDoubleTap(_ action: PencilDoubleTapAction) {
+        guard !isReadOnly else { return }
+        switch action {
+        case .off, .system:
+            break
+        case .eraser:
+            // A second double-tap goes back to the tool used before erasing.
+            if tool == .eraser {
+                tool = previousTool == .eraser ? .pen : previousTool
+            } else {
+                tool = .eraser
+            }
+        case .previousTool:
+            guard previousTool != tool else { return }
+            tool = previousTool
+        case .colorPalette:
+            paletteRequestID &+= 1
+        }
     }
 
     /// Changes the colour of the active ink tool. Picking a colour while
