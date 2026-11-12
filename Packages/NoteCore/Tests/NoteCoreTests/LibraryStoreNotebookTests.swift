@@ -65,6 +65,35 @@ struct LibraryStoreNotebookTests {
         #expect(try await store.loadManifest(notebook.id).coverName == nil)
     }
 
+    @Test func pageScrollModeIsOptionalAndPersists() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LibraryStore(root: root)
+        try await store.open()
+
+        let notebook = try await store.createNotebook(title: "Scrolling")
+        #expect(notebook.pageScrollMode == nil)
+
+        try await store.setPageScrollMode(.horizontal, for: notebook.id)
+        let saved = try await store.loadManifest(notebook.id)
+        #expect(saved.pageScrollMode == .horizontal)
+        #expect(saved.updatedAt == notebook.updatedAt)
+
+        try await store.setPageScrollMode(nil, for: notebook.id)
+        #expect(try await store.loadManifest(notebook.id).pageScrollMode == nil)
+
+        // A manifest from an older build has no field; a newer build's unknown
+        // value falls back to the default instead of failing the decode.
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as! [String: Any]
+        json.removeValue(forKey: "pageScrollMode")
+        let decoder = JSONDecoder()
+        let old = try decoder.decode(NotebookManifest.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(old.pageScrollMode == nil)
+        json["pageScrollMode"] = "diagonal"
+        let future = try decoder.decode(NotebookManifest.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(future.pageScrollMode == .vertical)
+    }
+
     @Test func deletingAndRestoringANotebookKeepsEveryByte() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

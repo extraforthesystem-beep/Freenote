@@ -18,6 +18,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
+    @AppStorage(AppSettings.Key.pageScrollMode) private var pageScrollMode: PageScrollMode = .vertical
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -52,10 +53,14 @@ struct SettingsView: View {
         Section {
             Toggle("Show Page Number", isOn: $showPageNumber)
             Toggle("Open Documents as New Tabs", isOn: $openDocumentsAsNewTabs)
+            Picker("Page Scrolling", selection: $pageScrollMode) {
+                Text("Vertical (Seamless)").tag(PageScrollMode.vertical)
+                Text("Horizontal (Single Page)").tag(PageScrollMode.horizontal)
+            }
         } header: {
             Text("Document Editing")
         } footer: {
-            Text("When off, opening a notebook replaces the current tab.")
+            Text("When off, opening a notebook replaces the current tab. A notebook can choose its own scrolling from its More menu.")
         }
     }
 

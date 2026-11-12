@@ -41,6 +41,10 @@ final class NotebookSession: Identifiable {
     var errorMessage: String?
     /// Bumped after an edit so the current page's thumbnail re-renders.
     private(set) var revision = 0
+    /// Changes whenever pages other than the one on screen are rewritten in
+    /// bulk (a template or size applied to every page), so cached renders of
+    /// those pages are dropped. Scrolling views key their page images on it.
+    private(set) var otherPagesToken = UUID()
 
     /// The debounce timer for ink.
     @ObservationIgnored private var saveTask: Task<Void, Never>?
@@ -90,6 +94,19 @@ final class NotebookSession: Identifiable {
               let index = manifest.pageOrder.firstIndex(of: pageID)
         else { return 0 }
         return min(index, manifest.pageOrder.count - 1)
+    }
+
+    /// The notebook's own scroll direction, or nil to follow the app default.
+    var pageScrollMode: PageScrollMode? { manifest.pageScrollMode }
+
+    func setPageScrollMode(_ mode: PageScrollMode?) async {
+        guard mode != manifest.pageScrollMode else { return }
+        do {
+            try await store.setPageScrollMode(mode, for: manifest.id)
+            await reloadManifest()
+        } catch {
+            errorMessage = "The scrolling direction could not be saved."
+        }
     }
 
     private func rememberVisitedPage() {
@@ -362,6 +379,7 @@ final class NotebookSession: Identifiable {
                     ? "The background could not be changed on one page."
                     : "The background could not be changed on \(failed) pages."
             }
+            otherPagesToken = UUID()
         }
 
         // The page on screen goes through the ordered save, so ink drawn
@@ -430,6 +448,7 @@ final class NotebookSession: Identifiable {
                     ? "The page size could not be changed on one page."
                     : "The page size could not be changed on \(failed) pages."
             }
+            otherPagesToken = UUID()
         }
 
         // The page on screen goes through the ordered save, so ink drawn

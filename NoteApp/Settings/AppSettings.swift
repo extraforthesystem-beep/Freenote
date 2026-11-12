@@ -22,6 +22,7 @@ enum AppSettings {
         static let threeFingerDoubleTapRedo = "noteapp.settings.threeFingerDoubleTapRedo"
         static let pencilDoubleTapAction = "noteapp.settings.pencilDoubleTapAction"
         static let eraserHighlighterOnly = "noteapp.settings.eraserHighlighterOnly"
+        static let pageScrollMode = "noteapp.settings.pageScrollMode"
     }
 
     /// The catalog id of the plain blank template.
@@ -35,6 +36,11 @@ enum AppSettings {
 
     static var openDocumentsAsNewTabs: Bool {
         bool(Key.openDocumentsAsNewTabs, default: true)
+    }
+
+    /// How notebooks scroll unless a notebook chose its own direction.
+    static var pageScrollMode: PageScrollMode {
+        PageScrollMode(rawValue: string(Key.pageScrollMode) ?? "") ?? .vertical
     }
 
     // MARK: - New notebooks

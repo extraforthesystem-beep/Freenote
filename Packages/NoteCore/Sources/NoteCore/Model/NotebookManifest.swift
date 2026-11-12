@@ -15,6 +15,9 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
     /// on files written by builds that did not record it, so the field is
     /// optional and decoding an old manifest still succeeds.
     public var deletedAt: Date?
+    /// The notebook's own scroll direction. Absent (nil) means "use the app's
+    /// default", and on files from builds that did not record it.
+    public var pageScrollMode: PageScrollMode?
 
     public init(
         schemaVersion: Int = SchemaVersion.current,
@@ -24,7 +27,8 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
         pageOrder: [UUID] = [],
         createdAt: Date,
         updatedAt: Date,
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        pageScrollMode: PageScrollMode? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -34,5 +38,6 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
+        self.pageScrollMode = pageScrollMode
     }
 }

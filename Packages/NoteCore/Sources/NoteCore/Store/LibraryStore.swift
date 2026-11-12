@@ -152,6 +152,14 @@ public actor LibraryStore {
         try writeDocument(manifest, to: layout.manifestFile(notebookID))
     }
 
+    /// Sets the notebook's scroll direction, or clears it to follow the app
+    /// default. Like `setCover`, this leaves `updatedAt` alone.
+    public func setPageScrollMode(_ mode: PageScrollMode?, for notebookID: UUID) throws {
+        var manifest = try loadManifest(notebookID)
+        manifest.pageScrollMode = mode
+        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+    }
+
     /// Moves the notebook's folder, unchanged, to `trash/`, stamping the manifest
     /// with the deletion date used by the 30-day purge.
     ///
