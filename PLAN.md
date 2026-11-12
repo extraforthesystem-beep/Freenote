@@ -294,3 +294,25 @@ Predict: S1 round trip is lossless → not yet run
 T2/3: Impact: none yet | Fail mode: if S1 fails, phase 1 uses the hybrid store in 3.2; if S3 fails, sync stops at conflict copies
 Action: PLAN ONLY — no code, nothing staged, project is not yet a git repository
 ```
+
+## 12. Implementation status (2026-11-12)
+
+`[TESTED]` on the iPad Pro 11-inch (M5) simulator, iOS 27.2, unless marked.
+
+| Phase | Item | State |
+|---|---|---|
+| 0 | P0.1 git, P0.2 project and packages, S1 stroke round trip | Done |
+| 0 | P0.3 signing on a physical iPad | Blocked: needs the iPad and an Apple ID team |
+| 0 | S2 Google sign-in, S3 two-device merge, S4 PDF links, S5 handwritten math, S6 Mac render | Not started (S2 needs the Google Cloud project) |
+| 1 | P1.1 NoteCore format, P1.2 library, P1.3 canvas and pens (eight styles, presets), P1.4 erasers, P1.5 undo/redo, P1.6 pages (add, delete, duplicate, reorder, templates, covers), P1.7 Pencil gestures, P1.9 autosave | Done in the app; P1.4 lasso move/copy still needs a Pencil test |
+| 1 | P1.8 thumbnails and cache; live-canvas window of ±1 | Thumbnails done; ±1 live canvases not implemented |
+| 1 | P1.10 tabs, quick switcher, bookmarks, outline, split view | Not implemented |
+| 2 | P2.1 PDF import, P2.3 text boxes, images and shapes, P2.4/P2.5 handwriting search, P2.6 PDF export | Done on the simulator; elements cannot be dragged or resized yet |
+| 2 | P2.2 PDF links inside the annotation canvas | Not implemented; the ink canvas receives the taps |
+| 3 | Google Drive auth, backup, restore, sync, merge | Not started; needs the user's Google Cloud project and approval |
+| 4 | Mac library, read-only pages, search | Builds and shares the code; not run on a Mac yet |
+| 4 | Mac annotation (PaperKit) | Not started |
+| 5 | Audio, transcripts, math, on-device AI | Not started |
+| 6 | Custom Metal ink engine | Not started (open-ended) |
+
+Tests at this point: NoteCore 34, InkKit 20, SearchKit 12, all passing. The simulator library is separate from the Mac library.
