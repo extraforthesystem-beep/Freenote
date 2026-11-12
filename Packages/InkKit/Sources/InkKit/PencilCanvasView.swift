@@ -12,13 +12,42 @@ import UIKit
 public final class PencilCanvasController: ObservableObject {
     public init() {}
 
-    weak var canvas: InkCanvasView?
+    /// The canvas on screen; a new page gets a new canvas.
+    public internal(set) weak var canvas: InkCanvasView?
 
     public var canUndo: Bool { canvas?.undoManager?.canUndo ?? false }
     public var canRedo: Bool { canvas?.undoManager?.canRedo ?? false }
 
     public func undo() { canvas?.undoManager?.undo() }
     public func redo() { canvas?.undoManager?.redo() }
+
+    /// Whether the canvas is on screen and the Pencil can draw on it now.
+    public var acceptsInk: Bool {
+        guard let canvas else { return false }
+        return canvas.window != nil && canvas.isUserInteractionEnabled
+            && canvas.drawingGestureRecognizer.isEnabled
+    }
+
+    /// Adds a stroke drawn before the canvas existed, as one undo step. The
+    /// canvas reports it like any drawn stroke, so it lands on the active
+    /// layer and is saved. Returns whether it was added.
+    @discardableResult
+    public func appendStroke(_ stroke: PKStroke) -> Bool {
+        guard acceptsInk, let canvas else { return false }
+        var drawing = canvas.drawing
+        drawing.strokes.append(stroke)
+        Self.setDrawing(drawing, replacing: canvas.drawing, on: canvas)
+        return true
+    }
+
+    private static func setDrawing(_ drawing: PKDrawing, replacing previous: PKDrawing, on canvas: InkCanvasView) {
+        canvas.undoManager?.registerUndo(withTarget: canvas) { canvas in
+            MainActor.assumeIsolated {
+                setDrawing(previous, replacing: drawing, on: canvas)
+            }
+        }
+        canvas.drawing = drawing
+    }
 }
 
 /// A `PKCanvasView` that can be hosted by SwiftUI without losing undo.
