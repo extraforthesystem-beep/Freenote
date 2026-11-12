@@ -24,6 +24,8 @@ public final class PencilCanvasController: ObservableObject {
 /// A `PKCanvasView` that can be hosted by SwiftUI without losing undo.
 public final class InkCanvasView: PKCanvasView {
     var pageSize: CGSize = .zero
+    /// The page this canvas edits, when the app said.
+    public internal(set) var pageID: UUID?
 
     /// PencilKit registers undo with the canvas's own undo manager, and a
     /// SwiftUI-hosted view has none on its responder chain, so supply one.
@@ -47,6 +49,29 @@ public final class InkCanvasView: PKCanvasView {
     override public func layoutSubviews() {
         super.layoutSubviews()
         fitPageIfNeeded()
+    }
+
+    /// Whether a Pencil (or, with `finger`, a finger) would draw ink here now.
+    public func acceptsInk(finger: Bool) -> Bool {
+        guard isUserInteractionEnabled, drawingGestureRecognizer.isEnabled, tool is PKInkingTool else { return false }
+        return !finger || drawingPolicy == .anyInput
+    }
+
+    /// Adds strokes drawn elsewhere (before this canvas was ready) as one
+    /// undoable edit. The change reaches the app like a drawn stroke.
+    public func appendStrokes(_ strokes: [PKStroke]) {
+        guard !strokes.isEmpty else { return }
+        var updated = drawing
+        updated.strokes.append(contentsOf: strokes)
+        setDrawingUndoably(updated)
+    }
+
+    private func setDrawingUndoably(_ newDrawing: PKDrawing) {
+        let previous = drawing
+        undoManager?.registerUndo(withTarget: self) { canvas in
+            MainActor.assumeIsolated { canvas.setDrawingUndoably(previous) }
+        }
+        drawing = newDrawing
     }
 }
 
@@ -103,6 +128,8 @@ public enum CanvasMode: Hashable, Sendable {
 public struct PencilCanvasView: UIViewRepresentable {
     public var strokes: [StrokeRecord]
     public var pageSize: CGSize
+    /// Tags the canvas view with its page (`InkCanvasView.pageID`).
+    public var pageID: UUID?
     public var tool: InkTool
     public var mode: CanvasMode
     public var activeLayerID: UUID
@@ -138,6 +165,7 @@ public struct PencilCanvasView: UIViewRepresentable {
     public init(
         strokes: [StrokeRecord],
         pageSize: CGSize,
+        pageID: UUID? = nil,
         tool: InkTool,
         mode: CanvasMode = .ink,
         activeLayerID: UUID,
@@ -157,6 +185,7 @@ public struct PencilCanvasView: UIViewRepresentable {
     ) {
         self.strokes = strokes
         self.pageSize = pageSize
+        self.pageID = pageID
         self.tool = tool
         self.mode = mode
         self.activeLayerID = activeLayerID
@@ -196,6 +225,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.alwaysBounceHorizontal = false
         canvas.contentSize = pageSize
         canvas.pageSize = pageSize
+        canvas.pageID = pageID
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
@@ -275,6 +305,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         controller?.canvas = canvas
 
         canvas.isUserInteractionEnabled = isEditable
+        canvas.pageID = pageID
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive

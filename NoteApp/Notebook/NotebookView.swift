@@ -967,6 +967,7 @@ struct NotebookPane: View {
             PencilCanvasView(
                 strokes: session.visibleStrokes,
                 pageSize: CGSize(width: page.width, height: page.height),
+                pageID: page.id,
                 tool: editor.inkTool,
                 mode: canvasMode,
                 activeLayerID: session.activeLayerID ?? page.layers.first?.id ?? UUID(),

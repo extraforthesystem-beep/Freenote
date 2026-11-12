@@ -1,6 +1,7 @@
 #if os(iOS)
 import InkKit
 import NoteCore
+import PencilKit
 import SwiftUI
 import UIKit
 
@@ -37,6 +38,27 @@ import UIKit
 // or finger tap lands on another page; that calls `session.goToPage`, which
 // commits the pending save first. A page change from elsewhere (thumbnails,
 // page pill, Go To Page, add/delete) scrolls to the new page instead.
+//
+// Ink on a page that is not active yet: the live canvas only arrives after
+// `session.goToPage` has loaded the page, and a touch stays with the view it
+// began in, so the canvas can never see the stroke that activated its page.
+// Both modes have this gap (vertical: writing on the next page; horizontal:
+// writing straight after a page turn, before the page is loaded). Each slot
+// therefore captures a Pencil stroke itself (a finger stroke too when the
+// live canvas draws with a finger): it asks the live canvas, still showing
+// the page being left, whether and with which ink it would draw, records the
+// touch samples in page points (coalesced, with force and angles), draws a
+// preview layer above the page and, on lift, turns the samples into a
+// `PKStroke` (`CapturedStroke` in InkKit). The stroke waits in `pendingInk`
+// until the page's own canvas (tagged with its page id) is live, then goes in
+// through `InkCanvasView.appendStrokes`: one undo step on that page, reported
+// through the canvas delegate like a drawn stroke, so it lands on the active
+// layer and is saved. If the Pencil is still down when the canvas arrives,
+// capture continues to the lift. The activation loop waits for the ink to go
+// in before it loads another page. Erasers, lasso and the other tools only
+// activate the page. A canvas for every visible page would avoid the replay
+// but costs a PencilKit canvas and a hosted page per visible page; activating
+// pages earlier only narrows the gap.
 
 /// Where the inactive pages' images come from.
 struct PageImageSource {
@@ -159,6 +181,9 @@ class PagesView: UIView {
     private var pendingActivationID: UUID?
     private var activationTask: Task<Void, Never>?
 
+    /// Strokes drawn on pages before their canvas was live.
+    private var pendingInk: [UUID: PendingInk] = [:]
+
     private var renderQueue: [UUID] = []
     private var renderOverrides: [UUID: Page] = [:]
     private var renderTask: Task<Void, Never>?
@@ -219,6 +244,8 @@ class PagesView: UIView {
             layoutChanged = true
         }
 
+        pendingInk = pendingInk.filter { newOrder.contains($0.key) }
+
         let previousID = activePageID
         let activeChanged = previousID != newPage.id
         if activeChanged, let previousID, let leaving = activePage, leaving.id == previousID,
@@ -244,6 +271,10 @@ class PagesView: UIView {
             refreshSlots()
             for slot in slots.values { configure(slot) }
             activePageDidChange()
+            if pendingInk[newPage.id] != nil {
+                let pageID = newPage.id
+                Task { [weak self] in await self?.commitPendingInk(on: pageID) }
+            }
             if requestedIDs.remove(newPage.id) == nil {
                 requestedIDs.removeAll()
                 scrollToActivePage(animated: previousID != nil)
@@ -274,6 +305,15 @@ class PagesView: UIView {
         let slot = PageSlotView(pageID: pageID)
         slot.onActivate = { [weak self] id in
             self?.requestActivation(of: id)
+        }
+        slot.inkStyle = { [weak self] finger in
+            self?.inkCaptureStyle(finger: finger)
+        }
+        slot.onInkBegan = { [weak self] id in
+            self?.inkCaptureBegan(on: id)
+        }
+        slot.onInkEnded = { [weak self] id, stroke in
+            self?.inkCaptureEnded(on: id, stroke: stroke)
         }
         slots[pageID] = slot
         configure(slot)
@@ -310,12 +350,88 @@ class PagesView: UIView {
         activationTask = Task { [weak self] in
             while let self, let pageID = self.pendingActivationID {
                 self.pendingActivationID = nil
-                guard pageID != self.activePageID,
-                      let index = self.pageOrder.firstIndex(of: pageID)
-                else { continue }
-                await self.onActivate?(index)
+                if pageID != self.activePageID, let index = self.pageOrder.firstIndex(of: pageID) {
+                    await self.onActivate?(index)
+                }
+                // Ink drawn before the page was live goes in before another
+                // page can take its place.
+                await self.commitPendingInk(on: pageID)
             }
             self?.activationTask = nil
+        }
+    }
+
+    // MARK: Ink on inactive pages
+
+    private final class PendingInk {
+        var strokes: [PKStroke] = []
+        var isCapturing = false
+    }
+
+    /// The live canvas in the hosted page content, or nil.
+    private func liveCanvas(in view: UIView?) -> InkCanvasView? {
+        guard let view else { return nil }
+        if let canvas = view as? InkCanvasView { return canvas }
+        for subview in view.subviews {
+            if let canvas = liveCanvas(in: subview) { return canvas }
+        }
+        return nil
+    }
+
+    /// How a stroke starting on an inactive page is drawn: as the live canvas
+    /// would draw it now, or nil when that canvas would not ink.
+    private func inkCaptureStyle(finger: Bool) -> InkCaptureStyle? {
+        guard let canvas = liveCanvas(in: hostView),
+              canvas.acceptsInk(finger: finger),
+              let tool = canvas.tool as? PKInkingTool
+        else { return nil }
+        return InkCaptureStyle(ink: tool.ink, width: tool.width)
+    }
+
+    private func inkCaptureBegan(on pageID: UUID) {
+        let ink = pendingInk[pageID] ?? PendingInk()
+        ink.isCapturing = true
+        pendingInk[pageID] = ink
+    }
+
+    private func inkCaptureEnded(on pageID: UUID, stroke: PKStroke?) {
+        guard let ink = pendingInk[pageID] else {
+            slots[pageID]?.removeInkPreviews(after: .zero)
+            return
+        }
+        ink.isCapturing = false
+        if let stroke { ink.strokes.append(stroke) }
+        guard !ink.strokes.isEmpty else {
+            pendingInk[pageID] = nil
+            return
+        }
+        if pageID == activePageID {
+            Task { [weak self] in await self?.commitPendingInk(on: pageID) }
+        } else {
+            // Its activation may have been replaced by another page's.
+            requestActivation(of: pageID)
+        }
+    }
+
+    /// Adds the page's waiting strokes to its canvas once that is live and
+    /// the Pencil has lifted. Returns early while the page is not active;
+    /// its next activation tries again.
+    private func commitPendingInk(on pageID: UUID) async {
+        // About two seconds for the hosted content to show the new page.
+        for _ in 0..<120 {
+            guard let ink = pendingInk[pageID], !ink.isCapturing, pageID == activePageID else { return }
+            if let canvas = liveCanvas(in: hostView), canvas.pageID == pageID, canvas.window != nil {
+                pendingInk[pageID] = nil
+                // A locked or hidden layer on this page takes no ink, as the
+                // canvas itself would not have drawn.
+                if canvas.acceptsInk(finger: false) {
+                    canvas.appendStrokes(ink.strokes)
+                }
+                // The canvas draws the strokes on its next frame.
+                slots[pageID]?.removeInkPreviews(after: .milliseconds(120))
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(16))
         }
     }
 
@@ -931,21 +1047,30 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
 final class PageSlotView: UIView, UIGestureRecognizerDelegate {
     let pageID: UUID
     var onActivate: ((UUID) -> Void)?
+    /// Asked when a stroke starts here: how to draw it (`true` for a finger),
+    /// or nil when the touch should not ink.
+    var inkStyle: ((Bool) -> InkCaptureStyle?)?
+    var onInkBegan: ((UUID) -> Void)?
+    /// A captured stroke on lift, or nil when it was cancelled.
+    var onInkEnded: ((UUID, PKStroke?) -> Void)?
     /// The scale of the image shown; 0 when it is missing or stale.
     var renderedScale: CGFloat = 0
 
     private let imageView = UIImageView()
     private var placeholder: UIView?
-    private let pencilDown = UILongPressGestureRecognizer()
+    private let pencilInk = InkCaptureRecognizer()
+    private let fingerInk = InkCaptureRecognizer()
     private let fingerTap = UITapGestureRecognizer()
+    /// Previews of captured strokes not yet on the page's canvas.
+    private var inkPreviews: [CAShapeLayer] = []
 
     var isActive = false {
         didSet {
             guard oldValue != isActive else { return }
             imageView.isHidden = isActive
             placeholder?.isHidden = isActive
-            pencilDown.isEnabled = !isActive
             fingerTap.isEnabled = !isActive
+            updateInkCaptureEnabled()
         }
     }
 
@@ -963,13 +1088,36 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(imageView)
 
-        // A Pencil touching another page makes it the active page at once.
-        pencilDown.addTarget(self, action: #selector(pencilTouched(_:)))
-        pencilDown.minimumPressDuration = 0
-        pencilDown.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
-        pencilDown.cancelsTouchesInView = false
-        pencilDown.delegate = self
-        addGestureRecognizer(pencilDown)
+        // A Pencil touching another page makes it the active page at once,
+        // and its stroke is kept for the page's canvas. A finger does the
+        // same only when the canvas draws with a finger. Separate recognizers,
+        // so a resting palm never stands in the Pencil's way.
+        pencilInk.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        fingerInk.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        for recognizer in [pencilInk, fingerInk] {
+            let isPencil = recognizer === pencilInk
+            recognizer.delegate = self
+            recognizer.styleForTouch = { [weak self] in
+                guard let self, !self.isActive else { return nil }
+                return self.inkStyle?(!isPencil)
+            }
+            recognizer.onTouchDown = { [weak self] willInk in
+                guard let self, !self.isActive, isPencil || willInk else { return }
+                self.onActivate?(self.pageID)
+            }
+            recognizer.onCaptureBegan = { [weak self] in
+                guard let self else { return }
+                self.onInkBegan?(self.pageID)
+            }
+            recognizer.onCaptureEnded = { [weak self] stroke, preview in
+                guard let self else { return }
+                if let preview { self.inkPreviews.append(preview) }
+                self.onInkEnded?(self.pageID, stroke)
+                // The page may have become active during the stroke.
+                Task { @MainActor [weak self] in self?.updateInkCaptureEnabled() }
+            }
+            addGestureRecognizer(recognizer)
+        }
 
         fingerTap.addTarget(self, action: #selector(fingerTapped(_:)))
         fingerTap.allowedTouchTypes = PagesView.scrollTouchTypes
@@ -1006,8 +1154,24 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
         placeholder = view
     }
 
-    @objc private func pencilTouched(_ gesture: UILongPressGestureRecognizer) {
-        if gesture.state == .began { onActivate?(pageID) }
+    /// Capture is off on the active page, but a stroke that began before the
+    /// page became active runs to its lift.
+    private func updateInkCaptureEnabled() {
+        for recognizer in [pencilInk, fingerInk] where !isActive || !recognizer.isCapturing {
+            recognizer.isEnabled = !isActive
+        }
+    }
+
+    /// Removes the previews of strokes handed over so far, after `delay` so
+    /// the canvas has drawn them.
+    func removeInkPreviews(after delay: Duration) {
+        let previews = inkPreviews
+        inkPreviews = []
+        guard !previews.isEmpty else { return }
+        Task { @MainActor in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            for preview in previews { preview.removeFromSuperlayer() }
+        }
     }
 
     @objc private func fingerTapped(_ gesture: UITapGestureRecognizer) {
@@ -1019,6 +1183,148 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
         true
+    }
+}
+
+// MARK: - Ink capture
+
+/// How a stroke captured on an inactive page is drawn: the ink of the live
+/// canvas when it began.
+struct InkCaptureStyle {
+    let ink: PKInk
+    let width: CGFloat
+}
+
+/// Follows one Pencil or finger stroke on an inactive page: samples in the
+/// view's coordinates (page points) and a preview layer drawn above the page.
+final class InkCaptureRecognizer: UIGestureRecognizer {
+    /// The style to capture with, or nil to only report the touch.
+    var styleForTouch: (() -> InkCaptureStyle?)?
+    /// A touch landed; `true` when it will be captured as ink.
+    var onTouchDown: ((Bool) -> Void)?
+    var onCaptureBegan: (() -> Void)?
+    /// The stroke and its preview on lift; nil and nil when cancelled (the
+    /// preview is already gone).
+    var onCaptureEnded: ((PKStroke?, CAShapeLayer?) -> Void)?
+
+    private var touch: UITouch?
+    private var style: InkCaptureStyle?
+    private var samples: [InkSample] = []
+    private var preview: CAShapeLayer?
+
+    var isCapturing: Bool { touch != nil }
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        cancelsTouchesInView = false
+        delaysTouchesEnded = false
+    }
+
+    convenience init() {
+        self.init(target: nil, action: nil)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard touch == nil else {
+            // A second finger: a pinch or a pan, not a stroke.
+            if touches.contains(where: { $0.type == .direct }) { cancelCapture() }
+            return
+        }
+        let ownTouches = event.allTouches?.filter { allowedTouchTypes.contains(NSNumber(value: $0.type.rawValue)) }
+        guard touches.count == 1, let new = touches.first, (ownTouches?.count ?? 1) == 1 else {
+            state = .failed
+            return
+        }
+        let style = styleForTouch?()
+        onTouchDown?(style != nil)
+        guard let style, let view else {
+            state = .failed
+            return
+        }
+        touch = new
+        self.style = style
+        samples = []
+        let layer = CAShapeLayer()
+        layer.fillColor = nil
+        layer.strokeColor = style.ink.color.cgColor
+        layer.lineWidth = style.width
+        layer.lineCap = .round
+        layer.lineJoin = .round
+        // Above the hosted page content, which joins this view when the page
+        // becomes active.
+        layer.zPosition = 10
+        layer.frame = view.bounds
+        view.layer.addSublayer(layer)
+        preview = layer
+        append(new, event: event)
+        state = .began
+        onCaptureBegan?()
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let touch, touches.contains(touch) else { return }
+        append(touch, event: event)
+        state = .changed
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let touch, touches.contains(touch) else { return }
+        append(touch, event: event)
+        let stroke = style.flatMap { CapturedStroke.stroke(from: samples, ink: $0.ink, width: $0.width) }
+        let layer = preview
+        clear()
+        state = .ended
+        if stroke == nil { layer?.removeFromSuperlayer() }
+        onCaptureEnded?(stroke, stroke == nil ? nil : layer)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let touch, touches.contains(touch) else { return }
+        cancelCapture()
+    }
+
+    override func reset() {
+        super.reset()
+        if isCapturing { cancelCapture() }
+    }
+
+    private func cancelCapture() {
+        guard isCapturing else { return }
+        preview?.removeFromSuperlayer()
+        clear()
+        if state == .began || state == .changed { state = .cancelled }
+        onCaptureEnded?(nil, nil)
+    }
+
+    private func clear() {
+        touch = nil
+        style = nil
+        samples = []
+        preview = nil
+    }
+
+    private func append(_ touch: UITouch, event: UIEvent) {
+        guard let view else { return }
+        let touches = event.coalescedTouches(for: touch) ?? [touch]
+        for coalesced in touches {
+            samples.append(InkSample(
+                location: coalesced.preciseLocation(in: view),
+                timestamp: coalesced.timestamp,
+                force: coalesced.maximumPossibleForce > 0 ? coalesced.force : nil,
+                altitude: coalesced.altitudeAngle,
+                azimuth: coalesced.azimuthAngle(in: view)
+            ))
+        }
+        let path = UIBezierPath()
+        for (index, sample) in samples.enumerated() {
+            if index == 0 {
+                path.move(to: sample.location)
+                path.addLine(to: sample.location)
+            } else {
+                path.addLine(to: sample.location)
+            }
+        }
+        preview?.path = path.cgPath
     }
 }
 
