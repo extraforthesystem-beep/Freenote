@@ -143,6 +143,7 @@ struct NotebookPane: View {
     @State private var pngDocument: PNGExportDocument?
     @State private var isExporting = false
     @State private var exportProgress: PDFExportProgress?
+    @State private var showsExportOptions = false
     @State private var showExporter = false
     @State private var showPNGExporter = false
     @State private var pngFilename = "Page"
@@ -325,6 +326,11 @@ struct NotebookPane: View {
                 exportError = error.localizedDescription
             }
         }
+        .sheet(isPresented: $showsExportOptions) {
+            PDFExportOptionsSheet(pageCount: session.pageCount) { options in
+                exportPDF(options: options)
+            }
+        }
         .fileExporter(
             isPresented: $showPNGExporter,
             document: pngDocument,
@@ -499,7 +505,9 @@ struct NotebookPane: View {
             if isExporting {
                 EditorBanner(
                     systemImage: "square.and.arrow.up",
-                    message: exportProgress.map { "Exporting page \(min($0.pagesCompleted + 1, $0.pageCount)) of \($0.pageCount)…" }
+                    message: exportProgress.map {
+                        "\($0.isAddingAnnotations ? "Adding ink to" : "Exporting") page \(min($0.pagesCompleted + 1, $0.pageCount)) of \($0.pageCount)…"
+                    }
                         ?? "Preparing the PDF…",
                     tint: .accentColor
                 )
@@ -707,7 +715,7 @@ struct NotebookPane: View {
         }
         Section {
             Button("Export PDF…", systemImage: "square.and.arrow.up") {
-                exportPDF()
+                showsExportOptions = true
             }
             .disabled(session.pageCount == 0 || isExporting)
             Button("Export Page as PNG…", systemImage: "photo") {
@@ -760,7 +768,7 @@ struct NotebookPane: View {
         }
     }
 
-    private func exportPDF() {
+    private func exportPDF(options: PDFExportOptions) {
         Task {
             isExporting = true
             exportProgress = nil
@@ -769,7 +777,11 @@ struct NotebookPane: View {
                 exportProgress = nil
             }
             do {
-                let data = try await NotebookExporter.pdfData(session: session) { progress in
+                let data = try await NotebookExporter.pdfData(
+                    session: session,
+                    options: options,
+                    outlineTitles: outlineTitles
+                ) { progress in
                     exportProgress = progress
                 }
                 exportDocument = PDFExportDocument(data: data)
@@ -867,6 +879,22 @@ struct NotebookPane: View {
         return session.manifest.pageOrder.enumerated().compactMap { index, pageID in
             ids.contains(pageID) ? index : nil
         }
+    }
+
+    /// Outline entries for a PDF export: every page with a custom outline
+    /// title, and every bookmarked page (titled "Page N" when it has none).
+    private var outlineTitles: [UUID: String] {
+        let notebookID = session.notebookID
+        let bookmarked = model.bookmarks.bookmarkedPageIDs(notebookID: notebookID)
+        var titles: [UUID: String] = [:]
+        for (index, pageID) in session.manifest.pageOrder.enumerated() {
+            if let title = model.outline.title(notebookID: notebookID, pageID: pageID) {
+                titles[pageID] = title
+            } else if bookmarked.contains(pageID) {
+                titles[pageID] = "Page \(index + 1)"
+            }
+        }
+        return titles
     }
 
     private var exportFilename: String {
