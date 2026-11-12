@@ -2,20 +2,20 @@
 
 ## Done
 
-- Phase 0 scaffold: git repo on `feat/phase-0`, multiplatform Xcode project (iPadOS 27 / macOS 27), four local packages.
-- iOS 27.2 simulator installed; iPad Pro 11-inch (M5) simulator boots and runs the app.
-- S1 stroke round trip: all eight PencilKit inks rebuild pixel-identically; drift bounded to Apple's compressed fields. H1 (own record is truth) stands. Evidence: `Spikes/S1-StrokeRoundTrip/RESULTS.md`.
-- NoteCore: document model, page format (JSON+zlib), library store, atomic writes, schema gate. 33 tests pass.
-- NoteApp library UI: sidebar (all/favourites/folders/trash), notebook grid, create/rename/delete/restore, folders, favourites, tags. Notebook view with page navigation, add/delete page, paper styles, autosave session.
-- InkKit (in progress): `InkTool`, `PenStyle`, `StrokeCodec`, `PageRenderer`, iOS `PencilCanvasView` with undo. Delegate is finishing tests and the iOS compile check.
+- Phase 0 scaffold: git repo on `feat/phase-0`, multiplatform Xcode project (iPadOS 27 / macOS 27), four local packages. iOS 27.2 simulator installed; iPad Pro 11-inch (M5) runs the app.
+- S1 stroke round trip: all eight PencilKit inks rebuild pixel-identically; drift is bounded to Apple's compressed fields. H1 stands. Evidence: `Spikes/S1-StrokeRoundTrip/RESULTS.md`.
+- NoteCore: model, page format (JSON+zlib), atomic library store, schema gate. 34 tests. Fixed a real truncation bug in decompression when JSON exceeded 8x the compressed size.
+- InkKit: `InkTool`, `PenStyle`, `StrokeCodec` for all eight inks, `PageRenderer`, iOS `PencilCanvasView` with undo, stroke/pixel eraser and lasso modes. 10 tests.
+- App: library browser (all/favourites/folders/trash, tags, create/rename/delete/restore/move), notebook sessions with autosave, page add/duplicate/delete/reorder, paper styles, drawing with eight pens, colour, width, erasers, lasso, undo/redo, page thumbnail strip, live notebook covers.
+- PDF export: one A4 page per page, verified 3-page PDF through the system document picker.
+- Verified on the simulator: draw, erase, undo/redo, page navigation, duplicate, relaunch persistence, export.
 
 ## Next
 
-1. Finish InkKit, verify tests, then wire eraser/lasso modes into the canvas toolbar.
-2. Draw on the simulator, verify strokes survive relaunch; check page add/delete/reorder.
-3. Page thumbnails and live-canvas window (P1.8).
-4. P1.5 undo/redo polish and P1.4 lasso/stroke eraser checks.
-5. Export PDF/PNG (P2.6), then Phase 3 Google Drive only after the user's approval and Google Cloud setup.
+1. Lasso move/copy verification with a real Pencil (mouse gestures cannot trace a lasso).
+2. Search (P2.4/P2.5) and PDF import (P2.1), then images/text boxes.
+3. Mac app read pass (library + rendered pages already compile).
+4. Phase 3 Google Drive only after the user creates the Google Cloud project and approves.
 
 ## Open user inputs
 
