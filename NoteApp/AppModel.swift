@@ -481,18 +481,32 @@ final class AppModel {
         await reload()
     }
 
-    func importPDF(from url: URL) async {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        do {
-            let imported = try await PDFImporter.importPDF(at: url, into: store)
-            await reload()
-            if let notebook = notebooks.first(where: { $0.id == imported.id }) {
-                await open(notebook)
-            }
-        } catch {
-            notice = Notice(title: "Could not import the PDF", message: error.localizedDescription)
+    /// Creates a notebook from a PDF and opens it. Throws so the import sheet
+    /// can show what went wrong where the file was chosen.
+    @discardableResult
+    func importPDF(
+        from url: URL,
+        selection: PDFPageSelection,
+        password: String?,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> NotebookManifest {
+        let result = try await PDFImporter.importPDF(
+            at: url,
+            into: store,
+            selection: selection,
+            password: password,
+            onProgress: onProgress
+        )
+        // The PDF's table of contents names the imported pages in the Outline
+        // panel.
+        for (pageID, title) in result.titles {
+            outline.setTitle(title, notebookID: result.manifest.id, pageID: pageID)
         }
+        await reload()
+        if let notebook = notebooks.first(where: { $0.id == result.manifest.id }) {
+            await open(notebook)
+        }
+        return result.manifest
     }
 
     func rename(_ notebook: NotebookManifest, to title: String) async {

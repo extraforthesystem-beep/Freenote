@@ -18,6 +18,7 @@ struct LibraryView: View {
     @State private var renameFolderText = ""
     @State private var deleteFolderTarget: Folder?
     @State private var showPDFImporter = false
+    @State private var pdfImport: PDFImportFlow?
     @State private var tagTarget: NotebookManifest?
     @State private var tagsText = ""
     @State private var coverTarget: CoverTarget?
@@ -153,7 +154,11 @@ struct LibraryView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    Task { await model.importPDF(from: url) }
+                    // One runloop later, so the file picker has finished
+                    // dismissing before the import sheet arrives.
+                    Task { @MainActor in
+                        pdfImport = PDFImportFlow(model: model, url: url, destination: .newNotebook)
+                    }
                 }
             case .failure(let error):
                 model.notice = AppModel.Notice(
@@ -161,6 +166,9 @@ struct LibraryView: View {
                     message: error.localizedDescription
                 )
             }
+        }
+        .sheet(item: $pdfImport) { flow in
+            PDFImportSheet(flow: flow)
         }
     }
 
