@@ -3,6 +3,7 @@ import Foundation
 import HistoryKit
 import NoteCore
 import Observation
+import SearchKit
 
 /// Everything the library screen needs: the store, the tree and the open notebook.
 /// The files on disk are the truth; this object only mirrors them for SwiftUI.
@@ -235,7 +236,7 @@ final class AppModel {
         if selectedLocation == .trash {
             let searched = query.isEmpty
                 ? trashedNotebooks
-                : trashedNotebooks.filter { $0.title.localizedCaseInsensitiveContains(query) }
+                : trashedNotebooks.filter { SearchQuery(query).matches($0.title) }
             // Newest deletion first, so the item the user just removed is on top.
             return searched.sorted {
                 ($0.deletedAt ?? $0.updatedAt) > ($1.deletedAt ?? $1.updatedAt)
@@ -245,7 +246,9 @@ final class AppModel {
         // A search looks through the whole library; the sidebar row only shapes the
         // browsing list.
         if !query.isEmpty {
-            return sorted(notebooks.filter { $0.title.localizedCaseInsensitiveContains(query) })
+            let parsed = SearchQuery(query)
+            let editedAfter = search.dateRange.start() ?? .distantPast
+            return sorted(notebooks.filter { parsed.matches($0.title) && $0.updatedAt >= editedAfter })
         }
 
         switch selectedLocation {
@@ -360,6 +363,11 @@ final class AppModel {
               let index = notebook.pageOrder.firstIndex(of: pageID)
         else { return nil }
         return index + 1
+    }
+
+    /// Runs the library search again, e.g. after the filter changed.
+    func refreshHandwritingSearch() {
+        updateHandwritingSearch(searchText)
     }
 
     func clearSearch() {
@@ -670,8 +678,10 @@ final class AppModel {
 
     // MARK: - Notebook session
 
-    func open(_ notebook: NotebookManifest, pageID: UUID? = nil) async {
+    /// Opens `notebook`; with `highlighting`, the page marks that search's matches.
+    func open(_ notebook: NotebookManifest, pageID: UUID? = nil, highlighting query: SearchHighlight? = nil) async {
         if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
+            existing.searchHighlight = query
             activeNotebookID = existing.notebookID
             isShowingLibrary = false
             // Page one is a valid target: a search hit there used to be ignored.
@@ -697,6 +707,7 @@ final class AppModel {
                 guard let self else { return }
                 Task { await self.search.removePage(pageID, notebookID: notebook.id) }
             }
+            newSession.searchHighlight = query
             tabs.append(newSession)
             activeNotebookID = newSession.notebookID
             isShowingLibrary = false

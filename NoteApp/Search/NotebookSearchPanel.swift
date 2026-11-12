@@ -10,8 +10,11 @@ struct NotebookSearchPanel: View {
     private let notebookID: UUID
     private let search: HandwritingSearch
     private let onSelectPage: (UUID) -> Void
+    private let onHighlight: (SearchHighlight?) -> Void
 
     @State private var query = ""
+    @State private var sources = Set(PageTextSource.allCases)
+    @State private var dateRange = SearchDateRange.anyTime
     @State private var hits: [SearchKit.SearchHit] = []
     @State private var selectedPageID: UUID?
     @State private var searchTask: Task<Void, Never>?
@@ -19,14 +22,17 @@ struct NotebookSearchPanel: View {
     /// - Parameters:
     ///   - notebookID: the notebook to search; the index is scoped to it.
     ///   - search: the app's shared `HandwritingSearch`, which owns the index.
+    ///   - onHighlight: called with the query the page should mark, or nil to clear the marks.
     ///   - onSelectPage: called with the page ID of the chosen result.
     init(
         notebookID: UUID,
         search: HandwritingSearch,
+        onHighlight: @escaping (SearchHighlight?) -> Void = { _ in },
         onSelectPage: @escaping (UUID) -> Void
     ) {
         self.notebookID = notebookID
         self.search = search
+        self.onHighlight = onHighlight
         self.onSelectPage = onSelectPage
     }
 
@@ -43,8 +49,15 @@ struct NotebookSearchPanel: View {
         .onChange(of: query) { _, value in
             scheduleSearch(value)
         }
+        .onChange(of: sources) { _, _ in
+            scheduleSearch(query)
+        }
+        .onChange(of: dateRange) { _, _ in
+            scheduleSearch(query)
+        }
         .onDisappear {
             searchTask?.cancel()
+            onHighlight(nil)
         }
     }
 
@@ -56,6 +69,7 @@ struct NotebookSearchPanel: View {
                 .foregroundStyle(.secondary)
             TextField("Search this notebook", text: $query)
                 .textFieldStyle(.plain)
+                .autocorrectionDisabled()
             if !query.isEmpty {
                 Button {
                     query = ""
@@ -66,6 +80,13 @@ struct NotebookSearchPanel: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search")
             }
+            #if os(iOS)
+            PencilSearchButton(search: search) { query = $0 }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+            #endif
+            SearchFilterMenu(sources: $sources, dateRange: $dateRange)
+                .labelStyle(.iconOnly)
         }
         .padding(10)
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -83,6 +104,7 @@ struct NotebookSearchPanel: View {
                 Text(query.isEmpty
                     ? "Handwriting, typed text and PDF text are all searched."
                     : "Nothing in this notebook matches “\(query)”.")
+                    + Text(query.isEmpty ? "\nWrite with Apple Pencil, or use \"exact phrase\", OR and -word." : "")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -209,15 +231,19 @@ struct NotebookSearchPanel: View {
         guard !trimmed.isEmpty else {
             hits = []
             selectedPageID = nil
+            onHighlight(nil)
             return
         }
+        let sources = sources
+        let dateRange = dateRange
         searchTask = Task {
             // Debounce: one scoped search per pause, not per keystroke.
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            let found = await search.search(trimmed, in: notebookID)
+            let found = await search.search(trimmed, in: notebookID, sources: sources, dateRange: dateRange)
             guard !Task.isCancelled else { return }
             hits = found
+            onHighlight(SearchHighlight(query: trimmed, sources: sources))
             selectedPageID = pageResults.first?.pageID
         }
     }

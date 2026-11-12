@@ -59,6 +59,12 @@ public struct PageSearchRecord: Codable, Hashable, Sendable {
     public var contentHash: String
     public var recognitionVersion: Int
     public var updatedAt: Date
+    /// The newest stroke or element on the page; nil for records written before
+    /// it was stored, which fall back to `updatedAt`.
+    public var editedAt: Date?
+
+    /// When the page was last changed, as near as the index knows.
+    public var lastEdited: Date { editedAt ?? updatedAt }
 
     public init(
         schemaVersion: Int = PageSearchRecord.currentSchemaVersion,
@@ -69,7 +75,8 @@ public struct PageSearchRecord: Codable, Hashable, Sendable {
         segments: [PageTextSegment] = [],
         contentHash: String,
         recognitionVersion: Int,
-        updatedAt: Date
+        updatedAt: Date,
+        editedAt: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.notebookID = notebookID
@@ -80,6 +87,7 @@ public struct PageSearchRecord: Codable, Hashable, Sendable {
         self.contentHash = contentHash
         self.recognitionVersion = recognitionVersion
         self.updatedAt = updatedAt
+        self.editedAt = editedAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -92,6 +100,7 @@ public struct PageSearchRecord: Codable, Hashable, Sendable {
         case contentHash
         case recognitionVersion
         case updatedAt
+        case editedAt
     }
 
     /// Files written before segments existed decode with version 0 and no
@@ -107,6 +116,7 @@ public struct PageSearchRecord: Codable, Hashable, Sendable {
         contentHash = try container.decode(String.self, forKey: .contentHash)
         recognitionVersion = try container.decode(Int.self, forKey: .recognitionVersion)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        editedAt = try container.decodeIfPresent(Date.self, forKey: .editedAt)
     }
 }
 
@@ -289,9 +299,11 @@ public actor SearchIndex {
            existing.recognitionVersion == recognizer.recognitionVersion {
             // The text is unchanged but the page moved: refresh the number only,
             // without paying for recognition again.
-            guard existing.pageIndex != pageIndex else { return nil }
+            // Records from before edit dates were stored get theirs the same way.
+            guard existing.pageIndex != pageIndex || existing.editedAt == nil else { return nil }
             var moved = existing
             moved.pageIndex = pageIndex
+            moved.editedAt = Self.editedAt(of: page) ?? existing.updatedAt
             records[key] = moved
             try persist()
             return moved
@@ -327,7 +339,8 @@ public actor SearchIndex {
             segments: segments,
             contentHash: contentHash,
             recognitionVersion: recognizer.recognitionVersion,
-            updatedAt: Date()
+            updatedAt: Date(),
+            editedAt: Self.editedAt(of: page)
         )
         records[key] = record
         try persist()
@@ -360,21 +373,26 @@ public actor SearchIndex {
     /// Every page-and-source whose indexed text contains all query terms.
     /// Pass `notebookID` to scope the search to one notebook.
     public func search(_ query: String, in notebookID: UUID? = nil) -> [SearchHit] {
-        let terms = Self.terms(in: query)
-        guard !terms.isEmpty else { return [] }
+        search(SearchQuery(query), filter: SearchFilter(notebookIDs: notebookID.map { [$0] }))
+    }
+
+    /// Every page-and-source whose indexed text satisfies `query` and passes `filter`.
+    public func search(_ query: SearchQuery, filter: SearchFilter) -> [SearchHit] {
+        guard !query.isEmpty, !filter.sources.isEmpty else { return [] }
         _ = try? ensureLoaded()
 
         let candidates: [PageSearchRecord]
-        if let notebookID {
-            candidates = records.values.filter { $0.notebookID == notebookID }
+        if let notebookIDs = filter.notebookIDs {
+            candidates = records.values.filter { notebookIDs.contains($0.notebookID) }
         } else {
             candidates = Array(records.values)
         }
 
         var hits: [SearchHit] = []
         for record in candidates {
-            for segment in record.segments where !segment.text.isEmpty {
-                guard let excerpt = Self.excerpt(in: segment.text, matching: terms) else { continue }
+            if let editedAfter = filter.editedAfter, record.lastEdited < editedAfter { continue }
+            for segment in record.segments where !segment.text.isEmpty && filter.sources.contains(segment.source) {
+                guard let excerpt = Self.excerpt(in: segment.text, matching: query) else { continue }
                 hits.append(
                     SearchHit(
                         id: "\(record.notebookID.uuidString):\(record.pageID.uuidString):\(segment.source.rawValue)",
@@ -384,7 +402,7 @@ public actor SearchIndex {
                         source: segment.source,
                         snippet: excerpt.snippet,
                         matchRange: excerpt.matchRange,
-                        matchedTermCount: terms.count
+                        matchedTermCount: query.groups.count
                     )
                 )
             }
@@ -408,19 +426,33 @@ public actor SearchIndex {
         return hits
     }
 
-    private static func terms(in query: String) -> [String] {
-        query.split(whereSeparator: \.isWhitespace).map(String.init)
-    }
-
-    /// Every term must be present in `text`. Returns the earliest match's excerpt.
-    private static func excerpt(in text: String, matching terms: [String]) -> (snippet: String, matchRange: Range<String.Index>?)? {
+    /// Every group must match and no excluded term may appear. Returns the earliest match's excerpt.
+    private static func excerpt(in text: String, matching query: SearchQuery) -> (snippet: String, matchRange: Range<String.Index>?)? {
+        for term in query.excluded where phraseMatch(of: term.text, in: text) != nil {
+            return nil
+        }
         var matches: [Range<String.Index>] = []
-        for term in terms {
-            guard let match = firstMatch(of: term, in: text) else { return nil }
-            matches.append(match)
+        for group in query.groups {
+            let found = group.compactMap { term in
+                term.isPhrase ? phraseMatch(of: term.text, in: text) : firstMatch(of: term.text, in: text)
+            }
+            guard let earliest = found.min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
+            matches.append(earliest)
         }
         guard let first = matches.min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
         return snippet(in: text, around: first)
+    }
+
+    /// An exact case- and diacritic-insensitive match, where a space in `phrase` also
+    /// matches a line break, since recognised ink breaks lines where the writer did.
+    private static func phraseMatch(of phrase: String, in text: String) -> Range<String.Index>? {
+        if let range = text.range(of: phrase, options: matchOptions) {
+            return range
+        }
+        let words = phrase.split(whereSeparator: \.isWhitespace)
+        guard words.count > 1 else { return nil }
+        let pattern = words.map { NSRegularExpression.escapedPattern(for: String($0)) }.joined(separator: "\\s+")
+        return text.range(of: pattern, options: matchOptions.union(.regularExpression))
     }
 
     /// An exact case- and diacritic-insensitive substring match first, then a
@@ -536,6 +568,12 @@ public actor SearchIndex {
 
     /// A stable hash of the ink alone: strokes plus deleted IDs, independent of
     /// page template, size and layers, so those edits do not trigger recognition.
+    private static func editedAt(of page: Page) -> Date? {
+        let strokeDates = page.strokes.map(\.createdAt)
+        let elementDates = page.elements.map(\.updatedAt)
+        return (strokeDates + elementDates).max()
+    }
+
     private static func typedText(in page: Page) -> String {
         page.elements.compactMap { element -> String? in
             let text: String

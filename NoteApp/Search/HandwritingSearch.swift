@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import Observation
+import PencilKit
 import SearchKit
 
 /// Owns the handwriting index and the one recogniser the app uses.
@@ -18,6 +19,11 @@ final class HandwritingSearch {
     private(set) var indexedPages = 0
     private(set) var totalPages = 0
     private(set) var lastError: String?
+    /// Sources and notebooks the library search looks at.
+    var filter = SearchFilter.all
+    /// The library search's edit-date choice; turned into a date at each search,
+    /// so "Today" means today even in a long session.
+    var dateRange = SearchDateRange.anyTime
 
     /// The query the newest `search(_:)` call was asked to answer. A result whose
     /// query is no longer the current one is dropped, so a slow older search can
@@ -100,7 +106,9 @@ final class HandwritingSearch {
             hits = []
             return
         }
-        let found = await index.search(trimmed)
+        var filter = filter
+        filter.editedAfter = dateRange.start()
+        let found = await index.search(SearchQuery(trimmed), filter: filter)
         // A newer query started while this one was reading the index.
         guard trimmed == currentQuery else { return }
         hits = found
@@ -108,10 +116,47 @@ final class HandwritingSearch {
 
     /// The same engine, scoped to one notebook and returned to the caller instead
     /// of replacing the library-wide `hits`. Used by the in-notebook search panel.
-    func search(_ query: String, in notebookID: UUID) async -> [SearchHit] {
+    func search(
+        _ query: String,
+        in notebookID: UUID,
+        sources: Set<PageTextSource> = Set(PageTextSource.allCases),
+        dateRange: SearchDateRange = .anyTime
+    ) async -> [SearchHit] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        return await index.search(trimmed, in: notebookID)
+        let filter = SearchFilter(sources: sources, notebookIDs: [notebookID], editedAfter: dateRange.start())
+        return await index.search(SearchQuery(trimmed), filter: filter)
+    }
+
+    /// Every place on a page that matches `highlight`, in page coordinates.
+    func pageMarks(
+        for highlight: SearchHighlight,
+        page: Page,
+        strokes: [StrokeRecord],
+        assetsDirectory: URL?
+    ) async -> [PageMatchMark] {
+        let query = SearchQuery(highlight.query)
+        guard !query.isEmpty else { return [] }
+        var marks: [PageMatchMark] = []
+        if highlight.sources.contains(.handwriting), AppSettings.handwritingRecognitionEnabled {
+            let ink = await recognizer.inkBounds(matching: query.positiveTerms, in: strokes)
+            marks += ink.map { PageMatchMark(rect: $0) }
+        }
+        if highlight.sources.contains(.typedText) {
+            marks += PageMatchLocator.typedTextMarks(for: query, in: page)
+        }
+        if highlight.sources.contains(.pdf) {
+            // PDF text extraction is slow on big pages; keep it off the main actor.
+            marks += await Task.detached(priority: .userInitiated) {
+                PageMatchLocator.pdfMarks(for: query, in: page, assetsDirectory: assetsDirectory)
+            }.value
+        }
+        return marks
+    }
+
+    /// The words written with Apple Pencil in the search pad.
+    func recognizeQuery(in drawing: PKDrawing) async -> String? {
+        await recognizer.text(in: drawing)
     }
 
     /// True when a search that has not been superseded is waiting on the index.

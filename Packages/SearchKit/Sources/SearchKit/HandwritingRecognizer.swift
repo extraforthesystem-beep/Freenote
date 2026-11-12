@@ -38,3 +38,42 @@ public struct PencilKitRecognizer: HandwritingRecognizing {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
+
+extension PencilKitRecognizer {
+    /// Where on the page the ink reads as any of `terms`, in page coordinates.
+    /// Uses Apple's on-device ink search, so a match is found in the strokes
+    /// themselves rather than in the stored text.
+    public func inkBounds(matching terms: [String], in strokes: [StrokeRecord]) async -> [CGRect] {
+        guard !terms.isEmpty, !strokes.isEmpty else { return [] }
+        let drawing = StrokeCodec.drawing(from: strokes)
+        guard !drawing.strokes.isEmpty else { return [] }
+
+        let recognizer = PKStrokeRecognizer(preferredLanguages: preferredLanguages)
+        await recognizer.updateDrawing(drawing)
+        return await recognizer.bounds(matching: terms)
+    }
+
+    /// The text written in `drawing`, for queries written with Apple Pencil.
+    public func text(in drawing: PKDrawing) async -> String? {
+        guard !drawing.strokes.isEmpty else { return nil }
+        let recognizer = PKStrokeRecognizer(preferredLanguages: preferredLanguages)
+        await recognizer.updateDrawing(drawing)
+        let text = await recognizer.recognizedText()?
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return text?.isEmpty == false ? text : nil
+    }
+}
+
+extension PKStrokeRecognizer {
+    /// Runs on the recogniser's actor so the non-Sendable results never leave it.
+    fileprivate func bounds(matching terms: [String]) async -> [CGRect] {
+        var bounds: [CGRect] = []
+        for term in terms {
+            for result in await search(term) where !result.bounds.isNull && !result.bounds.isEmpty {
+                bounds.append(result.bounds)
+            }
+        }
+        return bounds
+    }
+}

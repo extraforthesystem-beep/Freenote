@@ -25,6 +25,28 @@ struct LibraryView: View {
     @State private var showsEmptyTrashAlert = false
     @State private var showsSettings = false
 
+    /// The library search's source filter; a change searches again.
+    private var searchSources: Binding<Set<PageTextSource>> {
+        Binding(
+            get: { model.search.filter.sources },
+            set: {
+                model.search.filter.sources = $0
+                model.refreshHandwritingSearch()
+            }
+        )
+    }
+
+    /// The library search's edit-date choice; a change searches again.
+    private var searchDateRange: Binding<SearchDateRange> {
+        Binding(
+            get: { model.search.dateRange },
+            set: {
+                model.search.dateRange = $0
+                model.refreshHandwritingSearch()
+            }
+        )
+    }
+
     private var locationSelection: Binding<AppModel.Location?> {
         Binding(
             get: { model.selectedLocation },
@@ -460,6 +482,19 @@ struct LibraryView: View {
                 }
                 .keyboardShortcut("f", modifiers: .command)
             }
+            #if os(iOS)
+            ToolbarItem(placement: .secondaryAction) {
+                PencilSearchButton(search: model.search) { query in
+                    model.searchText = query
+                    if !query.isEmpty { isSearchPresented = true }
+                }
+            }
+            #endif
+            if model.isSearching {
+                ToolbarItem(placement: .primaryAction) {
+                    SearchFilterMenu(sources: searchSources, dateRange: searchDateRange)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 sortMenu
             }
@@ -710,7 +745,16 @@ struct LibraryView: View {
                             HStack(alignment: .top, spacing: 10) {
                                 ForEach(sourceHits) { hit in
                                     SearchHitChip(hit: hit, pageLabel: pageLabel(for: hit)) {
-                                        Task { await model.open(group.notebook, pageID: hit.pageID) }
+                                        Task {
+                                            await model.open(
+                                                group.notebook,
+                                                pageID: hit.pageID,
+                                                highlighting: SearchHighlight(
+                                                    query: model.searchText,
+                                                    sources: model.search.filter.sources
+                                                )
+                                            )
+                                        }
                                     }
                                 }
                             }

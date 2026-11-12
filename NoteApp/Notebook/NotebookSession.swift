@@ -672,6 +672,8 @@ final class NotebookSession: Identifiable {
     /// Tape pieces held up so the ink under them shows. This is how the page is
     /// being looked at, not part of the page, so it is never saved.
     private(set) var revealedTapeIDs: Set<UUID> = []
+    /// A search whose matches the page marks; nil shows no marks.
+    var searchHighlight: SearchHighlight?
 
     /// Adds a sticky note of `stickyNoteSize` at the centre of the page, on the
     /// active layer.

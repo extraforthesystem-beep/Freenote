@@ -385,7 +385,11 @@ struct NotebookPane: View {
             )
         }
         .inspector(isPresented: $showsSearch) {
-            NotebookSearchPanel(notebookID: session.notebookID, search: model.search) { pageID in
+            NotebookSearchPanel(
+                notebookID: session.notebookID,
+                search: model.search,
+                onHighlight: { session.searchHighlight = $0 }
+            ) { pageID in
                 guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
                 Task { await session.goToPage(index) }
             }
@@ -1007,13 +1011,28 @@ struct NotebookPane: View {
                 onFingerTap: { point in
                     Task { await openPDFLink(at: point) }
                 },
-                onToolGestureEnded: { editor.didEndToolGesture() },
+                onToolGestureEnded: {
+                    editor.didEndToolGesture()
+                    // Writing on the page ends the search marks; they would go stale.
+                    if !showsSearch { session.searchHighlight = nil }
+                },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
                 eraseHighlighterOnly: eraserHighlighterOnly,
                 onStrokesChanged: { session.strokesChanged($0) }
             )
             .id(page.id)
+
+            if let highlight = session.searchHighlight {
+                SearchHighlightOverlay(
+                    highlight: highlight,
+                    page: page,
+                    strokes: session.visibleStrokes,
+                    assetsDirectory: session.assetsDirectory,
+                    search: model.search
+                )
+                .frame(width: page.width, height: page.height)
+            }
 
             TapeOverlay(
                 page: page,
@@ -1160,7 +1179,11 @@ struct NotebookPane: View {
                 undoOnTwoFingerDoubleTap: twoFingerDoubleTapUndo,
                 redoOnThreeFingerDoubleTap: threeFingerDoubleTapRedo,
                 pencilDoubleTapAction: pencilDoubleTapAction,
-                onToolGestureEnded: { editor.didEndToolGesture() },
+                onToolGestureEnded: {
+                    editor.didEndToolGesture()
+                    // Writing on the page ends the search marks; they would go stale.
+                    if !showsSearch { session.searchHighlight = nil }
+                },
                 holdToDrawShapes: holdToDrawShapes,
                 // The page's canvas answers the Pencil's double-tap; two
                 // answers would switch the tool and straight back.
