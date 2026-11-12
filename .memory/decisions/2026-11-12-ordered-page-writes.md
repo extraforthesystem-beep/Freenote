@@ -30,8 +30,12 @@ The notebook autosave was a 400 ms debounce, while element, layer and restore ed
 ## Graph links
 
 - [NOTEAPP project context](../context/project.md)
+- [Dark mode keeps white paper unless Dark Paper is on](2026-11-12-dark-mode-paper.md)
+- [GoodNotes parity build and page format v2](2026-11-12-goodnotes-parity-build.md)
 - [Page bookmarks stay app-side](2026-11-12-page-bookmarks-app-side.md)
 - [Page operations are pure NoteCore functions; app settings live in UserDefaults](2026-11-12-page-operations-and-settings.md)
+- [One live canvas per notebook; other pages are cached images](2026-11-12-page-scroll-live-canvas.md)
+- [PDF export is vector; import rewrites only when it must](2026-11-12-pdf-vector-export-and-import.md)
 - [Sticky notes and tape are page elements; search hits carry source and snippet](2026-11-12-sticky-tape-and-search-hits.md)
 - [Lazy Code Ladder](../meta/lazy-code.md)
 - [SRE Memory Routing](../meta/sre-routing.md)

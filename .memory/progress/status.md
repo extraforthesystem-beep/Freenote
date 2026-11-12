@@ -9,27 +9,30 @@ updated: 2026-11-12
 
 ## Done
 
-- Phase 0–2, parity packages, fix/ui-basics pass.
-- Goodnotes walkthrough: `research_notes/goodnotes-walkthrough/` (`WALKTHROUGH.md`, `BUILD-PLAN.md`).
-- Wave 1: sticky, tape, laser, Read Only, ruler, shortcuts, search snippets/inspector. ADR [[2026-11-12-sticky-tape-and-search-hits]].
-- Wave 3: Settings, page rotate/clear/delete-by-kind, page sizes, new-notebook defaults, page number. ADR [[2026-11-12-page-operations-and-settings]].
-- iPad + macOS build; all package tests pass; key paths checked in simulator.
+- Phase 0–2, parity, fix/ui-basics, waves 1+3; checkpoint `d07671b`.
+- Competitor research: `research_notes/competitors/` (uncommitted).
+- Toolbar QoL (`TOOLBAR-QOL-PLAN.md`): palettes, favourite pens, writing settings, eraser filter, hold-to-shape, scroll modes ([[2026-11-12-page-scroll-live-canvas]]), Zoom View.
+- PDF vector/editable export + full import ([[2026-11-12-pdf-vector-export-and-import]]).
+- Dark mode + Dark Paper ([[2026-11-12-dark-mode-paper]]).
+- Performance pass: `PERFORMANCE-NOTES.md`.
+- Advanced search `a354025` (parallel session).
+- Head `91c0b77`: iPad + macOS build; NoteCore 83, InkKit 106, SearchKit 41 tests pass.
 
 ## In progress / caution
 
-- `fix/ui-basics`, nothing committed since `5fb4841`.
-- Untested by hand: listed in `BUILD-PLAN.md` wave status lines.
-- More menu long; page actions need scrolling.
+- Nothing driven on a physical iPad: all Pencil/gesture behaviour unverified.
+- Not pushed; no PR. Finished agent worktrees still in `~/.t3/worktrees/NOTEAPP/` (removal needs user OK).
 
 ## Next
 
-1. User: commit waves 1+3, or start wave 2 (shape recognition, lasso actions, eraser filter).
-2. Physical iPad; Drive sync blocked on OAuth.
+1. Physical iPad pass: `TOOLBAR-QOL-PLAN.md` checklist + `PERFORMANCE-NOTES.md` profiling.
+2. User: push / PR `feat/toolbar-qol`; commit research notes or not.
+3. Later: custom lasso (recolour), ink stabilisation, Drive sync (OAuth).
 
 ## Handoff
 
-- Delegates: DeepSeek V4.1 Flash (OpenCode Go); Opus 5.5 for hard work; shared checkout, disjoint files.
-- Key files: `NoteApp/Notebook/{NotebookView,NotebookSession}.swift`, `NoteApp/Settings/`, `NoteCore/Model/{PageOperations,PaperSize}.swift`.
+- Delegates: DeepSeek V4.1 Flash (OpenCode Go) default, Opus 5.5 medium for hard work; worktree per package, main session reviews and merges.
+- Key paths: see `context/project.md`.
 
 <!-- harness-links:autogen -->
 ## Graph links

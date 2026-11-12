@@ -1,3 +1,10 @@
+---
+type: decision
+title: GoodNotes parity build and page format v2
+status: accepted
+updated: 2026-11-12
+---
+
 # ADR: GoodNotes parity build and page format v2
 
 - **Status:** accepted
@@ -22,3 +29,19 @@ The app already stored its own stroke records and one-layer pages. Matching Good
 - Sync/backup must understand element tombstones before document types ship.
 - A future restyle/Smart Ink feature can operate on `StrokeRecord` without changing the stored truth.
 - The highlighter layering limitation is explicit in `BUILD-STATUS.md`.
+
+<!-- harness-links:autogen -->
+## Graph links
+
+- [NOTEAPP project context](../context/project.md)
+- [Dark mode keeps white paper unless Dark Paper is on](2026-11-12-dark-mode-paper.md)
+- [Page saves go through one ordered write queue](2026-11-12-ordered-page-writes.md)
+- [Page bookmarks stay app-side](2026-11-12-page-bookmarks-app-side.md)
+- [Page operations are pure NoteCore functions; app settings live in UserDefaults](2026-11-12-page-operations-and-settings.md)
+- [One live canvas per notebook; other pages are cached images](2026-11-12-page-scroll-live-canvas.md)
+- [PDF export is vector; import rewrites only when it must](2026-11-12-pdf-vector-export-and-import.md)
+- [Sticky notes and tape are page elements; search hits carry source and snippet](2026-11-12-sticky-tape-and-search-hits.md)
+- [Lazy Code Ladder](../meta/lazy-code.md)
+- [SRE Memory Routing](../meta/sre-routing.md)
+- [NOTEAPP status](../progress/status.md)
+<!-- /harness-links:autogen -->
