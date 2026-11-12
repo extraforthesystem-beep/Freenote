@@ -6,9 +6,9 @@ import NoteCore
 import Observation
 
 enum PageDefaults {
-    static let width: Double = 595  // A4 at 72 dpi
-    static let height: Double = 842
-    static let blank = PageTemplate.blank
+    nonisolated static let width: Double = 595  // A4 at 72 dpi
+    nonisolated static let height: Double = 842
+    nonisolated static let blank = PageTemplate.blank
 }
 
 /// One open notebook: the current page, its save state and page operations.
@@ -296,6 +296,50 @@ final class NotebookSession: Identifiable {
             await loadPage(at: index)
         } catch {
             errorMessage = "A new page could not be added."
+        }
+    }
+
+    /// Inserts already-built pages — a PDF import — at `index`, writes them and
+    /// shows the first one. Returns how many were inserted.
+    ///
+    /// The current page is committed first so its newest ink is on disk before
+    /// the manifest is rewritten. Pages are written one file at a time and then
+    /// placed in the order, so a crash in between leaves orphan page files the
+    /// next open recovers rather than a manifest entry with no page.
+    @discardableResult
+    func insertPages(
+        _ pages: [Page],
+        at index: Int,
+        onProgress: ((_ written: Int, _ total: Int) -> Void)? = nil
+    ) async -> Int {
+        guard !pages.isEmpty else { return 0 }
+        guard await commitSucceeded() else {
+            errorMessage = "The pages could not be added because this page is not saved yet."
+            return 0
+        }
+        do {
+            for (written, page) in pages.enumerated() {
+                try await store.savePage(page, in: manifest.id)
+                onProgress?(written + 1, pages.count)
+            }
+            await reloadManifest()
+
+            var order = manifest.pageOrder
+            let insertedIDs = pages.map(\.id)
+            let insertedSet = Set(insertedIDs)
+            order.removeAll { insertedSet.contains($0) }
+            let position = min(max(0, index), order.count)
+            order.insert(contentsOf: insertedIDs, at: position)
+            try await store.reorderPages(in: manifest.id, order: order)
+            await reloadManifest()
+            await loadPage(at: position)
+            return pages.count
+        } catch {
+            // The page files that were written are on disk already and the
+            // manifest lists them, so show what is really there.
+            await reloadManifest()
+            errorMessage = "The pages could not be added to this notebook."
+            return 0
         }
     }
 

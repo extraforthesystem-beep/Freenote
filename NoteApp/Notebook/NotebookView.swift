@@ -159,6 +159,8 @@ struct NotebookPane: View {
     @State private var showsTextComposer = false
     @State private var showsElements = false
     @State private var showsImageImporter = false
+    @State private var showsPDFImporter = false
+    @State private var pdfImport: PDFImportFlow?
     @State private var showsLayers = false
     @State private var showsOutline = false
     @State private var showsSearch = false
@@ -416,6 +418,31 @@ struct NotebookPane: View {
             VersionHistoryView(session: session)
         }
         .fileImporter(
+            isPresented: $showsPDFImporter,
+            allowedContentTypes: [.pdf],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    // One runloop later, so the file picker has finished
+                    // dismissing before the import sheet arrives.
+                    Task { @MainActor in
+                        pdfImport = PDFImportFlow(
+                            model: model,
+                            url: url,
+                            destination: .insert(session)
+                        )
+                    }
+                }
+            case .failure(let error):
+                session.errorMessage = error.localizedDescription
+            }
+        }
+        .sheet(item: $pdfImport) { flow in
+            PDFImportSheet(flow: flow)
+        }
+        .fileImporter(
             isPresented: $showsImageImporter,
             allowedContentTypes: [.image],
             allowsMultipleSelection: false
@@ -541,6 +568,9 @@ struct NotebookPane: View {
             showsImageImporter = true
         }
         .disabled(session.page == nil)
+        Button("Insert PDF Pages…", systemImage: "doc.badge.plus") {
+            showsPDFImporter = true
+        }
         Menu("Shape", systemImage: "square.on.circle") {
             Button("Rectangle", systemImage: "rectangle") { addShape("rect") }
             Button("Ellipse", systemImage: "circle") { addShape("ellipse") }
