@@ -16,6 +16,7 @@ enum AppSettings {
         static let newNotebookOrientation = "noteapp.settings.newNotebookOrientation"
         static let newNotebookTemplateID = "noteapp.settings.newNotebookTemplateID"
         static let handwritingRecognitionEnabled = "noteapp.settings.handwritingRecognitionEnabled"
+        static let holdToDrawShapes = "noteapp.settings.holdToDrawShapes"
     }
 
     /// The catalog id of the plain blank template.
@@ -61,6 +62,12 @@ enum AppSettings {
 
     static var handwritingRecognitionEnabled: Bool {
         bool(Key.handwritingRecognitionEnabled, default: true)
+    }
+
+    // MARK: - Writing
+
+    static var holdToDrawShapes: Bool {
+        bool(Key.holdToDrawShapes, default: true)
     }
 
     // MARK: - Reading

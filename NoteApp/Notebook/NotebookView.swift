@@ -147,6 +147,7 @@ struct NotebookPane: View {
     @State private var showsGoToPage = false
     @State private var showsClearPageConfirmation = false
     @AppStorage(AppSettings.Key.showPageNumber) private var showsPageNumber = true
+    @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
     @State private var showsCoverPicker = false
     @State private var showsTextComposer = false
     @State private var showsElements = false
@@ -915,6 +916,7 @@ struct NotebookPane: View {
                     Task { await openPDFLink(at: point) }
                 },
                 onToolGestureEnded: { editor.didEndToolGesture() },
+                holdToDrawShapes: holdToDrawShapes,
                 onStrokesChanged: { session.strokesChanged($0) }
             )
             .id(page.id)

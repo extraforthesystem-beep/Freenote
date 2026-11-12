@@ -115,6 +115,9 @@ public struct PencilCanvasView: UIViewRepresentable {
     public var onFingerTap: ((CGPoint) -> Void)?
     /// A pencil or finger lift after using the current tool.
     public var onToolGestureEnded: (() -> Void)?
+    /// Draw a stroke, keep the Pencil still for a moment, then lift: the
+    /// stroke becomes a clean line or shape when it matches one.
+    public var holdToDrawShapes: Bool
     public var onStrokesChanged: ([StrokeRecord]) -> Void
 
     public init(
@@ -128,6 +131,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         controller: PencilCanvasController? = nil,
         onFingerTap: ((CGPoint) -> Void)? = nil,
         onToolGestureEnded: (() -> Void)? = nil,
+        holdToDrawShapes: Bool = true,
         onStrokesChanged: @escaping ([StrokeRecord]) -> Void
     ) {
         self.strokes = strokes
@@ -140,6 +144,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.controller = controller
         self.onFingerTap = onFingerTap
         self.onToolGestureEnded = onToolGestureEnded
+        self.holdToDrawShapes = holdToDrawShapes
         self.onStrokesChanged = onStrokesChanged
     }
 
@@ -188,6 +193,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         tap.isEnabled = mode == .links && onFingerTap != nil
         canvas.addGestureRecognizer(tap)
         context.coordinator.tapRecognizer = tap
+        context.coordinator.installHoldObserver(on: canvas)
 
         context.coordinator.apply(strokes, to: canvas)
         return canvas
@@ -229,6 +235,18 @@ public struct PencilCanvasView: UIViewRepresentable {
         private var syncedRecords: [UUID: RecordSignature] = [:]
         private let converter = IncrementalStrokeConverter()
 
+        // Hold to straighten (see HoldToShape.swift).
+        weak var holdObserver: UIGestureRecognizer?
+        var canvasFeedback: UICanvasFeedbackGenerator?
+        /// The current touch paused before lifting.
+        var holdDetected = false
+        /// Strokes on the canvas when the current touch began.
+        var strokeIDsAtTouchBegan: Set<UUID> = []
+        /// A held stroke waiting to be swapped for its shape.
+        var pendingShape: PendingShapeReplacement?
+        /// Set while a shape swap writes the drawing, so it is not handled twice.
+        var isApplyingShape = false
+
         init(parent: PencilCanvasView) {
             self.parent = parent
         }
@@ -243,6 +261,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         ///   pen ink as soon as the app has stored it.
         /// - Anything else: the drawing is rebuilt from the records.
         func apply(_ strokes: [StrokeRecord], to canvas: InkCanvasView) {
+            // A held stroke is on the canvas but not yet reported; rebuilding
+            // now would drop it. The swap reports it in a moment.
+            guard pendingShape == nil else { return }
             for record in strokes {
                 layerIDs[record.id] = record.layerID
             }
@@ -291,7 +312,12 @@ public struct PencilCanvasView: UIViewRepresentable {
         }
 
         public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            guard !isApplyingInput else { return }
+            guard !isApplyingInput, !isApplyingShape else { return }
+            if captureHeldStroke(in: canvasView) { return }
+            reportDrawingChange(canvasView)
+        }
+
+        func reportDrawingChange(_ canvasView: PKCanvasView) {
             let activeLayerID = parent.activeLayerID
             // PencilKit can notify a moment *after* a programmatic change, so a
             // pending guard flag alone is not enough: the converter also
