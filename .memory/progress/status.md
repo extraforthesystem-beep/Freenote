@@ -1,22 +1,42 @@
+---
+type: progress
+title: NOTEAPP status
+status: active
+updated: 2026-11-12
+---
+
 # Status — 2026-11-12
 
-## Done and verified
+## Done
 
-- Phase 0 scaffold and S1 stroke experiment. H1 (own stroke record is truth) confirmed visually lossless. Simulator installed.
-- NoteCore: model, page format, atomic library store, cover field, asset folder. 34 tests.
-- InkKit: eight pens, stroke codec, page renderer with templates, PDF pages, images, text boxes and shapes, PencilKit canvas with undo, stroke/pixel eraser and lasso. 20 tests.
-- SearchKit: PencilKit recogniser wrapper, ink+typed-text fingerprint, persisted cache index, case/diacritic-insensitive search. 12 tests.
-- App: library, folders, tags, favourites, trash, covers; notebook pages, templates, thumbnails, autosave; eight pens with per-pen presets; erasers; lasso; undo/redo; page duplicate/reorder/delete; PDF import; text boxes, images and shapes; element list/edit; handwriting + typed-text search with page jumping; PDF export including templates and elements.
+- Phase 0 scaffold, simulator, S1 stroke round trip (H1 confirmed visually lossless).
+- NoteCore: model, page format, atomic store. 34 tests.
+- InkKit: eight pens, codec, template/element/PDF renderer, canvas, erasers, lasso. 20 tests.
+- SearchKit: handwriting + typed-text index/search. 12 tests.
+- App: library, folders, tags, trash, covers; pages, templates, thumbnails, autosave; PDF import; text/image/shape elements; PDF export; search with page jumping.
+- This session: notebook tabs, split view, page bookmarks, PDF link taps with a hand/link mode. External link verified opening Safari; internal GoTo not verified with a valid test PDF.
+- Source material folded in: `PLAN.md`, `reports/iPad note app feature plan.md`, Claude memory notes (all already reflected above).
 
-## Verified on the iPad simulator
+## In progress / caution
 
-Draw, erase, undo, page navigation, templates, covers, PDF import with annotation, image and text elements, search hit opening the right page, PDF export (upright, with elements).
+- Another active T3 thread is implementing GoodNotes parity in the same tree (highlighter, layers, outline, zoom, audio, study, AI, whiteboard). Its work and this session's tab/bookmark/split/link work are uncommitted; last commit is `5fb4841`. Do not revert or mass-commit without coordination. Source snapshot: `/private/var/folders/kf/g90yn04s77vg8_sjmtt7zrmm0000gn/T/opencode/noteapp-snapshot-1605`.
 
-## Still open
+## Next
 
-- Physical iPad: palm rejection, Pencil gestures, lasso move/copy, signing (P0.3/P1.4/P1.7).
-- Phase 1 P1.8 live-canvas window ±1; P1.10 tabs, bookmarks, split view.
-- Phase 2 P2.2 PDF link taps under the ink canvas.
-- Phase 3 Google Drive: needs the user's Google Cloud project, OAuth client and approval.
-- Phase 4 Mac annotation with PaperKit; Mac read-only build is shared but not run.
-- Phase 5 audio/transcript/math/AI; Phase 6 custom Metal ink engine.
+1. Let the parity thread finish; verify iOS/macOS builds and tests, then commit the combined tree.
+2. Physical iPad: signing, palm rejection, Pencil gestures, lasso move/copy.
+3. Phase 3 Drive: blocked on the user's Google Cloud OAuth client and approval.
+4. Mac annotation (PaperKit); Phase 5 audio/math/AI; Phase 6 custom engine.
+
+## Handoff
+
+- Key files this session: `NoteApp/Notebook/NotebookView.swift`, `AppModel.swift`, `PageBookmarks.swift`, `PDFLinkHandler.swift`, `Packages/InkKit/Sources/InkKit/PencilCanvasView.swift`.
+- The tree is shared with the parity thread; check `git status` and mtimes before editing.
+
+<!-- harness-links:autogen -->
+## Graph links
+
+- [NOTEAPP project context](../context/project.md)
+- [Lazy Code Ladder](../meta/lazy-code.md)
+- [SRE Memory Routing](../meta/sre-routing.md)
+<!-- /harness-links:autogen -->
