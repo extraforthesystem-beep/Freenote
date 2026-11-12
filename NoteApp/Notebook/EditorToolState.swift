@@ -87,6 +87,9 @@ final class EditorToolState {
     /// Reading only: the canvas takes no ink and the tools are disabled. Per
     /// open notebook, in memory only.
     var isReadOnly = false
+    /// Zoom View: a magnified band of the page to write in, in a panel below
+    /// the page. Per open notebook, in memory only; hidden in Read Only.
+    var isZoomViewShown = false
     /// The tool that was active before the current one, so erasing can go back.
     private(set) var previousTool: EditorTool = .pen
     private(set) var penStyle: PenStyle

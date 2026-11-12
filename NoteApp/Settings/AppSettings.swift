@@ -25,6 +25,9 @@ enum AppSettings {
         static let pageScrollMode = "noteapp.settings.pageScrollMode"
         static let rememberLastTool = "noteapp.settings.rememberLastTool"
         static let hideStatusBar = "noteapp.settings.hideStatusBar"
+        static let zoomAutoAdvance = "noteapp.settings.zoomAutoAdvance"
+        static let zoomMagnification = "noteapp.settings.zoomMagnification"
+        static let zoomPanelFraction = "noteapp.settings.zoomPanelFraction"
     }
 
     /// The catalog id of the plain blank template.
@@ -118,6 +121,14 @@ enum AppSettings {
     /// When on, the notebook editor hides the status bar; the library keeps it.
     static var hideStatusBarInNotebooks: Bool {
         bool(Key.hideStatusBar, default: false)
+    }
+
+    // MARK: - Zoom View
+
+    /// A stroke that ends in the right part of the Zoom View panel moves the
+    /// band on when the Pencil lifts.
+    static var zoomAutoAdvance: Bool {
+        bool(Key.zoomAutoAdvance, default: true)
     }
 
     // MARK: - Reading
