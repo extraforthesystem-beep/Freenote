@@ -2,6 +2,7 @@
 import InkKit
 import NoteCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The editor's single toolbar row.
 ///
@@ -25,6 +26,10 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     @State private var showsPalette = false
     @State private var showsFavoritePens = false
     @State private var showsZoomOptions = false
+    /// The favourite slot the palette is replacing, when one is being edited.
+    @State private var editingFavorite: Int?
+    /// The favourite a dragged colour is hovering over, for the drop ring.
+    @State private var dropTarget: Int?
 
     private enum ToolPopover: Hashable {
         case pen, highlighter, eraser, laser
@@ -377,7 +382,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     }
 
     /// The active ink tool's eight favourites, a free slot while there are
-    /// fewer than eight, then the palette button.
+    /// fewer than eight, then the palette button. Favourites can be dragged
+    /// onto one another to reorder; the same move has VoiceOver actions.
     private var swatches: some View {
         let favorites = editor.favoriteColors
         return HStack(spacing: 0) {
@@ -389,10 +395,22 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
             }
             paletteButton
         }
+        .popover(isPresented: editingFavoriteBinding) {
+            ColorPalettePopover(editor: editor, replacingFavorite: editingFavorite)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var editingFavoriteBinding: Binding<Bool> {
+        Binding(
+            get: { editingFavorite != nil },
+            set: { if !$0 { editingFavorite = nil } }
+        )
     }
 
     private func favoriteSwatch(_ color: RGBAColor, index: Int) -> some View {
         let isSelected = editor.tool.drawsInk && editor.isCurrentColor(color)
+        let isDropTarget = dropTarget == index
         return Button {
             editor.setColor(color)
         } label: {
@@ -405,11 +423,24 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
                     Circle()
                         .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
                 }
+                .overlay {
+                    if isDropTarget {
+                        Circle()
+                            .strokeBorder(
+                                Color.accentColor.opacity(0.9),
+                                style: StrokeStyle(lineWidth: 2, dash: [3, 2])
+                            )
+                    }
+                }
                 .frame(width: 40, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button("Edit…", systemImage: "slider.horizontal.3") {
+                showsPalette = false
+                editingFavorite = index
+            }
             Button("Replace with Current Colour", systemImage: "arrow.triangle.2.circlepath") {
                 editor.replaceFavoriteColor(at: index, with: editor.inkTool.color)
             }
@@ -417,9 +448,39 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
                 editor.removeFavoriteColor(at: index)
             }
         }
+        .draggable(FavoriteColorSlot(index: index)) {
+            Circle()
+                .fill(Color(color))
+                .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
+                .frame(width: 34, height: 34)
+                .padding(5)
+        }
+        .dropDestination(for: FavoriteColorSlot.self) { slots, _ in
+            guard let source = slots.first?.index, source != index else { return false }
+            dropTarget = nil
+            withAnimation(.easeInOut(duration: 0.15)) {
+                editor.moveFavoriteColor(from: source, to: index)
+            }
+            return true
+        } isTargeted: { isTargeted in
+            if isTargeted {
+                dropTarget = index
+            } else if dropTarget == index {
+                dropTarget = nil
+            }
+        }
         .accessibilityLabel("\(editor.colorName(for: color)), favourite \(index + 1)")
-        .accessibilityHint("Double-tap to use this colour. Touch and hold to replace or remove it.")
+        .accessibilityHint(
+            "Double-tap to use this colour. Touch and hold to edit, replace or remove it, "
+                + "or drag it onto another favourite to move it."
+        )
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAction(named: "Move Left") {
+            editor.moveFavoriteColor(from: index, to: index - 1)
+        }
+        .accessibilityAction(named: "Move Right") {
+            editor.moveFavoriteColor(from: index, to: index + 1)
+        }
     }
 
     /// Shown once a favourite is removed: adds the current colour back.
@@ -802,6 +863,22 @@ private struct ToolbarDivider: View {
         Divider()
             .frame(height: 24)
             .padding(.horizontal, 4)
+    }
+}
+
+/// A favourite colour's slot in the toolbar, carried while its swatch is
+/// dragged. In-app only, so the type is never handed to another app.
+nonisolated private struct FavoriteColorSlot: Codable, Transferable {
+    var index: Int
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .noteAppFavoriteColorSlot)
+    }
+}
+
+nonisolated private extension UTType {
+    static var noteAppFavoriteColorSlot: UTType {
+        UTType(exportedAs: "com.noteapp.favorite-color-slot")
     }
 }
 #endif

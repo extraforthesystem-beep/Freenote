@@ -4,9 +4,13 @@ import SwiftUI
 
 /// The colour palette: 64 presets, the last colours used, a hex field and the
 /// system picker for anything else. Picking a colour applies it to the active
-/// ink tool and closes the popover.
+/// ink tool and closes the popover. Opened from a favourite's Edit… command it
+/// replaces that favourite slot instead.
 struct ColorPalettePopover: View {
     @Bindable var editor: EditorToolState
+    /// The favourite slot this palette replaces, when one is being edited.
+    var replacingFavorite: Int? = nil
+
     @Environment(\.dismiss) private var dismiss
 
     @State private var hexText = ""
@@ -27,6 +31,31 @@ struct ColorPalettePopover: View {
         editor.activeInkTool == .highlighter ? "Highlighter" : "Pen"
     }
 
+    /// The slot being edited, or nil when the palette sets the ink colour.
+    private var favoriteIndex: Int? {
+        guard let index = replacingFavorite,
+              editor.favoriteColors.colors.indices.contains(index)
+        else { return nil }
+        return index
+    }
+
+    /// The colour the header shows and the grid rings: the favourite being
+    /// edited, otherwise the ink colour.
+    private var shownColor: RGBAColor {
+        guard let index = favoriteIndex else { return editor.inkTool.color }
+        return editor.favoriteColors.colors[index]
+    }
+
+    private func isShown(_ color: RGBAColor) -> Bool {
+        guard favoriteIndex != nil else {
+            return editor.tool.drawsInk && editor.isCurrentColor(color)
+        }
+        let shown = shownColor
+        return abs(shown.r - color.r) < 0.01
+            && abs(shown.g - color.g) < 0.01
+            && abs(shown.b - color.b) < 0.01
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -40,26 +69,33 @@ struct ColorPalettePopover: View {
         .padding(16)
         .frame(width: 340)
         .onAppear {
-            hexText = ColorHex.string(from: editor.inkTool.color)
+            hexText = ColorHex.string(from: shownColor)
         }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Colour")
+                Text(favoriteIndex == nil ? "Colour" : "Edit Favourite")
                     .font(.headline)
-                Text("\(toolName), \(editor.colorName(for: editor.inkTool.color))")
+                Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
             Circle()
-                .fill(Color(editor.inkTool.color))
+                .fill(Color(shownColor))
                 .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
                 .frame(width: 26, height: 26)
                 .accessibilityHidden(true)
         }
+    }
+
+    private var subtitle: String {
+        guard let index = favoriteIndex else {
+            return "\(toolName), \(editor.colorName(for: shownColor))"
+        }
+        return "\(toolName) favourite \(index + 1), \(editor.colorName(for: shownColor))"
     }
 
     private var recentRow: some View {
@@ -81,7 +117,7 @@ struct ColorPalettePopover: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Recent \(editor.colorName(for: color)), \(index + 1)")
-                    .accessibilityAddTraits(editor.isCurrentColor(color) && editor.tool.drawsInk ? .isSelected : [])
+                    .accessibilityAddTraits(isShown(color) ? .isSelected : [])
                 }
             }
         }
@@ -90,7 +126,7 @@ struct ColorPalettePopover: View {
     private var presetGrid: some View {
         LazyVGrid(columns: columns, spacing: swatchSpacing) {
             ForEach(ColorPalette.presets, id: \.self) { color in
-                let isSelected = editor.tool.drawsInk && editor.isCurrentColor(color)
+                let isSelected = isShown(color)
                 Button {
                     apply(color)
                 } label: {
@@ -126,7 +162,7 @@ struct ColorPalettePopover: View {
                     }
                     .onSubmit {
                         if ColorHex.color(from: hexText) == nil {
-                            hexText = ColorHex.string(from: editor.inkTool.color)
+                            hexText = ColorHex.string(from: shownColor)
                             hexIsInvalid = false
                         }
                         isHexFocused = false
@@ -153,10 +189,10 @@ struct ColorPalettePopover: View {
         ColorPicker(
             "Custom Colour",
             selection: Binding(
-                get: { Color(editor.inkTool.color) },
+                get: { Color(shownColor) },
                 set: { color in
-                    editor.setColor(RGBAColor(color))
-                    hexText = ColorHex.string(from: editor.inkTool.color)
+                    select(RGBAColor(color))
+                    hexText = ColorHex.string(from: shownColor)
                     hexIsInvalid = false
                 }
             ),
@@ -166,8 +202,17 @@ struct ColorPalettePopover: View {
     }
 
     private func apply(_ color: RGBAColor) {
-        editor.setColor(color)
+        select(color)
         dismissPopover()
+    }
+
+    /// A favourite slot is replaced in place; otherwise the ink colour changes.
+    private func select(_ color: RGBAColor) {
+        if let index = favoriteIndex {
+            editor.replaceFavoriteColor(at: index, with: color)
+        } else {
+            editor.setColor(color)
+        }
     }
 
     private func applyHex(_ text: String) {
@@ -178,7 +223,7 @@ struct ColorPalettePopover: View {
             return
         }
         hexIsInvalid = false
-        editor.setColor(color)
+        select(color)
     }
 
     private func dismissPopover() {

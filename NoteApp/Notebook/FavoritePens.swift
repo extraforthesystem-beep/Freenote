@@ -82,6 +82,12 @@ final class FavoritePens {
         save()
     }
 
+    /// Reorders the saved pens, e.g. from the popover's Edit mode.
+    func move(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        pens.move(fromOffsets: offsets, toOffset: destination)
+        save()
+    }
+
     /// Writes to `UserDefaults` at once: the list only changes on a tap.
     func save() {
         guard let data = try? JSONEncoder().encode(pens) else { return }
@@ -114,15 +120,16 @@ extension EditorToolState {
 }
 
 #if os(iOS)
-/// The saved-pen list: tap to recall, swipe or touch and hold to delete.
+/// The saved-pen list: tap to recall, swipe or touch and hold to delete, Edit
+/// to reorder with drag handles.
 struct FavoritePensPopover: View {
     @Bindable var editor: EditorToolState
     @Environment(\.dismiss) private var dismiss
+    @State private var editMode: EditMode = .inactive
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Favourite Pens")
-                .font(.headline)
+            header
             if editor.favoritePens.pens.isEmpty {
                 emptyState
             } else {
@@ -148,6 +155,29 @@ struct FavoritePensPopover: View {
         .frame(width: 300)
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Favourite Pens")
+                .font(.headline)
+            Spacer(minLength: 0)
+            if !editor.favoritePens.pens.isEmpty {
+                Button(editMode.isEditing ? "Done" : "Edit") {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        editMode = editMode.isEditing ? .inactive : .active
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.subheadline)
+                .foregroundStyle(Color.accentColor)
+                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                .contentShape(Rectangle())
+                .accessibilityHint(
+                    editMode.isEditing ? "Hides the drag handles" : "Shows drag handles to reorder the saved pens"
+                )
+            }
+        }
+    }
+
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("No saved pens yet.")
@@ -165,6 +195,8 @@ struct FavoritePensPopover: View {
         return List {
             ForEach(editor.favoritePens.pens) { pen in
                 Button {
+                    // In Edit mode a tap starts a drag, it never recalls.
+                    guard !editMode.isEditing else { return }
                     editor.recallPen(pen)
                     dismiss()
                 } label: {
@@ -183,9 +215,13 @@ struct FavoritePensPopover: View {
                     }
                 }
             }
+            .onMove { offsets, destination in
+                editor.favoritePens.move(fromOffsets: offsets, toOffset: destination)
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .environment(\.editMode, $editMode)
         .frame(height: CGFloat(editor.favoritePens.pens.count) * rowHeight + 8)
     }
 

@@ -340,6 +340,16 @@ final class EditorToolState {
         }
         guard favorites.replace(at: target, with: color) else { return }
         setFavorites(favorites)
+        // The palette shows the new colour in its Recent row straight away.
+        recentColors.record(color)
+    }
+
+    /// Moves a favourite to another slot, shifting the ones it passes. Dragging
+    /// a swatch and the VoiceOver Move Left/Right actions both come here.
+    func moveFavoriteColor(from source: Int, to destination: Int) {
+        var favorites = favoriteColors
+        guard favorites.move(from: source, to: destination) else { return }
+        setFavorites(favorites)
     }
 
     /// Leaves the seven remaining favourites in place; the toolbar then shows
