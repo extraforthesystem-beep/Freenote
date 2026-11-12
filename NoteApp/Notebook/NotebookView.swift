@@ -164,6 +164,11 @@ struct NotebookPane: View {
     #if os(iOS)
     @State private var controller = PencilCanvasController()
     @State private var zoomController = PageZoomController()
+    @AppStorage(AppSettings.Key.drawWithFinger) private var drawWithFinger = false
+    @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
+    @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
+    @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
+    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
     #endif
 
     var body: some View {
@@ -177,6 +182,7 @@ struct NotebookPane: View {
                 recordingLabel: elapsedLabel,
                 onBack: { model.showLibrary() },
                 onStopRecording: { Task { await session.audio.stopRecording() } },
+                onClearPage: { showsClearPageConfirmation = true },
                 insertMenu: { insertMenuItems },
                 moreMenu: { moreMenuItems }
             )
@@ -911,10 +917,16 @@ struct NotebookPane: View {
                 isEditable: canvasIsEditable,
                 isRulerActive: isRulerActive,
                 controller: controller,
+                drawsWithFinger: drawWithFinger,
+                undoOnTwoFingerDoubleTap: twoFingerDoubleTapUndo,
+                redoOnThreeFingerDoubleTap: threeFingerDoubleTapRedo,
+                pencilDoubleTapAction: pencilDoubleTapAction,
                 onFingerTap: { point in
                     Task { await openPDFLink(at: point) }
                 },
                 onToolGestureEnded: { editor.didEndToolGesture() },
+                onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
+                eraseHighlighterOnly: eraserHighlighterOnly,
                 onStrokesChanged: { session.strokesChanged($0) }
             )
             .id(page.id)

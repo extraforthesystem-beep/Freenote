@@ -16,6 +16,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     let recordingLabel: String
     let onBack: () -> Void
     let onStopRecording: () -> Void
+    /// Opens the notebook's Clear Page confirmation.
+    let onClearPage: () -> Void
     @ViewBuilder let insertMenu: () -> InsertMenu
     @ViewBuilder let moreMenu: () -> MoreMenu
 
@@ -47,6 +49,9 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         .frame(height: 52)
         .background(.bar)
         .background(alignment: .topLeading) { toolShortcuts }
+        .onChange(of: editor.paletteRequestID) {
+            popover = .pen
+        }
     }
 
     /// One key per tool, so the tools work with a hardware keyboard. The
@@ -278,7 +283,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
             editor.eraserKind == .stroke ? "Stroke Eraser" : "Pixel Eraser",
             systemImage: editor.eraserKind == .stroke ? "eraser" : "eraser.line.dashed",
             isSelected: editor.tool == .eraser,
-            help: "Eraser (E): tap again for size and Auto-Deselect"
+            help: "Eraser (E): tap again for size, filter and Auto-Deselect"
         ) {
             select(.eraser, popover: .eraser)
         }
@@ -287,8 +292,11 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
             Button("Pixel Eraser", systemImage: "eraser.line.dashed") { editor.setEraser(kind: .pixel) }
         }
         .popover(isPresented: popoverBinding(.eraser)) {
-            EraserSettingsPopover(editor: editor)
-                .presentationCompactAdaptation(.popover)
+            EraserSettingsPopover(editor: editor) {
+                popover = nil
+                onClearPage()
+            }
+            .presentationCompactAdaptation(.popover)
         }
     }
 
@@ -480,7 +488,9 @@ private struct WidthSlider: View {
 
 private struct EraserSettingsPopover: View {
     @Bindable var editor: EditorToolState
+    let onClearPage: () -> Void
     @AppStorage(EditorToolState.eraserAutoDeselectKey) private var autoDeselect = false
+    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var highlighterOnly = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -521,6 +531,16 @@ private struct EraserSettingsPopover: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 4) {
+                Toggle("Erase Highlighter Only", isOn: $highlighterOnly)
+                    .font(.subheadline)
+                    .disabled(editor.eraserKind != .stroke)
+                    .accessibilityHint("Only highlighter strokes disappear when erasing")
+                Text("Leaves pen ink in place. Works with the whole-stroke eraser.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
                 Toggle("Auto-Deselect", isOn: $autoDeselect)
                     .font(.subheadline)
                     .accessibilityHint("Switches back to the previous tool after erasing")
@@ -528,6 +548,11 @@ private struct EraserSettingsPopover: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Divider()
+            Button("Clear Page…", systemImage: "trash", role: .destructive) {
+                onClearPage()
+            }
+            .font(.subheadline)
         }
         .padding(16)
         .frame(width: 280)

@@ -110,11 +110,26 @@ public struct PencilCanvasView: UIViewRepresentable {
     /// PencilKit's on-canvas ruler. The page shows it while this is true.
     public var isRulerActive: Bool
     public var controller: PencilCanvasController?
+    /// When on, a finger draws as well as the Pencil; when off, one finger
+    /// scrolls and only the Pencil inks. The simulator always draws with any
+    /// input, because a mouse cannot produce Pencil touches.
+    public var drawsWithFinger: Bool
+    /// Two-finger double-tap undoes, three-finger double-tap redoes.
+    public var undoOnTwoFingerDoubleTap: Bool
+    public var redoOnThreeFingerDoubleTap: Bool
+    /// What the Apple Pencil's double-tap does; `.system` follows the user's
+    /// Apple Pencil preference. The canvas resolves it and reports the result.
+    public var pencilDoubleTapAction: PencilDoubleTapAction
     /// A tap in page points, finger or Pencil. Only called in `.links` mode;
     /// in every other mode taps belong to drawing and are not reported.
     public var onFingerTap: ((CGPoint) -> Void)?
     /// A pencil or finger lift after using the current tool.
     public var onToolGestureEnded: (() -> Void)?
+    /// A resolved Pencil double-tap action: never `.system`.
+    public var onPencilDoubleTap: ((PencilDoubleTapAction) -> Void)?
+    /// Only stroke erasing uses this: highlighter strokes disappear, pen ink
+    /// stays where it is.
+    public var eraseHighlighterOnly: Bool
     public var onStrokesChanged: ([StrokeRecord]) -> Void
 
     public init(
@@ -126,8 +141,14 @@ public struct PencilCanvasView: UIViewRepresentable {
         isEditable: Bool = true,
         isRulerActive: Bool = false,
         controller: PencilCanvasController? = nil,
+        drawsWithFinger: Bool = false,
+        undoOnTwoFingerDoubleTap: Bool = true,
+        redoOnThreeFingerDoubleTap: Bool = true,
+        pencilDoubleTapAction: PencilDoubleTapAction = .system,
         onFingerTap: ((CGPoint) -> Void)? = nil,
         onToolGestureEnded: (() -> Void)? = nil,
+        onPencilDoubleTap: ((PencilDoubleTapAction) -> Void)? = nil,
+        eraseHighlighterOnly: Bool = false,
         onStrokesChanged: @escaping ([StrokeRecord]) -> Void
     ) {
         self.strokes = strokes
@@ -138,8 +159,14 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.isEditable = isEditable
         self.isRulerActive = isRulerActive
         self.controller = controller
+        self.drawsWithFinger = drawsWithFinger
+        self.undoOnTwoFingerDoubleTap = undoOnTwoFingerDoubleTap
+        self.redoOnThreeFingerDoubleTap = redoOnThreeFingerDoubleTap
+        self.pencilDoubleTapAction = pencilDoubleTapAction
         self.onFingerTap = onFingerTap
         self.onToolGestureEnded = onToolGestureEnded
+        self.onPencilDoubleTap = onPencilDoubleTap
+        self.eraseHighlighterOnly = eraseHighlighterOnly
         self.onStrokesChanged = onStrokesChanged
     }
 
@@ -164,12 +191,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.alwaysBounceHorizontal = false
         canvas.contentSize = pageSize
         canvas.pageSize = pageSize
-        #if targetEnvironment(simulator)
-        // A mouse cannot produce Pencil input, so the simulator demo needs this.
-        canvas.drawingPolicy = .anyInput
-        #else
-        canvas.drawingPolicy = .pencilOnly
-        #endif
+        applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
@@ -189,8 +211,55 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.addGestureRecognizer(tap)
         context.coordinator.tapRecognizer = tap
 
+        let undo = doubleTap(
+            touches: 2,
+            action: #selector(Coordinator.handleUndoDoubleTap(_:)),
+            coordinator: context.coordinator
+        )
+        undo.isEnabled = undoOnTwoFingerDoubleTap
+        canvas.addGestureRecognizer(undo)
+        context.coordinator.undoDoubleTap = undo
+
+        let redo = doubleTap(
+            touches: 3,
+            action: #selector(Coordinator.handleRedoDoubleTap(_:)),
+            coordinator: context.coordinator
+        )
+        redo.isEnabled = redoOnThreeFingerDoubleTap
+        canvas.addGestureRecognizer(redo)
+        context.coordinator.redoDoubleTap = redo
+
+        let pencil = UIPencilInteraction()
+        pencil.delegate = context.coordinator
+        canvas.addInteraction(pencil)
+
         context.coordinator.apply(strokes, to: canvas)
         return canvas
+    }
+
+    /// A finger-only double-tap. It runs alongside the page host's pinch and
+    /// pan gestures, so a two-finger double-tap does not stop a two-finger pan.
+    private func doubleTap(
+        touches: Int,
+        action: Selector,
+        coordinator: Coordinator
+    ) -> UITapGestureRecognizer {
+        let tap = UITapGestureRecognizer(target: coordinator, action: action)
+        tap.numberOfTapsRequired = 2
+        tap.numberOfTouchesRequired = touches
+        tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        tap.cancelsTouchesInView = false
+        tap.delegate = coordinator
+        return tap
+    }
+
+    private func applyDrawingPolicy(to canvas: InkCanvasView) {
+        #if targetEnvironment(simulator)
+        // A mouse cannot produce Pencil input, so the simulator demo needs this.
+        canvas.drawingPolicy = .anyInput
+        #else
+        canvas.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
+        #endif
     }
 
     public func updateUIView(_ canvas: InkCanvasView, context: Context) {
@@ -200,10 +269,13 @@ public struct PencilCanvasView: UIViewRepresentable {
         controller?.canvas = canvas
 
         canvas.isUserInteractionEnabled = isEditable
+        applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
         coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
+        coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap
+        coordinator.redoDoubleTap?.isEnabled = redoOnThreeFingerDoubleTap
         canvas.contentSize = pageSize
         if canvas.pageSize != pageSize {
             canvas.pageSize = pageSize
@@ -214,10 +286,12 @@ public struct PencilCanvasView: UIViewRepresentable {
     }
 
     @MainActor
-    public final class Coordinator: NSObject, PKCanvasViewDelegate {
+    public final class Coordinator: NSObject, PKCanvasViewDelegate, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
         var parent: PencilCanvasView
         weak var canvas: InkCanvasView?
         weak var tapRecognizer: UITapGestureRecognizer?
+        weak var undoDoubleTap: UITapGestureRecognizer?
+        weak var redoDoubleTap: UITapGestureRecognizer?
 
         /// Set while the SwiftUI input is being pushed into the canvas, so the
         /// change is not echoed straight back.
@@ -228,6 +302,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         /// signature. It tells an edit from the app apart from an echo.
         private var syncedRecords: [UUID: RecordSignature] = [:]
         private let converter = IncrementalStrokeConverter()
+        /// The canvas strokes as last set or seen. The highlighter-only eraser
+        /// puts the strokes it keeps back at their old index from here.
+        private var baselineStrokes: [PKStroke] = []
 
         init(parent: PencilCanvasView) {
             self.parent = parent
@@ -265,6 +342,7 @@ public struct PencilCanvasView: UIViewRepresentable {
             isApplyingInput = true
             canvas.drawing = drawing
             isApplyingInput = false
+            baselineStrokes = drawing.strokes
             converter.seed(strokes: drawing.strokes, records: strokes)
             syncedRecords = Dictionary(
                 strokes.map { ($0.id, RecordSignature($0)) },
@@ -290,8 +368,57 @@ public struct PencilCanvasView: UIViewRepresentable {
             parent.onToolGestureEnded?()
         }
 
+        // MARK: - Finger double-taps
+
+        @objc func handleUndoDoubleTap(_ gesture: UITapGestureRecognizer) {
+            canvas?.undoManager?.undo()
+        }
+
+        @objc func handleRedoDoubleTap(_ gesture: UITapGestureRecognizer) {
+            canvas?.undoManager?.redo()
+        }
+
+        /// The page host's pinch and pan keep working alongside these taps.
+        public func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        // MARK: - Apple Pencil
+
+        public func pencilInteraction(
+            _ interaction: UIPencilInteraction,
+            didReceiveTap tap: UIPencilInteraction.Tap
+        ) {
+            guard let action = resolvedPencilAction(), action != .off else { return }
+            parent.onPencilDoubleTap?(action)
+        }
+
+        /// The configured action, or the system preference for `.system`.
+        /// Actions the app has no meaning for (ink attributes, a shortcut)
+        /// come back as `nil`, so nothing happens.
+        private func resolvedPencilAction() -> PencilDoubleTapAction? {
+            guard parent.pencilDoubleTapAction == .system else {
+                return parent.pencilDoubleTapAction
+            }
+            switch UIPencilInteraction.preferredTapAction {
+            case .switchEraser: return .eraser
+            case .switchPrevious: return .previousTool
+            case .showColorPalette: return .colorPalette
+            default: return nil
+            }
+        }
+
+        // MARK: - Drawing changes
+
         public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingInput else { return }
+            defer { baselineStrokes = canvasView.drawing.strokes }
+            if parent.eraseHighlighterOnly {
+                keepNonHighlighterStrokes(in: canvasView)
+            }
             let activeLayerID = parent.activeLayerID
             // PencilKit can notify a moment *after* a programmatic change, so a
             // pending guard flag alone is not enough: the converter also
@@ -311,6 +438,49 @@ public struct PencilCanvasView: UIViewRepresentable {
                 uniquingKeysWith: { _, last in last }
             )
             parent.onStrokesChanged(records)
+        }
+
+        /// With "Erase Highlighter Only" on, a stroke eraser pass may only
+        /// remove highlighters: every other stroke it took goes back at its
+        /// old index. The restore is not registered with the canvas's undo
+        /// manager, so one undo still restores the whole erase.
+        private func keepNonHighlighterStrokes(in canvas: PKCanvasView) {
+            guard case let .eraser(kind, _) = parent.mode, kind == .stroke else { return }
+            let current = canvas.drawing.strokes
+            let currentIDs = Set(current.map(\.id))
+            let removed = baselineStrokes.filter { !currentIDs.contains($0.id) }
+            guard removed.contains(where: { !Self.isHighlighter($0) }) else { return }
+
+            var live: [UUID: PKStroke] = [:]
+            for stroke in current { live[stroke.id] = stroke }
+            var restored: [PKStroke] = []
+            var keptIDs = Set<UUID>()
+            restored.reserveCapacity(baselineStrokes.count)
+            for stroke in baselineStrokes {
+                if let stroke = live[stroke.id] {
+                    restored.append(stroke)
+                    keptIDs.insert(stroke.id)
+                } else if !Self.isHighlighter(stroke) {
+                    restored.append(stroke)
+                    keptIDs.insert(stroke.id)
+                }
+            }
+            // A stroke the baseline never saw keeps its place at the end.
+            for stroke in current where !keptIDs.contains(stroke.id) {
+                restored.append(stroke)
+            }
+
+            canvas.undoManager?.disableUndoRegistration()
+            isApplyingInput = true
+            canvas.drawing = PKDrawing(strokes: restored)
+            isApplyingInput = false
+            canvas.undoManager?.enableUndoRegistration()
+        }
+
+        /// A highlighter is a translucent marker, the same rule the stroke
+        /// codec uses when it stores `StrokeTool.isHighlighter`.
+        private static func isHighlighter(_ stroke: PKStroke) -> Bool {
+            stroke.ink.inkType == .marker && stroke.ink.color.cgColor.alpha < 0.99
         }
     }
 }

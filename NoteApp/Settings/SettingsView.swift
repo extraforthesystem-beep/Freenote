@@ -13,6 +13,10 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.newNotebookOrientation) private var orientation: PageOrientation = .portrait
     @AppStorage(AppSettings.Key.newNotebookTemplateID) private var templateID = AppSettings.defaultTemplateID
     @AppStorage(AppSettings.Key.handwritingRecognitionEnabled) private var handwritingRecognition = true
+    @AppStorage(AppSettings.Key.drawWithFinger) private var drawWithFinger = false
+    @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
+    @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
+    @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -23,6 +27,10 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 documentEditing
+                #if os(iOS)
+                writing
+                applePencil
+                #endif
                 newNotebooks
                 handwritingRecognitionSection
                 troubleshooting
@@ -49,6 +57,34 @@ struct SettingsView: View {
             Text("When off, opening a notebook replaces the current tab.")
         }
     }
+
+    #if os(iOS)
+    private var writing: some View {
+        Section {
+            Toggle("Draw with Finger", isOn: $drawWithFinger)
+            Toggle("Two-Finger Double-Tap to Undo", isOn: $twoFingerDoubleTapUndo)
+            Toggle("Three-Finger Double-Tap to Redo", isOn: $threeFingerDoubleTapRedo)
+        } header: {
+            Text("Writing")
+        } footer: {
+            Text("With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws.")
+        }
+    }
+
+    private var applePencil: some View {
+        Section {
+            Picker("Double-Tap Action", selection: $pencilDoubleTapAction) {
+                ForEach(PencilDoubleTapAction.allCases) { action in
+                    Text(action.displayName).tag(action)
+                }
+            }
+        } header: {
+            Text("Apple Pencil")
+        } footer: {
+            Text("Double-tap works on Apple Pencil (2nd generation) and Apple Pencil Pro.")
+        }
+    }
+    #endif
 
     private var newNotebooks: some View {
         Section {
