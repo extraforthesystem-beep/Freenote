@@ -150,7 +150,7 @@ func randomStroke(_ rng: inout SplitMix64, layerID: UUID, pointCount: Int? = nil
 }
 
 func randomElementContent(_ rng: inout SplitMix64) -> ElementContent {
-    switch rng.int(in: 0...3) {
+    switch rng.int(in: 0...5) {
     case 0:
         return .text(
             ["hello", "notes", "1 + 1 = 2", ""].randomElement(using: &rng) ?? "",
@@ -167,8 +167,15 @@ func randomElementContent(_ rng: inout SplitMix64) -> ElementContent {
             fill: rng.chance(0.5) ? randomColor(&rng) : nil,
             lineWidth: rng.double(in: 0.5...12)
         )
-    default:
+    case 3:
         return .pdfPage(assetName: "\(String(format: "%016llx", rng.next())).pdf", pageIndex: rng.int(in: 0...500))
+    case 4:
+        return .stickyNote(
+            ["Remember", "Buy milk\nand eggs", ""].randomElement(using: &rng) ?? "",
+            color: randomColor(&rng)
+        )
+    default:
+        return .tape(color: randomColor(&rng))
     }
 }
 

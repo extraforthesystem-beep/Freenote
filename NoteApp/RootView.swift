@@ -1,19 +1,48 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct RootView: View {
     @State private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
             if model.isLoading {
                 ProgressView("Opening library…")
-            } else if let session = model.session {
-                NotebookView(session: session, model: model)
-            } else {
+            } else if model.isShowingLibrary || model.session == nil {
                 LibraryView(model: model)
+            } else {
+                NotebookView(model: model)
             }
         }
         .task { await model.start() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active else { return }
+            // Leaving the foreground: the app may be suspended or killed with
+            // no further notice, so put every open notebook on disk now.
+            // Recording stops only in the background: `.inactive` also covers
+            // Control Center and the app switcher, which should not end it.
+            let sessions = model.tabs
+            let stopsRecording = phase == .background
+            #if os(iOS)
+            let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save notebooks")
+            #endif
+            Task {
+                for session in sessions {
+                    if stopsRecording {
+                        await session.audio.stopRecording()
+                    }
+                    await session.flushPendingSave()
+                }
+                #if os(iOS)
+                if backgroundTask != .invalid {
+                    UIApplication.shared.endBackgroundTask(backgroundTask)
+                }
+                #endif
+            }
+        }
         .alert(
             model.notice?.title ?? "Something went wrong",
             isPresented: Binding(

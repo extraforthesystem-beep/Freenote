@@ -16,6 +16,23 @@ public typealias InkImage = NSImage
 /// Renders a whole page — paper, elements and ink — for the live page,
 /// thumbnails, the Mac reader and PDF export.
 public enum PageRenderer {
+    /// Renders `page` as it should look: visible layers only, ink in layer
+    /// order. Prefer this over passing `page.strokes`, which includes hidden layers.
+    public static func image(
+        page: Page,
+        assetsDirectory: URL? = nil,
+        scale: CGFloat = 2
+    ) -> InkImage? {
+        image(
+            strokes: page.renderStrokes,
+            pageSize: CGSize(width: page.width, height: page.height),
+            template: page.template,
+            elements: page.visibleElements,
+            assetsDirectory: assetsDirectory,
+            scale: scale
+        )
+    }
+
     /// Draws `template`, then `elements`, then the strokes of `strokes`, at `scale`.
     ///
     /// Elements are drawn by `zIndex` ascending, ties broken by `id`, and are

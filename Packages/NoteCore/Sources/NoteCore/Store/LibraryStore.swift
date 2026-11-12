@@ -29,6 +29,23 @@ public actor LibraryStore {
         }
     }
 
+    /// What a scan of one directory of notebooks found.
+    ///
+    /// A single unreadable `notebook.json` is skipped instead of failing the whole
+    /// scan, so the rest of the library stays usable. `unreadableCount` lets the
+    /// caller tell the user that something on disk needs attention.
+    public struct Listing: Sendable, Hashable {
+        public var manifests: [NotebookManifest]
+        public var unreadableIDs: [UUID]
+
+        public init(manifests: [NotebookManifest] = [], unreadableIDs: [UUID] = []) {
+            self.manifests = manifests
+            self.unreadableIDs = unreadableIDs
+        }
+
+        public var unreadableCount: Int { unreadableIDs.count }
+    }
+
     public let root: URL
 
     private nonisolated let layout: LibraryLayout
@@ -67,20 +84,32 @@ public actor LibraryStore {
 
         let now = Date()
         let manifest = NotebookManifest(id: UUID(), title: title, createdAt: now, updatedAt: now)
-        try createDirectory(layout.notebookDirectory(manifest.id))
-        try createDirectory(layout.pagesDirectory(manifest.id))
-        try createDirectory(layout.assetsDirectory(manifest.id))
-        try writeDocument(manifest, to: layout.manifestFile(manifest.id))
-        return manifest
+        let directory = layout.notebookDirectory(manifest.id)
+        do {
+            try createDirectory(directory)
+            try createDirectory(layout.pagesDirectory(manifest.id))
+            try createDirectory(layout.assetsDirectory(manifest.id))
+            try writeDocument(manifest, to: layout.manifestFile(manifest.id))
+            return manifest
+        } catch {
+            // A half-created folder would list as an unreadable notebook, so remove it.
+            try? fileManager.removeItem(at: directory)
+            throw error
+        }
     }
 
+    /// Every readable notebook manifest.
+    ///
+    /// A notebook whose manifest cannot be decoded is skipped, not propagated: one
+    /// corrupt file must not take the whole library away. Use `scanNotebooks()` to
+    /// learn how many were skipped.
     public func listNotebooks() throws -> [NotebookManifest] {
-        var manifests: [NotebookManifest] = []
-        for url in try contents(of: layout.notebooksDirectory) where isDirectory(url) {
-            guard let id = UUID(uuidString: url.lastPathComponent) else { continue }
-            manifests.append(try loadManifest(id))
-        }
-        return manifests.sorted { $0.id.diskName < $1.id.diskName }
+        try scanNotebooks().manifests
+    }
+
+    /// Every notebook manifest that could be read, plus the ids that could not.
+    public func scanNotebooks() throws -> Listing {
+        try scan(directory: layout.notebooksDirectory)
     }
 
     public func loadManifest(_ notebookID: UUID) throws -> NotebookManifest {
@@ -107,22 +136,24 @@ public actor LibraryStore {
         )
     }
 
+    /// Changes the title only. Metadata edits do not touch `updatedAt`, so they
+    /// cannot reshuffle a list sorted by date modified.
     public func renameNotebook(_ notebookID: UUID, title: String) throws {
         var manifest = try loadManifest(notebookID)
         manifest.title = title
-        manifest.updatedAt = Date()
         try writeDocument(manifest, to: layout.manifestFile(notebookID))
     }
 
     /// Sets the cover style name, or clears it to show the first page instead.
+    /// Like `renameNotebook`, this leaves `updatedAt` alone.
     public func setCover(_ coverName: String?, for notebookID: UUID) throws {
         var manifest = try loadManifest(notebookID)
         manifest.coverName = coverName
-        manifest.updatedAt = Date()
         try writeDocument(manifest, to: layout.manifestFile(notebookID))
     }
 
-    /// Moves the notebook's folder, unchanged, to `trash/`.
+    /// Moves the notebook's folder, unchanged, to `trash/`, stamping the manifest
+    /// with the deletion date used by the 30-day purge.
     ///
     /// The folder tree is left alone, so a restore puts the notebook back where it was.
     public func deleteNotebook(_ notebookID: UUID) throws {
@@ -140,9 +171,22 @@ public actor LibraryStore {
         } catch {
             throw NoteCoreError.ioFailure("move notebook to trash: \(error)")
         }
+        markDeleted(notebookID, at: Date())
     }
 
-    /// Moves a trashed notebook's folder back, unchanged.
+    /// Records the deletion date inside the trashed notebook. A failure here only
+    /// loses the purge deadline, so it must not fail the delete itself.
+    private func markDeleted(_ notebookID: UUID, at date: Date) {
+        let file = layout.trashedNotebookDirectory(notebookID)
+            .appendingPathComponent("notebook.json")
+        guard var manifest = try? ManifestCodec.decode(try readData(file), path: file.path) else {
+            return
+        }
+        manifest.deletedAt = date
+        try? writeDocument(manifest, to: file)
+    }
+
+    /// Moves a trashed notebook's folder back, unchanged, clearing the deletion date.
     public func restoreNotebook(_ notebookID: UUID) throws {
         let source = layout.trashedNotebookDirectory(notebookID)
         guard fileManager.fileExists(atPath: source.path) else {
@@ -158,16 +202,113 @@ public actor LibraryStore {
         } catch {
             throw NoteCoreError.ioFailure("restore notebook from trash: \(error)")
         }
+        clearDeleted(notebookID)
+    }
+
+    private func clearDeleted(_ notebookID: UUID) {
+        let file = layout.manifestFile(notebookID)
+        guard var manifest = try? ManifestCodec.decode(try readData(file), path: file.path),
+              manifest.deletedAt != nil
+        else { return }
+        manifest.deletedAt = nil
+        try? writeDocument(manifest, to: file)
     }
 
     public func listTrash() throws -> [NotebookManifest] {
-        var manifests: [NotebookManifest] = []
+        try scanTrash().manifests
+    }
+
+    /// Every trashed manifest that could be read, plus the ids that could not.
+    public func scanTrash() throws -> Listing {
+        try scan(directory: layout.trashDirectory)
+    }
+
+    /// Deletes trashed notebooks whose deletion date is older than `age`.
+    ///
+    /// A notebook with no recorded date falls back to the folder's creation date,
+    /// so a trash filled by an older build still ages out.
+    @discardableResult
+    public func purgeExpiredTrash(olderThan age: TimeInterval, now: Date = Date()) throws -> [UUID] {
+        var purged: [UUID] = []
         for url in try contents(of: layout.trashDirectory) where isDirectory(url) {
-            guard UUID(uuidString: url.lastPathComponent) != nil else { continue }
-            let file = url.appendingPathComponent("notebook.json")
-            manifests.append(try ManifestCodec.decode(try readData(file), path: file.path))
+            guard let id = UUID(uuidString: url.lastPathComponent) else { continue }
+            let deletedAt = try? loadTrashedManifest(id).deletedAt
+            let date = deletedAt ?? creationDate(of: url) ?? now
+            guard now.timeIntervalSince(date) > age else { continue }
+            do {
+                try fileManager.removeItem(at: url)
+                purged.append(id)
+            } catch {
+                throw NoteCoreError.ioFailure("purge expired notebook: \(error)")
+            }
         }
-        return manifests.sorted { $0.id.diskName < $1.id.diskName }
+        return purged
+    }
+
+    /// Removes everything in the trash.
+    @discardableResult
+    public func emptyTrash() throws -> Int {
+        var removed = 0
+        for url in try contents(of: layout.trashDirectory) where isDirectory(url) {
+            do {
+                try fileManager.removeItem(at: url)
+                removed += 1
+            } catch {
+                throw NoteCoreError.ioFailure("empty trash: \(error)")
+            }
+        }
+        return removed
+    }
+
+    private func loadTrashedManifest(_ notebookID: UUID) throws -> NotebookManifest {
+        let file = layout.trashedNotebookDirectory(notebookID)
+            .appendingPathComponent("notebook.json")
+        return try ManifestCodec.decode(try readData(file), path: file.path)
+    }
+
+    private func creationDate(of url: URL) -> Date? {
+        let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        return values?.creationDate ?? values?.contentModificationDate
+    }
+
+    /// Copies a notebook, giving the copy and every page a new id.
+    ///
+    /// Asset files are content-addressed, so they are copied as they are and the
+    /// element references inside the copied pages stay valid.
+    public func duplicateNotebook(_ notebookID: UUID, title: String? = nil) throws -> NotebookManifest {
+        let snapshot = try loadNotebook(notebookID)
+        var copy = try createNotebook(title: title ?? "\(snapshot.manifest.title) Copy")
+        copy.coverName = snapshot.manifest.coverName
+        copy.pageOrder = []
+
+        do {
+            for pageID in snapshot.manifest.pageOrder {
+                guard var page = try? loadPage(pageID, in: notebookID) else { continue }
+                page.id = UUID()
+                try writePageFile(page, in: copy.id)
+                copy.pageOrder.append(page.id)
+            }
+
+            let sourceAssets = layout.assetsDirectory(notebookID)
+            for url in try contents(of: sourceAssets) where !isDirectory(url) {
+                let destination = layout.assetsDirectory(copy.id).appendingPathComponent(url.lastPathComponent)
+                guard !fileManager.fileExists(atPath: destination.path) else { continue }
+                do {
+                    try createDirectory(destination.deletingLastPathComponent())
+                    try fileManager.copyItem(at: url, to: destination)
+                } catch {
+                    throw NoteCoreError.ioFailure("copy asset \(url.lastPathComponent): \(error)")
+                }
+            }
+
+            copy.updatedAt = Date()
+            try writeDocument(copy, to: layout.manifestFile(copy.id))
+            return copy
+        } catch {
+            // A half-copied notebook would list as a broken duplicate.
+            try? fileManager.removeItem(at: layout.notebookDirectory(copy.id))
+            throw error
+        }
     }
 
     public func purgeNotebook(_ notebookID: UUID) throws {
@@ -330,6 +471,17 @@ public actor LibraryStore {
         layout.assetsDirectory(notebookID)
     }
 
+    /// The notebook's private folder, used for sidecar metadata such as audio
+    /// clip records.
+    public nonisolated func notebookDirectoryURL(for notebookID: UUID) -> URL {
+        layout.notebookDirectory(notebookID)
+    }
+
+    /// The library's cache folder, used for derived files such as covers.
+    public nonisolated var cacheDirectoryURL: URL {
+        layout.cacheDirectory
+    }
+
     // MARK: - Folder tree
 
     public func loadFolderTree() throws -> FolderTree {
@@ -359,6 +511,20 @@ public actor LibraryStore {
             throw NoteCoreError.notFound(path: "folder \(folderID.diskName)")
         }
         tree.folders[index].name = name
+        try saveFolderTree(tree)
+    }
+
+    public func setFolderAppearance(
+        _ folderID: UUID,
+        colorName: String?,
+        iconName: String?
+    ) throws {
+        var tree = try loadFolderTree()
+        guard let index = tree.folders.firstIndex(where: { $0.id == folderID }) else {
+            throw NoteCoreError.notFound(path: "folder \(folderID.diskName)")
+        }
+        tree.folders[index].colorName = colorName
+        tree.folders[index].iconName = iconName
         try saveFolderTree(tree)
     }
 
@@ -471,6 +637,27 @@ public actor LibraryStore {
         var isDirectory: ObjCBool = false
         let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
         return exists && isDirectory.boolValue
+    }
+
+    /// Reads every `notebooks/<id>/notebook.json` under `directory`, keeping the
+    /// readable ones and counting the rest. Only a failure to list the directory
+    /// itself is thrown.
+    private func scan(directory: URL) throws -> Listing {
+        var manifests: [NotebookManifest] = []
+        var unreadable: [UUID] = []
+        for url in try contents(of: directory) where isDirectory(url) {
+            guard let id = UUID(uuidString: url.lastPathComponent) else { continue }
+            let file = url.appendingPathComponent("notebook.json")
+            do {
+                manifests.append(try ManifestCodec.decode(try readData(file), path: file.path))
+            } catch {
+                unreadable.append(id)
+            }
+        }
+        return Listing(
+            manifests: manifests.sorted { $0.id.diskName < $1.id.diskName },
+            unreadableIDs: unreadable
+        )
     }
 
     private func readData(_ url: URL) throws -> Data {

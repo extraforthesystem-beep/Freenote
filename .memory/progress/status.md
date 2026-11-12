@@ -9,29 +9,27 @@ updated: 2026-11-12
 
 ## Done
 
-- Phase 0 scaffold, simulator, S1 stroke round trip (H1 confirmed visually lossless).
-- NoteCore: model, page format, atomic store. 34 tests.
-- InkKit: eight pens, codec, template/element/PDF renderer, canvas, erasers, lasso. 20 tests.
-- SearchKit: handwriting + typed-text index/search. 12 tests.
-- App: library, folders, tags, trash, covers; pages, templates, thumbnails, autosave; PDF import; text/image/shape elements; PDF export; search with page jumping.
-- This session: notebook tabs, split view, page bookmarks, PDF link taps with a hand/link mode. External link verified opening Safari; internal GoTo not verified with a valid test PDF.
-- Source material folded in: `PLAN.md`, `reports/iPad note app feature plan.md`, Claude memory notes (all already reflected above).
+- Phase 0–2, parity packages, fix/ui-basics pass.
+- Goodnotes walkthrough: `research_notes/goodnotes-walkthrough/` (`WALKTHROUGH.md`, `BUILD-PLAN.md`).
+- Wave 1: sticky, tape, laser, Read Only, ruler, shortcuts, search snippets/inspector. ADR [[2026-11-12-sticky-tape-and-search-hits]].
+- Wave 3: Settings, page rotate/clear/delete-by-kind, page sizes, new-notebook defaults, page number. ADR [[2026-11-12-page-operations-and-settings]].
+- iPad + macOS build; all package tests pass; key paths checked in simulator.
 
 ## In progress / caution
 
-- Another active T3 thread is implementing GoodNotes parity in the same tree (highlighter, layers, outline, zoom, audio, study, AI, whiteboard). Its work and this session's tab/bookmark/split/link work are uncommitted; last commit is `5fb4841`. Do not revert or mass-commit without coordination. Source snapshot: `/private/var/folders/kf/g90yn04s77vg8_sjmtt7zrmm0000gn/T/opencode/noteapp-snapshot-1605`.
+- `fix/ui-basics`, nothing committed since `5fb4841`.
+- Untested by hand: listed in `BUILD-PLAN.md` wave status lines.
+- More menu long; page actions need scrolling.
 
 ## Next
 
-1. Let the parity thread finish; verify iOS/macOS builds and tests, then commit the combined tree.
-2. Physical iPad: signing, palm rejection, Pencil gestures, lasso move/copy.
-3. Phase 3 Drive: blocked on the user's Google Cloud OAuth client and approval.
-4. Mac annotation (PaperKit); Phase 5 audio/math/AI; Phase 6 custom engine.
+1. User: commit waves 1+3, or start wave 2 (shape recognition, lasso actions, eraser filter).
+2. Physical iPad; Drive sync blocked on OAuth.
 
 ## Handoff
 
-- Key files this session: `NoteApp/Notebook/NotebookView.swift`, `AppModel.swift`, `PageBookmarks.swift`, `PDFLinkHandler.swift`, `Packages/InkKit/Sources/InkKit/PencilCanvasView.swift`.
-- The tree is shared with the parity thread; check `git status` and mtimes before editing.
+- Delegates: DeepSeek V4.1 Flash (OpenCode Go); Opus 5.5 for hard work; shared checkout, disjoint files.
+- Key files: `NoteApp/Notebook/{NotebookView,NotebookSession}.swift`, `NoteApp/Settings/`, `NoteCore/Model/{PageOperations,PaperSize}.swift`.
 
 <!-- harness-links:autogen -->
 ## Graph links

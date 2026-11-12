@@ -59,7 +59,8 @@ extension PenStyle {
         switch self {
         case .pen: "pencil.tip"
         case .pencil: "pencil"
-        case .marker: "highlighter"
+        // "highlighter" is kept for the highlighter tool so the two never look alike.
+        case .marker: "scribble.variable"
         case .monoline: "pencil.line"
         case .fountainPen: "pencil.and.scribble"
         case .watercolor: "paintbrush.pointed"

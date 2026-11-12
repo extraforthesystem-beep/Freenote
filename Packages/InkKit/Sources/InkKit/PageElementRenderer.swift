@@ -101,6 +101,7 @@ enum PageElementRenderer {
                 fontName: fontName,
                 fontSize: fontSize,
                 color: color,
+                style: element.textStyle,
                 in: context,
                 box: box
             )
@@ -113,6 +114,10 @@ enum PageElementRenderer {
                 in: context,
                 box: box
             )
+        case let .stickyNote(text, color):
+            drawStickyNote(text, color: color, in: context, box: box)
+        case let .tape(color):
+            drawTape(color: color, in: context, box: box)
         }
     }
 
@@ -196,16 +201,31 @@ enum PageElementRenderer {
         fontName: String,
         fontSize: Double,
         color: RGBAColor,
+        style: TextStyle?,
         in context: CGContext,
         box: CGRect
     ) {
         guard !text.isEmpty else { return }
         let size = CGFloat(fontSize) > 0 ? CGFloat(fontSize) : 12
-        let font = textFont(named: fontName, size: size)
-        let attributes: [NSAttributedString.Key: Any] = [
+        let font = styledFont(named: fontName, size: size, style: style)
+
+        let paragraph = NSMutableParagraphStyle()
+        switch style?.alignment {
+        case .center: paragraph.alignment = .center
+        case .trailing: paragraph.alignment = .right
+        case .justified: paragraph.alignment = .justified
+        default: paragraph.alignment = .left
+        }
+        paragraph.lineSpacing = CGFloat(style?.lineSpacing ?? 0)
+
+        var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: cgColor(color),
+            .paragraphStyle: paragraph,
         ]
+        if style?.isUnderline == true {
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        }
         let attributed = NSAttributedString(string: text, attributes: attributes)
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
         let path = CGPath(rect: box, transform: nil)
@@ -228,6 +248,16 @@ enum PageElementRenderer {
         }
         return CTFontCreateUIFontForLanguage(.system, size, nil)
             ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
+    }
+
+    private static func styledFont(named name: String, size: CGFloat, style: TextStyle?) -> CTFont {
+        let base = textFont(named: name, size: size)
+        guard style?.isBold == true || style?.isItalic == true else { return base }
+
+        var traits: CTFontSymbolicTraits = []
+        if style?.isBold == true { traits.insert(.boldTrait) }
+        if style?.isItalic == true { traits.insert(.italicTrait) }
+        return CTFontCreateCopyWithSymbolicTraits(base, 0, nil, traits, traits) ?? base
     }
 
     private static func platformFontExists(named name: String) -> Bool {
@@ -279,6 +309,104 @@ enum PageElementRenderer {
         context.setStrokeColor(cgColor(stroke))
         context.setLineWidth(width)
         context.strokePath()
+    }
+
+    // MARK: - Sticky notes
+
+    /// Draws a sticky note: a rounded, filled card with a slight drop shadow and
+    /// wrapped text inside a padding.
+    ///
+    /// The card is inset inside the frame so the shadow falls on the page rather
+    /// than being clipped away by the frame's clip.
+    private static func drawStickyNote(
+        _ text: String,
+        color: RGBAColor,
+        in context: CGContext,
+        box: CGRect
+    ) {
+        let inset = min(6, min(box.width, box.height) / 4)
+        let card = box.insetBy(dx: inset, dy: inset)
+        guard card.width > 1, card.height > 1 else { return }
+        let radius = min(10, min(card.width, card.height) / 6)
+        let path = CGPath(
+            roundedRect: card,
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        )
+
+        context.saveGState()
+        context.setShadow(
+            offset: CGSize(width: 0, height: 2),
+            blur: 4,
+            color: cgColor(RGBAColor(r: 0, g: 0, b: 0, a: 0.18))
+        )
+        context.addPath(path)
+        context.setFillColor(cgColor(color))
+        context.fillPath()
+        context.restoreGState()
+
+        // A hairline edge keeps a white or very pale note readable on white paper.
+        context.addPath(path)
+        context.setStrokeColor(cgColor(RGBAColor(r: 0, g: 0, b: 0, a: 0.07)))
+        context.setLineWidth(1)
+        context.strokePath()
+
+        let padding = min(12, min(card.width, card.height) / 6)
+        let textBox = card.insetBy(dx: padding, dy: padding)
+        guard textBox.width > 1, textBox.height > 1 else { return }
+        drawText(
+            text,
+            fontName: "System",
+            fontSize: 15,
+            color: RGBAColor(r: 0.12, g: 0.12, b: 0.14),
+            style: .regular,
+            in: context,
+            box: textBox
+        )
+    }
+
+    // MARK: - Tape
+
+    /// Draws a piece of tape: a rounded band in its colour with faint diagonal
+    /// stripes, so it reads as tape rather than as a filled shape.
+    private static func drawTape(
+        color: RGBAColor,
+        in context: CGContext,
+        box: CGRect
+    ) {
+        guard box.width > 1, box.height > 1 else { return }
+        let radius = min(6, box.height / 2)
+        let path = CGPath(
+            roundedRect: box,
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        )
+
+        context.saveGState()
+        context.addPath(path)
+        context.setFillColor(cgColor(color))
+        // Semi-opaque: tape is nearly, but not entirely, solid in export and
+        // thumbnails so it still reads as tape.
+        context.setAlpha(0.9 * color.a)
+        context.fillPath()
+        context.setAlpha(1)
+
+        context.addPath(path)
+        context.clip()
+        let spacing: CGFloat = 9
+        let stripe = RGBAColor(r: 0, g: 0, b: 0, a: 0.06)
+        context.setStrokeColor(cgColor(stripe))
+        context.setLineWidth(3)
+        var x = box.minX - box.height
+        while x < box.maxX + box.height {
+            context.move(to: CGPoint(x: x, y: box.minY))
+            context.addLine(to: CGPoint(x: x + box.height, y: box.maxY))
+            x += spacing
+        }
+        context.strokePath()
+        context.restoreGState()
     }
 
     // MARK: - Helpers

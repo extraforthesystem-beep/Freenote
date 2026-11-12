@@ -1,8 +1,10 @@
 import Foundation
 import InkKit
 
-/// Remembers colour and width separately for every pen style.
+/// Remembers colour and width separately for every pen style, plus a separate
+/// preset for the highlighter.
 struct PenPresets: Codable, Sendable {
+    private static let highlighterKey = "highlighter"
     private var tools: [String: InkTool] = [:]
 
     static let defaultsKey = "noteapp.penPresets.v1"
@@ -20,12 +22,22 @@ struct PenPresets: Codable, Sendable {
         tools[style.rawValue] ?? InkTool(style)
     }
 
-    mutating func update(_ tool: InkTool) {
-        tools[tool.style.rawValue] = tool
+    var highlighter: InkTool {
+        tools[Self.highlighterKey] ?? .highlighter
     }
 
+    mutating func update(_ tool: InkTool) {
+        tools[key(for: tool)] = tool
+    }
+
+    /// Writes to `UserDefaults`. Callers debounce this; it is not meant to run
+    /// on every slider tick.
     func save() {
         guard let data = try? JSONEncoder().encode(self) else { return }
         UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+    }
+
+    private func key(for tool: InkTool) -> String {
+        tool.isHighlighter ? Self.highlighterKey : tool.style.rawValue
     }
 }

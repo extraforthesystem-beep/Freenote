@@ -251,3 +251,194 @@ private func makePage(id: UUID = UUID(), strokeCount: Int = 2) -> Page {
     #expect(await index.search("quarterly").isEmpty)
     #expect(await index.search("holiday").count == 1)
 }
+
+// MARK: - Hit metadata, snippets and sources
+
+private func highlightedText(_ hit: SearchHit) -> String? {
+    guard let range = hit.matchRange else { return nil }
+    return String(hit.snippet[range])
+}
+
+private func typedPage(_ text: String, strokeCount: Int = 0) -> Page {
+    var page = makePage(strokeCount: strokeCount)
+    let layerID = page.layers[0].id
+    page.elements = [
+        PageElement(
+            id: UUID(),
+            layerID: layerID,
+            frame: ElementFrame(x: 20, y: 20, width: 200, height: 60),
+            zIndex: 0,
+            updatedAt: Date(),
+            content: .text(text, fontName: "System", fontSize: 14, color: .black)
+        )
+    ]
+    return page
+}
+
+@Test func hitCarriesPageNumberAndSource() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let notebookID = UUID()
+    let page = makePage()
+    _ = try await index.update(
+        page: page,
+        in: notebookID,
+        pageIndex: 3,
+        using: FakeRecognizer(text: "Buy milk and eggs")
+    )
+
+    let hit = try #require(await index.search("milk").first)
+    #expect(hit.pageIndex == 3)
+    #expect(hit.pageLabel == "p.3")
+    #expect(hit.source == .handwriting)
+    #expect(hit.notebookID == notebookID)
+    #expect(hit.pageID == page.id)
+}
+
+@Test func typedTextIsTaggedWithItsOwnSource() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let page = typedPage("Quarterly meeting notes")
+    _ = try await index.update(page: page, in: UUID(), pageIndex: 2, using: FakeRecognizer(text: nil))
+
+    let hit = try #require(await index.search("quarterly").first)
+    #expect(hit.source == .typedText)
+    #expect(hit.pageIndex == 2)
+}
+
+@Test func onePageCanHitOncePerSource() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let notebookID = UUID()
+    let page = typedPage("Meeting notes", strokeCount: 2)
+    _ = try await index.update(page: page, in: notebookID, pageIndex: 1, using: FakeRecognizer(text: "Notes from the meeting"))
+
+    let hits = await index.search("notes")
+    #expect(hits.count == 2)
+    #expect(Set(hits.map(\.source)) == [.handwriting, .typedText])
+    #expect(Set(hits.map(\.id)).count == 2)
+}
+
+@Test func sourceSectionTitlesMatchTheSearchUI() {
+    #expect(PageTextSource.handwriting.sectionTitle == "Written Notes")
+    #expect(PageTextSource.typedText.sectionTitle == "Text")
+    #expect(PageTextSource.pdf.sectionTitle == "PDFs")
+}
+
+@Test func snippetHighlightIsCorrectAtPageStart() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let text = "needle in a haystack " + String(repeating: "lorem ipsum ", count: 20)
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: text))
+
+    let hit = try #require(await index.search("needle").first)
+    #expect(hit.snippet.hasPrefix("needle"))
+    #expect(!hit.snippet.hasPrefix("…"))
+    #expect(!hit.snippet.contains("\n"))
+    #expect(highlightedText(hit) == "needle")
+}
+
+@Test func snippetHighlightIsCorrectInTheMiddle() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let filler = String(repeating: "lorem ipsum ", count: 40)
+    let text = "\(filler)needle in the haystack\(filler)"
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: text))
+
+    let hit = try #require(await index.search("haystack").first)
+    #expect(hit.snippet.hasPrefix("…"))
+    #expect(hit.snippet.hasSuffix("…"))
+    #expect(hit.snippet.contains("needle in the haystack"))
+    #expect(highlightedText(hit) == "haystack")
+    #expect(hit.snippet.count <= 95)
+}
+
+@Test func snippetHighlightIsCorrectAtPageEnd() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let text = String(repeating: "lorem ipsum ", count: 40) + "the needle"
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: text))
+
+    let hit = try #require(await index.search("needle").first)
+    #expect(!hit.snippet.hasSuffix("…"))
+    #expect(hit.snippet.hasSuffix("needle"))
+    #expect(highlightedText(hit) == "needle")
+}
+
+@Test func snippetShowsTheFirstOfSeveralMatches() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let text = "alpha beta alpha beta alpha"
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: text))
+
+    let hits = await index.search("alpha")
+    // One hit per page-and-source, not one per occurrence.
+    #expect(hits.count == 1)
+    let hit = try #require(hits.first)
+    #expect(highlightedText(hit) == "alpha")
+    // The matched range is the first occurrence.
+    #expect(hit.snippet.distance(from: hit.snippet.startIndex, to: try #require(hit.matchRange).lowerBound) == 0)
+}
+
+@Test func snippetsHandleUnicodeAndDiacritics() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let filler = String(repeating: "lorem ipsum ", count: 20)
+    let text = "🔥 \(filler)Café au lait and naïveté\(filler) 🔥"
+    _ = try await index.update(page: makePage(), in: UUID(), using: FakeRecognizer(text: text))
+
+    let cafe = try #require(await index.search("cafe").first)
+    #expect(highlightedText(cafe) == "Café")
+    #expect(cafe.snippet.contains("Café au lait"))
+
+    let naive = try #require(await index.search("naive").first)
+    #expect(highlightedText(naive) == "naïve")
+}
+
+@Test func tolerantPrefixMatchFindsShortRecognition() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    _ = try await index.update(
+        page: makePage(),
+        in: UUID(),
+        using: FakeRecognizer(text: "the forc of gravity pulls things down")
+    )
+
+    // The query is longer than the misrecognised word on the page.
+    let hit = try #require(await index.search("force").first)
+    #expect(highlightedText(hit) == "forc")
+
+    // And the shorter query still finds both spellings.
+    #expect(await index.search("forc").count == 1)
+
+    // The tolerant relation needs real words, not a stray substring.
+    #expect(await index.search("formula").isEmpty)
+
+    // A three-letter word that happens to prefix the query is not a match.
+    _ = try await index.update(
+        page: makePage(),
+        in: UUID(),
+        using: FakeRecognizer(text: "the cat sat on a mat")
+    )
+    #expect(await index.search("theme").isEmpty)
+}
+
+@Test func searchCanBeScopedToOneNotebook() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let notebookA = UUID()
+    let notebookB = UUID()
+    _ = try await index.update(page: makePage(), in: notebookA, pageIndex: 1, using: FakeRecognizer(text: "milk and bread"))
+    _ = try await index.update(page: makePage(), in: notebookB, pageIndex: 1, using: FakeRecognizer(text: "milk and eggs"))
+
+    #expect(await index.search("milk").count == 2)
+    let scoped = await index.search("milk", in: notebookA)
+    #expect(scoped.count == 1)
+    #expect(scoped.first?.notebookID == notebookA)
+}
+
+@Test func movingAPageRefreshesItsNumberWithoutRecognisingAgain() async throws {
+    let index = SearchIndex(root: try makeRoot())
+    let notebookID = UUID()
+    let page = makePage()
+    let recognizer = FakeRecognizer(text: "unchanged words")
+
+    _ = try await index.update(page: page, in: notebookID, pageIndex: 1, using: recognizer)
+    let moved = try await index.update(page: page, in: notebookID, pageIndex: 7, using: recognizer)
+    #expect(moved != nil)
+    #expect(await recognizer.calls == 1)
+
+    let hit = try #require(await index.search("unchanged").first)
+    #expect(hit.pageIndex == 7)
+}
+

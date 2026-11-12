@@ -11,6 +11,12 @@
 		AA0000000000000000000015 /* InkKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001F /* InkKit */; };
 		AA0000000000000000000016 /* SearchKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000020 /* SearchKit */; };
 		AA0000000000000000000017 /* SyncKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000021 /* SyncKit */; };
+		AA0000000000000000000030 /* StudyKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000031 /* StudyKit */; };
+		AA0000000000000000000033 /* AudioKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000034 /* AudioKit */; };
+		AA0000000000000000000036 /* AIKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000037 /* AIKit */; };
+		AA0000000000000000000039 /* TextDocKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000003A /* TextDocKit */; };
+		AA000000000000000000003C /* BoardKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000003D /* BoardKit */; };
+		AA000000000000000000003F /* HistoryKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000040 /* HistoryKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +40,12 @@
 				AA0000000000000000000015 /* InkKit in Frameworks */,
 				AA0000000000000000000016 /* SearchKit in Frameworks */,
 				AA0000000000000000000017 /* SyncKit in Frameworks */,
+				AA0000000000000000000030 /* StudyKit in Frameworks */,
+				AA0000000000000000000033 /* AudioKit in Frameworks */,
+				AA0000000000000000000036 /* AIKit in Frameworks */,
+				AA0000000000000000000039 /* TextDocKit in Frameworks */,
+				AA000000000000000000003C /* BoardKit in Frameworks */,
+				AA000000000000000000003F /* HistoryKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +92,12 @@
 				AA000000000000000000001F /* InkKit */,
 				AA0000000000000000000020 /* SearchKit */,
 				AA0000000000000000000021 /* SyncKit */,
+				AA0000000000000000000031 /* StudyKit */,
+				AA0000000000000000000034 /* AudioKit */,
+				AA0000000000000000000037 /* AIKit */,
+				AA000000000000000000003A /* TextDocKit */,
+				AA000000000000000000003D /* BoardKit */,
+				AA0000000000000000000040 /* HistoryKit */,
 			);
 			productName = NoteApp;
 			productReference = AA0000000000000000000003 /* NoteApp.app */;
@@ -114,6 +132,12 @@
 				AA0000000000000000000029 /* XCLocalSwiftPackageReference "Packages/InkKit" */,
 				AA000000000000000000002A /* XCLocalSwiftPackageReference "Packages/SearchKit" */,
 				AA000000000000000000002B /* XCLocalSwiftPackageReference "Packages/SyncKit" */,
+				AA0000000000000000000032 /* XCLocalSwiftPackageReference "Packages/StudyKit" */,
+				AA0000000000000000000035 /* XCLocalSwiftPackageReference "Packages/AudioKit" */,
+				AA0000000000000000000038 /* XCLocalSwiftPackageReference "Packages/AIKit" */,
+				AA000000000000000000003B /* XCLocalSwiftPackageReference "Packages/TextDocKit" */,
+				AA000000000000000000003E /* XCLocalSwiftPackageReference "Packages/BoardKit" */,
+				AA0000000000000000000041 /* XCLocalSwiftPackageReference "Packages/HistoryKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA0000000000000000000006 /* Products */;
@@ -199,6 +223,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = NoteApp;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio while you take notes. Recordings stay on your device unless you export them.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -239,6 +264,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = NoteApp;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio while you take notes. Recordings stay on your device unless you export them.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -304,6 +330,30 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/SyncKit;
 		};
+		AA0000000000000000000032 /* XCLocalSwiftPackageReference "Packages/StudyKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/StudyKit;
+		};
+		AA0000000000000000000035 /* XCLocalSwiftPackageReference "Packages/AudioKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AudioKit;
+		};
+		AA0000000000000000000038 /* XCLocalSwiftPackageReference "Packages/AIKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AIKit;
+		};
+		AA000000000000000000003B /* XCLocalSwiftPackageReference "Packages/TextDocKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TextDocKit;
+		};
+		AA000000000000000000003E /* XCLocalSwiftPackageReference "Packages/BoardKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/BoardKit;
+		};
+		AA0000000000000000000041 /* XCLocalSwiftPackageReference "Packages/HistoryKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/HistoryKit;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -322,6 +372,30 @@
 		AA0000000000000000000021 /* SyncKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SyncKit;
+		};
+		AA0000000000000000000031 /* StudyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = StudyKit;
+		};
+		AA0000000000000000000034 /* AudioKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AudioKit;
+		};
+		AA0000000000000000000037 /* AIKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AIKit;
+		};
+		AA000000000000000000003A /* TextDocKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TextDocKit;
+		};
+		AA000000000000000000003D /* BoardKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BoardKit;
+		};
+		AA0000000000000000000040 /* HistoryKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HistoryKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

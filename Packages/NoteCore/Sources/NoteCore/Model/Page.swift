@@ -14,6 +14,8 @@ public struct Page: Sendable, Hashable, Codable {
     /// Strokes removed since the page was created, kept so that a later merge
     /// does not resurrect them.
     public var deletedStrokeIDs: Set<UUID>
+    /// Elements removed since the page was created, kept for the same reason.
+    public var deletedElementIDs: Set<UUID>
 
     public init(
         schemaVersion: Int = SchemaVersion.current,
@@ -24,7 +26,8 @@ public struct Page: Sendable, Hashable, Codable {
         layers: [Layer],
         strokes: [StrokeRecord] = [],
         elements: [PageElement] = [],
-        deletedStrokeIDs: Set<UUID> = []
+        deletedStrokeIDs: Set<UUID> = [],
+        deletedElementIDs: Set<UUID> = []
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -35,6 +38,14 @@ public struct Page: Sendable, Hashable, Codable {
         self.strokes = strokes
         self.elements = elements
         self.deletedStrokeIDs = deletedStrokeIDs
+        self.deletedElementIDs = deletedElementIDs
+    }
+
+    /// Elements whose layer is visible. Hiding a layer is a render rule; the
+    /// stored page keeps every element.
+    public var visibleElements: [PageElement] {
+        let visibleLayers = Set(layers.filter(\.isVisible).map(\.id))
+        return elements.filter { visibleLayers.contains($0.layerID) }
     }
 
     public struct Layer: Codable, Hashable, Sendable, Identifiable {
@@ -63,7 +74,8 @@ public struct Page: Sendable, Hashable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, id, width, height, template, layers, strokes, elements, deletedStrokeIDs
+        case schemaVersion, id, width, height, template, layers, strokes, elements
+        case deletedStrokeIDs, deletedElementIDs
     }
 
     public init(from decoder: any Decoder) throws {
@@ -89,6 +101,20 @@ public struct Page: Sendable, Hashable, Codable {
             deleted.insert(uuid)
         }
         deletedStrokeIDs = deleted
+
+        let elementIdentifiers = try container.decodeIfPresent([String].self, forKey: .deletedElementIDs) ?? []
+        var deletedElements = Set<UUID>()
+        for identifier in elementIdentifiers {
+            guard let uuid = UUID(uuidString: identifier) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .deletedElementIDs,
+                    in: container,
+                    debugDescription: "not a UUID: \(identifier)"
+                )
+            }
+            deletedElements.insert(uuid)
+        }
+        deletedElementIDs = deletedElements
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -102,5 +128,6 @@ public struct Page: Sendable, Hashable, Codable {
         try container.encode(strokes, forKey: .strokes)
         try container.encode(elements, forKey: .elements)
         try container.encode(deletedStrokeIDs.map(\.uuidString).sorted(), forKey: .deletedStrokeIDs)
+        try container.encode(deletedElementIDs.map(\.uuidString).sorted(), forKey: .deletedElementIDs)
     }
 }

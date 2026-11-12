@@ -61,6 +61,9 @@ public enum StrokeCodec {
         // `PKInk` has no width; the ink's size lives in the control points, so
         // the widest point is the best available nominal width.
         let width = points.map(\.width).max() ?? Double(stroke.ink.inkType.defaultWidth)
+        // PencilKit normalises ink colours to sRGB; store what it reports.
+        // A pattern colour has no RGB components and falls back to black.
+        let color = RGBAColor(srgb: stroke.ink.color) ?? .black
 
         return StrokeRecord(
             id: stroke.id,
@@ -68,10 +71,11 @@ public enum StrokeCodec {
             tool: StrokeTool(
                 engine: engine,
                 inkType: stroke.ink.inkType.rawValue,
-                // PencilKit normalises ink colours to sRGB; store what it reports.
-                // A pattern colour has no RGB components and falls back to black.
-                color: RGBAColor(srgb: stroke.ink.color) ?? .black,
-                width: width
+                color: color,
+                width: width,
+                // A highlighter is a marker with a translucent colour. PencilKit
+                // has no other way to express one.
+                isHighlighter: stroke.ink.inkType == .marker && color.a < 0.99
             ),
             createdAt: path.creationDate,
             transform: [
@@ -145,8 +149,13 @@ public enum StrokeCodec {
 
     /// Rebuilds a whole page. A record PencilKit cannot express is skipped
     /// instead of losing the page.
+    ///
+    /// Strokes are painted in `StrokeOrder` render order: layers grouped by
+    /// first appearance (pass `Page.renderStrokes` to follow `Page.layers`),
+    /// and within a layer highlighters before pen ink, the way a paper
+    /// highlighter behaves.
     public static func drawing(from records: [StrokeRecord]) -> PKDrawing {
-        PKDrawing(strokes: records.compactMap { try? stroke(from: $0) })
+        PKDrawing(strokes: StrokeOrder.renderOrder(records).compactMap { try? stroke(from: $0) })
     }
 
     // MARK: Mask

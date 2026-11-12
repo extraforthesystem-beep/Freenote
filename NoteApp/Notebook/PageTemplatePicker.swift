@@ -5,17 +5,48 @@ import SwiftUI
 struct PageTemplatePicker: View {
     let current: PageTemplate?
     let isApplying: Bool
+    let onApplySize: ((PaperSize, PageOrientation, Bool) -> Void)?
     let onApply: (PageTemplateItem, Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var applyToAllPages = false
+    @State private var paperSize: PaperSize
+    @State private var orientation: PageOrientation
 
     private let columns = [GridItem(.adaptive(minimum: 128, maximum: 190), spacing: 16)]
+
+    init(
+        current: PageTemplate?,
+        isApplying: Bool,
+        currentWidth: Double? = nil,
+        currentHeight: Double? = nil,
+        onApplySize: ((PaperSize, PageOrientation, Bool) -> Void)? = nil,
+        onApply: @escaping (PageTemplateItem, Bool) -> Void
+    ) {
+        self.current = current
+        self.isApplying = isApplying
+        self.onApplySize = onApplySize
+        self.onApply = onApply
+
+        let matched = currentWidth.flatMap { width in
+            currentHeight.flatMap { height in
+                PaperSize.match(width: width, height: height)
+            }
+        }
+        _paperSize = State(initialValue: matched?.0 ?? .a4)
+        _orientation = State(initialValue: matched?.1 ?? .portrait)
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 22) {
+                    if let onApplySize {
+                        sizeSection(onApplySize)
+                        Divider()
+                            .padding(.horizontal, 20)
+                    }
+
                     ForEach(PageTemplateItem.Category.allCases) { category in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(category.rawValue)
@@ -54,6 +85,65 @@ struct PageTemplatePicker: View {
                 }
             }
         }
+    }
+
+    /// Paper size and orientation for the page. Changing them moves the
+    /// content with the page edges instead of redrawing it.
+    private func sizeSection(
+        _ onApplySize: @escaping (PaperSize, PageOrientation, Bool) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Size")
+                .font(.headline)
+                .padding(.horizontal, 20)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Paper Size", selection: $paperSize) {
+                    ForEach(PaperSize.allCases) { size in
+                        Text(size.displayName).tag(size)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Picker("Orientation", selection: $orientation) {
+                    ForEach(PageOrientation.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel("Orientation")
+
+                HStack(spacing: 12) {
+                    Text(dimensionText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button("Apply Size") {
+                        onApplySize(paperSize, orientation, applyToAllPages)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isApplying)
+                }
+
+                Text("Content keeps its position; it is not scaled.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .background(
+                Color.secondary.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private var dimensionText: String {
+        let size = paperSize.size(orientation)
+        return "\(Int(size.width.rounded())) × \(Int(size.height.rounded())) pt"
     }
 
     private func templateButton(_ item: PageTemplateItem) -> some View {
@@ -113,4 +203,14 @@ private extension View {
         self
         #endif
     }
+}
+
+#Preview("Page Template") {
+    PageTemplatePicker(
+        current: nil,
+        isApplying: false,
+        currentWidth: 595,
+        currentHeight: 842,
+        onApplySize: { _, _, _ in }
+    ) { _, _ in }
 }

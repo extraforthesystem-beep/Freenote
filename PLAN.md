@@ -2,6 +2,8 @@
 
 Written 2026-11-12. Planned Path, no code exists yet. Research behind this plan: `reports/iPad note app feature plan.md` and `research_notes/iPad note app feature plan/`.
 
+> **GoodNotes parity (2026-11-12):** `GOODNOTES-PARITY-PLAN.md` holds the gap analysis against the installed Goodnotes 7.1.34 and the phased plan for the missing features. `BUILD-STATUS.md` records what the multi-agent build actually integrated and what remains. Phase 9 there supersedes Phase 5 below; Phase 4's open Mac tasks move to P11.9. Phases 0–3 and 6 stand.
+
 Evidence tags used below: `[TESTED]` = checked by a command or a fetch of the vendor's own documentation in this session; `[RESEARCH]` = from the research notes, source page re-fetched during review; `[ASSUMED]` = believed, not checked, and listed as a risk in section 9.
 
 ## 1. Goal and locked decisions

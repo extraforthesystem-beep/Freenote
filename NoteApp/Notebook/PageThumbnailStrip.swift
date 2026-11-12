@@ -2,7 +2,8 @@ import InkKit
 import NoteCore
 import SwiftUI
 
-/// A horizontal page switcher. Only the cells near the viewport decode their page.
+/// A horizontal page switcher. Only the cells near the viewport decode their
+/// page, and rendering happens off the main actor.
 struct PageThumbnailStrip: View {
     let session: NotebookSession
     let onSelect: (Int) -> Void
@@ -11,7 +12,7 @@ struct PageThumbnailStrip: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 10) {
-                    ForEach(0..<max(session.pageCount, 1), id: \.self) { index in
+                    ForEach(0..<session.pageCount, id: \.self) { index in
                         PageThumbnailCell(
                             session: session,
                             index: index,
@@ -38,6 +39,7 @@ struct PageThumbnailStrip: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Add Page")
                     .padding(.leading, 2)
                 }
                 .padding(.horizontal, 14)
@@ -73,6 +75,7 @@ private struct PageThumbnailCell: View {
 
     var body: some View {
         ZStack {
+            // Paper is white whatever the appearance.
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(.white)
 
@@ -115,9 +118,14 @@ private struct PageThumbnailCell: View {
 
     private var taskKey: String {
         guard let pageID else { return "missing-\(index)" }
-        // The current page is re-rendered after every edit; others only when they load.
+        // The current page re-renders after edits; others only when they load.
         return "\(pageID)-\(isCurrent ? session.revision : 0)"
     }
+
+    /// Small enough to be cheap, sharp enough for a 54 pt cell on Retina.
+    private static let renderScale: CGFloat = 0.3
+    /// Edits keep coming while writing; wait for a pause before re-rendering.
+    private static let editDebounce: Duration = .milliseconds(1_500)
 
     private func load() async {
         guard let pageID else {
@@ -129,25 +137,50 @@ private struct PageThumbnailCell: View {
             failed = false
             return
         }
-        do {
-            let page = try await session.store.loadPage(pageID, in: session.notebookID)
-            guard let rendered = PageRenderer.image(
-                strokes: page.strokes,
-                pageSize: CGSize(width: page.width, height: page.height),
-                template: page.template,
-                elements: page.elements,
-                assetsDirectory: session.assetsDirectory,
-                scale: 1
-            ) else {
-                failed = true
+        // An edit invalidated the thumbnail: keep showing the old one and wait
+        // for the writing to pause. A cancelled sleep means another edit came.
+        if image != nil {
+            do {
+                try await Task.sleep(for: Self.editDebounce)
+            } catch {
                 return
             }
-            ThumbnailCache.store(rendered, notebookID: session.notebookID, pageID: pageID)
-            image = rendered
-            failed = false
-        } catch {
-            failed = true
         }
+
+        // The page on screen may have unsaved ink, so prefer the in-memory copy.
+        let page: Page
+        if let current = session.page, current.id == pageID {
+            page = current
+        } else {
+            do {
+                page = try await session.store.loadPage(pageID, in: session.notebookID)
+            } catch {
+                if image == nil { failed = true }
+                return
+            }
+        }
+        guard !Task.isCancelled else { return }
+
+        let assetsDirectory = session.assetsDirectory
+        let scale = Self.renderScale
+        let rendered = await Task.detached(priority: .utility) {
+            PageRenderer.image(
+                strokes: page.renderStrokes,
+                pageSize: CGSize(width: page.width, height: page.height),
+                template: page.template,
+                elements: page.visibleElements,
+                assetsDirectory: assetsDirectory,
+                scale: scale
+            )
+        }.value
+        guard !Task.isCancelled else { return }
+        guard let rendered else {
+            if image == nil { failed = true }
+            return
+        }
+        ThumbnailCache.store(rendered, notebookID: session.notebookID, pageID: pageID)
+        image = rendered
+        failed = false
     }
 }
 

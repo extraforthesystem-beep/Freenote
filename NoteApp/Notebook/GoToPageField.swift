@@ -1,0 +1,71 @@
+import SwiftUI
+
+/// A one-line "Go to Page" row for a popover or a List. Typing a page number
+/// and pressing Return jumps there; the field shows the valid range next to it.
+struct GoToPageField: View {
+    let pageCount: Int
+    let currentIndex: Int
+    let onGo: (Int) -> Void
+
+    @State private var text = ""
+    @FocusState private var isFocused: Bool
+
+    private var rangeText: String {
+        pageCount > 0 ? "(1 – \(pageCount))" : "(no pages)"
+    }
+
+    private var parsedPage: Int? {
+        guard pageCount > 0,
+              let value = Int(text.trimmingCharacters(in: .whitespaces))
+        else { return nil }
+        return min(max(value, 1), pageCount)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Go to Page")
+
+            TextField("Page", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.center)
+                .monospacedDigit()
+                .frame(width: 58)
+                .focused($isFocused)
+                .submitLabel(.go)
+                .onSubmit(go)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+
+            Text(rangeText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Spacer(minLength: 0)
+
+            Button("Go", action: go)
+                .buttonStyle(.bordered)
+                .disabled(parsedPage == nil)
+        }
+        .onAppear {
+            text = "\(currentIndex + 1)"
+        }
+    }
+
+    private func go() {
+        guard let page = parsedPage else {
+            text = "\(currentIndex + 1)"
+            return
+        }
+        text = "\(page)"
+        isFocused = false
+        onGo(page - 1)
+    }
+}
+
+#Preview("Go to Page") {
+    GoToPageField(pageCount: 55, currentIndex: 21, onGo: { _ in })
+        .padding()
+        .frame(width: 340)
+}

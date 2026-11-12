@@ -11,6 +11,10 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
     public var pageOrder: [UUID]
     public var createdAt: Date
     public var updatedAt: Date
+    /// When the notebook was moved to the trash. Absent on library notebooks and
+    /// on files written by builds that did not record it, so the field is
+    /// optional and decoding an old manifest still succeeds.
+    public var deletedAt: Date?
 
     public init(
         schemaVersion: Int = SchemaVersion.current,
@@ -19,7 +23,8 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
         coverName: String? = nil,
         pageOrder: [UUID] = [],
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        deletedAt: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -28,5 +33,6 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
         self.pageOrder = pageOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
     }
 }

@@ -62,6 +62,19 @@ public enum CanvasMode: Hashable, Sendable {
     case ink
     case eraser(EraserKind, width: Double)
     case lasso
+    /// Taps (finger or Pencil) go to link handling; drawing is off.
+    case links
+    /// Something above the canvas owns the pointer (the laser pointer):
+    /// the canvas takes no drawing input at all.
+    case disabled
+
+    /// Whether the Pencil draws in this mode.
+    var allowsDrawing: Bool {
+        switch self {
+        case .ink, .eraser, .lasso: true
+        case .links, .disabled: false
+        }
+    }
 
     var pkTool: PKTool {
         switch self {
@@ -75,6 +88,8 @@ public enum CanvasMode: Hashable, Sendable {
             )
         case .lasso:
             return PKLassoTool()
+        case .links, .disabled:
+            return PKInkingTool(.pen)
         }
     }
 }
@@ -92,7 +107,14 @@ public struct PencilCanvasView: UIViewRepresentable {
     public var mode: CanvasMode
     public var activeLayerID: UUID
     public var isEditable: Bool
+    /// PencilKit's on-canvas ruler. The page shows it while this is true.
+    public var isRulerActive: Bool
     public var controller: PencilCanvasController?
+    /// A tap in page points, finger or Pencil. Only called in `.links` mode;
+    /// in every other mode taps belong to drawing and are not reported.
+    public var onFingerTap: ((CGPoint) -> Void)?
+    /// A pencil or finger lift after using the current tool.
+    public var onToolGestureEnded: (() -> Void)?
     public var onStrokesChanged: ([StrokeRecord]) -> Void
 
     public init(
@@ -102,7 +124,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         mode: CanvasMode = .ink,
         activeLayerID: UUID,
         isEditable: Bool = true,
+        isRulerActive: Bool = false,
         controller: PencilCanvasController? = nil,
+        onFingerTap: ((CGPoint) -> Void)? = nil,
+        onToolGestureEnded: (() -> Void)? = nil,
         onStrokesChanged: @escaping ([StrokeRecord]) -> Void
     ) {
         self.strokes = strokes
@@ -111,7 +136,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.mode = mode
         self.activeLayerID = activeLayerID
         self.isEditable = isEditable
+        self.isRulerActive = isRulerActive
         self.controller = controller
+        self.onFingerTap = onFingerTap
+        self.onToolGestureEnded = onToolGestureEnded
         self.onStrokesChanged = onStrokesChanged
     }
 
@@ -129,6 +157,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.delegate = context.coordinator
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
+        // The page host owns scrolling and zooming; the canvas must not fight
+        // it for finger pans. Pencil drawing still works with scrolling off.
+        canvas.isScrollEnabled = false
         canvas.alwaysBounceVertical = false
         canvas.alwaysBounceHorizontal = false
         canvas.contentSize = pageSize
@@ -140,8 +171,25 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.drawingPolicy = .pencilOnly
         #endif
         canvas.tool = canvasTool(for: mode)
+        canvas.isRulerActive = isRulerActive
+        canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
         context.coordinator.canvas = canvas
         controller?.canvas = canvas
+
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        tap.allowedTouchTypes = [
+            NSNumber(value: UITouch.TouchType.direct.rawValue),
+            NSNumber(value: UITouch.TouchType.pencil.rawValue),
+        ]
+        tap.cancelsTouchesInView = false
+        tap.isEnabled = mode == .links && onFingerTap != nil
+        canvas.addGestureRecognizer(tap)
+        context.coordinator.tapRecognizer = tap
+
+        context.coordinator.apply(strokes, to: canvas)
         return canvas
     }
 
@@ -153,28 +201,15 @@ public struct PencilCanvasView: UIViewRepresentable {
 
         canvas.isUserInteractionEnabled = isEditable
         canvas.tool = canvasTool(for: mode)
+        canvas.isRulerActive = isRulerActive
+        canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
+        coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
         canvas.contentSize = pageSize
         if canvas.pageSize != pageSize {
             canvas.pageSize = pageSize
         }
 
-        // Only replace the drawing when the set of strokes changed. Re-applying
-        // identical strokes would interrupt the stroke being drawn and would
-        // fight the user's scroll and zoom.
-        let incoming = strokes.map(\.id)
-        if incoming != canvas.drawing.strokes.map(\.id) {
-            coordinator.absorbLayers(from: strokes)
-            coordinator.isApplyingInput = true
-            canvas.drawing = StrokeCodec.drawing(from: strokes)
-            coordinator.isApplyingInput = false
-            coordinator.appliedRecords = coordinator.records(
-                from: canvas,
-                activeLayerID: activeLayerID
-            )
-        } else {
-            coordinator.absorbLayers(from: strokes)
-        }
-
+        coordinator.apply(strokes, to: canvas)
         canvas.fitPageIfNeeded()
     }
 
@@ -182,47 +217,99 @@ public struct PencilCanvasView: UIViewRepresentable {
     public final class Coordinator: NSObject, PKCanvasViewDelegate {
         var parent: PencilCanvasView
         weak var canvas: InkCanvasView?
+        weak var tapRecognizer: UITapGestureRecognizer?
 
         /// Set while the SwiftUI input is being pushed into the canvas, so the
         /// change is not echoed straight back.
         var isApplyingInput = false
-        /// What the canvas held right after the last input was applied.
-        var appliedRecords: [StrokeRecord]?
         /// Layer of every stroke seen on this page. New strokes get the active one.
         var layerIDs: [UUID: UUID] = [:]
+        /// The last record exchanged with the app for each stroke, as a cheap
+        /// signature. It tells an edit from the app apart from an echo.
+        private var syncedRecords: [UUID: RecordSignature] = [:]
+        private let converter = IncrementalStrokeConverter()
 
         init(parent: PencilCanvasView) {
             self.parent = parent
         }
 
-        func absorbLayers(from records: [StrokeRecord]) {
-            for record in records {
+        /// Brings the canvas in line with `strokes`, doing as little as possible.
+        ///
+        /// - Same strokes in the same order: nothing, so a stroke in progress,
+        ///   scroll and zoom are never interrupted.
+        /// - Same strokes, other order (a new highlighter that belongs under
+        ///   ink, a moved layer): the canvas's own strokes are reordered without
+        ///   re-encoding. A highlighter drawn this session therefore drops under
+        ///   pen ink as soon as the app has stored it.
+        /// - Anything else: the drawing is rebuilt from the records.
+        func apply(_ strokes: [StrokeRecord], to canvas: InkCanvasView) {
+            for record in strokes {
                 layerIDs[record.id] = record.layerID
             }
+            let current = canvas.drawing.strokes
+            let incomingIDs = strokes.map(\.id)
+            let currentIDs = current.map(\.id)
+            let contentMatches = strokes.allSatisfy { syncedRecords[$0.id] == RecordSignature($0) }
+
+            if contentMatches, incomingIDs == currentIDs { return }
+
+            let drawing: PKDrawing
+            if contentMatches, Set(incomingIDs) == Set(currentIDs), incomingIDs.count == currentIDs.count {
+                var byID: [UUID: PKStroke] = [:]
+                for stroke in current { byID[stroke.id] = stroke }
+                drawing = PKDrawing(strokes: incomingIDs.compactMap { byID[$0] })
+            } else {
+                drawing = StrokeCodec.drawing(from: strokes)
+            }
+
+            isApplyingInput = true
+            canvas.drawing = drawing
+            isApplyingInput = false
+            converter.seed(strokes: drawing.strokes, records: strokes)
+            syncedRecords = Dictionary(
+                strokes.map { ($0.id, RecordSignature($0)) },
+                uniquingKeysWith: { _, last in last }
+            )
+            let liveIDs = Set(drawing.strokes.map(\.id))
+            layerIDs = layerIDs.filter { liveIDs.contains($0.key) }
         }
 
-        func records(from canvas: PKCanvasView, activeLayerID: UUID) -> [StrokeRecord] {
-            let strokes = canvas.drawing.strokes
-            let liveIDs = Set(strokes.map(\.id))
-            layerIDs = layerIDs.filter { liveIDs.contains($0.key) }
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard case .links = parent.mode,
+                  let canvas, let onTap = parent.onFingerTap
+            else { return }
+            let point = gesture.location(in: canvas)
+            let pagePoint = CGPoint(
+                x: (point.x + canvas.contentOffset.x) / canvas.zoomScale,
+                y: (point.y + canvas.contentOffset.y) / canvas.zoomScale
+            )
+            onTap(pagePoint)
+        }
 
-            var records: [StrokeRecord] = []
-            records.reserveCapacity(strokes.count)
-            for stroke in strokes {
-                let layerID = layerIDs[stroke.id] ?? activeLayerID
-                layerIDs[stroke.id] = layerID
-                records.append(StrokeCodec.record(from: stroke, layerID: layerID))
-            }
-            return records
+        public func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            parent.onToolGestureEnded?()
         }
 
         public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingInput else { return }
-            let records = records(from: canvasView, activeLayerID: parent.activeLayerID)
+            let activeLayerID = parent.activeLayerID
             // PencilKit can notify a moment *after* a programmatic change, so a
-            // pending guard flag alone is not enough.
-            if let appliedRecords, appliedRecords == records { return }
-            appliedRecords = records
+            // pending guard flag alone is not enough: the converter also
+            // reports nil when the strokes match what was last applied.
+            guard let records = converter.changedRecords(
+                from: canvasView.drawing.strokes,
+                layerID: { [self] id in
+                    if let layer = layerIDs[id] { return layer }
+                    layerIDs[id] = activeLayerID
+                    return activeLayerID
+                }
+            ) else { return }
+            let liveIDs = Set(records.map(\.id))
+            layerIDs = layerIDs.filter { liveIDs.contains($0.key) }
+            syncedRecords = Dictionary(
+                records.map { ($0.id, RecordSignature($0)) },
+                uniquingKeysWith: { _, last in last }
+            )
             parent.onStrokesChanged(records)
         }
     }

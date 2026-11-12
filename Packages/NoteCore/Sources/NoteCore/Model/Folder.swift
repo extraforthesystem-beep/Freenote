@@ -6,11 +6,23 @@ public struct Folder: Sendable, Hashable, Codable, Identifiable {
     public var name: String
     /// `nil` means the folder sits at the root of the tree.
     public var parentID: UUID?
+    /// A palette token such as `blue`, or nil for the default folder colour.
+    public var colorName: String?
+    /// An SF Symbol name, or nil for the folder symbol.
+    public var iconName: String?
 
-    public init(id: UUID, name: String, parentID: UUID? = nil) {
+    public init(
+        id: UUID,
+        name: String,
+        parentID: UUID? = nil,
+        colorName: String? = nil,
+        iconName: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.parentID = parentID
+        self.colorName = colorName
+        self.iconName = iconName
     }
 }
 

@@ -25,6 +25,9 @@ Bookmarks do not sync through Google Drive and do not survive a restore on anoth
 ## Graph links
 
 - [NOTEAPP project context](../context/project.md)
+- [Page saves go through one ordered write queue](2026-11-12-ordered-page-writes.md)
+- [Page operations are pure NoteCore functions; app settings live in UserDefaults](2026-11-12-page-operations-and-settings.md)
+- [Sticky notes and tape are page elements; search hits carry source and snippet](2026-11-12-sticky-tape-and-search-hits.md)
 - [Lazy Code Ladder](../meta/lazy-code.md)
 - [SRE Memory Routing](../meta/sre-routing.md)
 - [NOTEAPP status](../progress/status.md)

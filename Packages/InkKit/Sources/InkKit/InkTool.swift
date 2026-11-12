@@ -70,20 +70,50 @@ public struct InkTool: Codable, Hashable, Sendable {
     public var style: PenStyle
     public var color: RGBAColor
     public var width: Double
+    /// Draws a translucent marker as a highlighter. PencilKit has no
+    /// highlighter ink type, so this flag is the app's own vocabulary and is
+    /// stored on every stroke.
+    public var isHighlighter: Bool
 
-    public init(_ style: PenStyle, color: RGBAColor = .black, width: Double? = nil) {
+    public init(
+        _ style: PenStyle,
+        color: RGBAColor = .black,
+        width: Double? = nil,
+        isHighlighter: Bool = false
+    ) {
         self.style = style
         self.color = color
         self.width = width ?? style.defaultWidth
+        self.isHighlighter = isHighlighter
     }
 
     public static let pen = InkTool(.pen)
+    public static let highlighter = InkTool(
+        .marker,
+        color: RGBAColor(r: 1, g: 0.86, b: 0.2, a: 0.35),
+        width: 24,
+        isHighlighter: true
+    )
 
-    public var inkType: PKInk.InkType { style.inkType }
+    public var inkType: PKInk.InkType { isHighlighter ? .marker : style.inkType }
 
-    /// The PencilKit tool for this pen.
+    /// The PencilKit tool for this pen. A highlighter is a marker with the
+    /// stored translucent colour; a normal pen keeps its exact colour.
     public var inkingTool: PKInkingTool {
-        PKInkingTool(style.inkType, color: color.inkColor, width: CGFloat(width))
+        PKInkingTool(inkType, color: color.inkColor, width: CGFloat(width))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case style, color, width, isHighlighter
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        style = try container.decode(PenStyle.self, forKey: .style)
+        color = try container.decode(RGBAColor.self, forKey: .color)
+        width = try container.decode(Double.self, forKey: .width)
+        // Presets saved before the highlighter existed have no key.
+        isHighlighter = try container.decodeIfPresent(Bool.self, forKey: .isHighlighter) ?? false
     }
 }
 

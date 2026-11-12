@@ -230,6 +230,62 @@ struct PageRendererElementsTests {
         #expect(centre.b < 100, "the red stroke covers the blue element")
     }
 
+    // MARK: - Sticky notes and tape
+
+    @Test("A sticky note draws its card and its text")
+    func drawsStickyNote() throws {
+        let pastel = RGBAColor(r: 1, g: 0.93, b: 0.6)
+        let bitmap = try render(
+            size: CGSize(width: 240, height: 240),
+            elements: [
+                element(
+                    .stickyNote("Remember this", color: pastel),
+                    frame: ElementFrame(x: 20, y: 20, width: 200, height: 200)
+                )
+            ]
+        )
+
+        // The card covers most of its 200×200 frame.
+        #expect(bitmap.nonPaperPixels > 20_000)
+        let card = bitmap.pixel(120, 120)
+        #expect(card.r > 200 && card.g > 200 && card.b < 210, "the card is filled with its colour")
+        #expect(bitmap.darkPixels > 50, "the note's text is drawn")
+        #expect(bitmap.pixel(5, 5).isPaper, "the note stays inside its frame")
+        // An empty note is still a card.
+        let blank = try render(
+            size: CGSize(width: 240, height: 240),
+            elements: [
+                element(
+                    .stickyNote("", color: pastel),
+                    frame: ElementFrame(x: 20, y: 20, width: 200, height: 200)
+                )
+            ]
+        )
+        #expect(blank.nonPaperPixels > 20_000)
+    }
+
+    @Test("Tape draws a band in its colour and nothing outside it")
+    func drawsTape() throws {
+        let bitmap = try render(
+            size: CGSize(width: 300, height: 120),
+            elements: [
+                element(
+                    .tape(color: Self.red),
+                    frame: ElementFrame(x: 30, y: 42, width: 240, height: 36)
+                )
+            ]
+        )
+
+        let band = bitmap.pixel(150, 60)
+        #expect(band.r > 150, "the band is its colour")
+        #expect(band.g < 140)
+        #expect(band.b < 140)
+        // The stripes are drawn over the colour, so the band is not one flat tone.
+        #expect(bitmap.nonPaperPixels > 7_000)
+        #expect(bitmap.pixel(150, 10).isPaper, "tape stays inside its frame")
+        #expect(bitmap.pixel(10, 60).isPaper)
+    }
+
     // MARK: - Order and placement
 
     @Test("Higher zIndex paints over lower zIndex")

@@ -104,7 +104,16 @@ struct LibraryStoreNotebookTests {
         #expect(manager.fileExists(atPath: trashed.path))
 
         let trashedContents = try captureDirectory(trashed)
-        #expect(trashedContents == before)
+        // The only byte that changes on the way to the trash is the deletion stamp
+        // in notebook.json; every page and asset is untouched.
+        let manifestPath = "notebook.json"
+        let trashedManifest = try #require(trashedContents[manifestPath])
+        let deletedManifest = try ManifestCodec.decode(
+            trashedManifest,
+            path: trashed.path + "/notebook.json"
+        )
+        #expect(deletedManifest.deletedAt != nil)
+        #expect(trashedContents.filter { $0.key != manifestPath } == before.filter { $0.key != manifestPath })
 
         let remaining = try await store.listNotebooks()
         #expect(remaining.map(\.id) == [other.id])

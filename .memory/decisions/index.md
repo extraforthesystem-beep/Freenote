@@ -4,3 +4,6 @@
 
 * [2026-11-12-goodnotes-parity-build](2026-11-12-goodnotes-parity-build.md)
 * [Page bookmarks stay app-side](2026-11-12-page-bookmarks-app-side.md)
+* [Page operations are pure NoteCore functions; app settings live in UserDefaults](2026-11-12-page-operations-and-settings.md)
+* [Page saves go through one ordered write queue](2026-11-12-ordered-page-writes.md)
+* [Sticky notes and tape are page elements; search hits carry source and snippet](2026-11-12-sticky-tape-and-search-hits.md)
