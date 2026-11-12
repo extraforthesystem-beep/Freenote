@@ -23,6 +23,8 @@ enum AppSettings {
         static let pencilDoubleTapAction = "noteapp.settings.pencilDoubleTapAction"
         static let eraserHighlighterOnly = "noteapp.settings.eraserHighlighterOnly"
         static let pageScrollMode = "noteapp.settings.pageScrollMode"
+        static let rememberLastTool = "noteapp.settings.rememberLastTool"
+        static let hideStatusBar = "noteapp.settings.hideStatusBar"
     }
 
     /// The catalog id of the plain blank template.
@@ -107,11 +109,27 @@ enum AppSettings {
         bool(Key.holdToDrawShapes, default: true)
     }
 
+    /// When on, a notebook opens with the tool that was last used. The editor
+    /// falls back to the pen when off.
+    static var rememberLastTool: Bool {
+        bool(Key.rememberLastTool, default: true)
+    }
+
+    /// When on, the notebook editor hides the status bar; the library keeps it.
+    static var hideStatusBarInNotebooks: Bool {
+        bool(Key.hideStatusBar, default: false)
+    }
+
     // MARK: - Reading
 
     private static func bool(_ key: String, default fallback: Bool) -> Bool {
-        guard UserDefaults.standard.object(forKey: key) != nil else { return fallback }
-        return UserDefaults.standard.bool(forKey: key)
+        bool(key, default: fallback, in: .standard)
+    }
+
+    /// The same toggle read from another store, e.g. the editor's own defaults.
+    static func bool(_ key: String, default fallback: Bool, in defaults: UserDefaults) -> Bool {
+        guard defaults.object(forKey: key) != nil else { return fallback }
+        return defaults.bool(forKey: key)
     }
 
     private static func string(_ key: String) -> String? {

@@ -115,6 +115,7 @@ final class EditorToolState {
     static let eraserAutoDeselectKey = "eraserAutoDeselect"
 
     private enum Keys {
+        static let tool = "noteapp.editor.tool"
         static let penStyle = "noteapp.editor.penStyle"
         static let eraserKind = "noteapp.editor.eraserKind"
         static let eraserWidth = "noteapp.editor.eraserWidth"
@@ -162,7 +163,26 @@ final class EditorToolState {
             recentColors = ColorRecents(legacySwatches ?? [])
         }
 
-        tool = .pen
+        tool = Self.restoredTool(in: defaults)
+        if tool.drawsInk { lastInkTool = tool }
+        previousTool = tool.drawsInk ? tool : .pen
+    }
+
+    /// The tool a newly opened notebook starts with. Remembering is a setting;
+    /// tools that do not edit ink and an eraser that would deselect itself fall
+    /// back to the pen.
+    private static func restoredTool(in defaults: UserDefaults) -> EditorTool {
+        guard AppSettings.bool(AppSettings.Key.rememberLastTool, default: true, in: defaults),
+              let stored = defaults.string(forKey: Keys.tool).flatMap(EditorTool.init(rawValue:))
+        else { return .pen }
+        switch stored {
+        case .pen, .highlighter, .lasso:
+            return stored
+        case .eraser:
+            return defaults.bool(forKey: Self.eraserAutoDeselectKey) ? .pen : .eraser
+        case .laser, .elements, .links:
+            return .pen
+        }
     }
 
     // MARK: - Derived
@@ -377,6 +397,7 @@ final class EditorToolState {
         presets.save()
         favoritePens.save()
         let defaults = UserDefaults.standard
+        defaults.set(tool.rawValue, forKey: Keys.tool)
         defaults.set(penStyle.rawValue, forKey: Keys.penStyle)
         defaults.set(eraserKind.rawValue, forKey: Keys.eraserKind)
         defaults.set(eraserWidth, forKey: Keys.eraserWidth)
