@@ -187,6 +187,18 @@ struct NotebookView: View {
                     showsImageImporter = true
                 }
                 .disabled(session.page == nil)
+                Menu("Add Shape", systemImage: "square.on.circle") {
+                    Button("Rectangle") {
+                        Task { await session.addShapeElement(kind: "rect") }
+                    }
+                    Button("Ellipse") {
+                        Task { await session.addShapeElement(kind: "ellipse") }
+                    }
+                    Button("Line") {
+                        Task { await session.addShapeElement(kind: "line") }
+                    }
+                }
+                .disabled(session.page == nil)
                 Button("Page Elements…", systemImage: "square.on.square.dashed") {
                     showsElements = true
                 }

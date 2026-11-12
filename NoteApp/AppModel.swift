@@ -554,6 +554,36 @@ final class NotebookSession {
         }
     }
 
+    func addShapeElement(kind: String) async {
+        guard var updated = page else { return }
+        await commitPendingSave()
+
+        let width = updated.width * 0.45
+        let height = kind == "line" ? 2 : updated.height * 0.25
+        let layerID = updated.layers.first?.id ?? UUID()
+        updated.elements.append(
+            PageElement(
+                id: UUID(),
+                layerID: layerID,
+                frame: ElementFrame(
+                    x: (updated.width - width) / 2,
+                    y: updated.height * 0.35,
+                    width: width,
+                    height: max(height, 2)
+                ),
+                zIndex: (updated.elements.map(\.zIndex).max() ?? 0) + 1,
+                updatedAt: Date(),
+                content: .shape(
+                    kind: kind,
+                    stroke: RGBAColor(r: 0.15, g: 0.2, b: 0.3),
+                    fill: kind == "line" ? nil : RGBAColor(r: 0.85, g: 0.9, b: 1, a: 0.4),
+                    lineWidth: 2
+                )
+            )
+        )
+        await saveEditedPage(updated)
+    }
+
     func updateTextElement(_ elementID: UUID, text: String) async {
         guard var updated = page,
               let index = updated.elements.firstIndex(where: { $0.id == elementID })
