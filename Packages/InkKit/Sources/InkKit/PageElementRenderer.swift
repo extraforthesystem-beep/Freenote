@@ -20,10 +20,14 @@ enum PageElementRenderer {
     ///
     /// Order is `zIndex` ascending, ties broken by `id` so that a page renders
     /// identically however its element array happens to be ordered.
+    ///
+    /// `drawsShadows` is off for vector PDF export: a Quartz shadow in a PDF
+    /// context is written as a bitmap, which would rasterise part of the page.
     static func draw(
         _ elements: [PageElement],
         in context: CGContext,
-        assetsDirectory: URL?
+        assetsDirectory: URL?,
+        drawsShadows: Bool = true
     ) {
         let ordered = elements.sorted { left, right in
             left.zIndex == right.zIndex
@@ -31,7 +35,7 @@ enum PageElementRenderer {
                 : left.zIndex < right.zIndex
         }
         for element in ordered {
-            draw(element, in: context, assetsDirectory: assetsDirectory)
+            draw(element, in: context, assetsDirectory: assetsDirectory, drawsShadows: drawsShadows)
         }
     }
 
@@ -40,7 +44,8 @@ enum PageElementRenderer {
     private static func draw(
         _ element: PageElement,
         in context: CGContext,
-        assetsDirectory: URL?
+        assetsDirectory: URL?,
+        drawsShadows: Bool
     ) {
         let frame = element.frame
         let rect = CGRect(
@@ -115,7 +120,7 @@ enum PageElementRenderer {
                 box: box
             )
         case let .stickyNote(text, color):
-            drawStickyNote(text, color: color, in: context, box: box)
+            drawStickyNote(text, color: color, in: context, box: box, drawsShadow: drawsShadows)
         case let .tape(color):
             drawTape(color: color, in: context, box: box)
         }
@@ -322,7 +327,8 @@ enum PageElementRenderer {
         _ text: String,
         color: RGBAColor,
         in context: CGContext,
-        box: CGRect
+        box: CGRect,
+        drawsShadow: Bool
     ) {
         let inset = min(6, min(box.width, box.height) / 4)
         let card = box.insetBy(dx: inset, dy: inset)
@@ -336,11 +342,13 @@ enum PageElementRenderer {
         )
 
         context.saveGState()
-        context.setShadow(
-            offset: CGSize(width: 0, height: 2),
-            blur: 4,
-            color: cgColor(RGBAColor(r: 0, g: 0, b: 0, a: 0.18))
-        )
+        if drawsShadow {
+            context.setShadow(
+                offset: CGSize(width: 0, height: 2),
+                blur: 4,
+                color: cgColor(RGBAColor(r: 0, g: 0, b: 0, a: 0.18))
+            )
+        }
         context.addPath(path)
         context.setFillColor(cgColor(color))
         context.fillPath()
