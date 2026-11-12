@@ -287,6 +287,8 @@ final class NotebookSession {
     private(set) var isLoadingPage = false
     private(set) var isSaving = false
     private(set) var loadError: String?
+    /// Bumped after an edit so the current page's thumbnail re-renders.
+    private(set) var revision = 0
 
     private var saveTask: Task<Void, Never>?
     private var pendingPage: Page?
@@ -354,6 +356,32 @@ final class NotebookSession {
         }
     }
 
+    func duplicateCurrentPage() async {
+        guard let page else { return }
+        do {
+            _ = try await store.duplicatePage(page.id, in: manifest.id)
+            await reloadManifest()
+            await loadPage(at: min(pageIndex + 1, max(0, pageCount - 1)))
+        } catch {
+            // Leave the original page on screen.
+        }
+    }
+
+    func moveCurrentPage(by offset: Int) async {
+        guard pageCount > 1 else { return }
+        let destination = pageIndex + offset
+        guard manifest.pageOrder.indices.contains(destination) else { return }
+        var order = manifest.pageOrder
+        order.swapAt(pageIndex, destination)
+        do {
+            try await store.reorderPages(in: manifest.id, order: order)
+            await reloadManifest()
+            pageIndex = destination
+        } catch {
+            // The order on disk is unchanged.
+        }
+    }
+
     func deleteCurrentPage() async {
         guard let page else { return }
         do {
@@ -375,6 +403,8 @@ final class NotebookSession {
             paperColor: .white
         )
         page = updated
+        revision &+= 1
+        ThumbnailCache.invalidate(notebookID: manifest.id, pageID: updated.id)
         do {
             try await store.savePage(updated, in: manifest.id)
         } catch {
@@ -387,6 +417,8 @@ final class NotebookSession {
         guard var updated = page else { return }
         updated.strokes = strokes
         page = updated
+        revision &+= 1
+        ThumbnailCache.invalidate(notebookID: manifest.id, pageID: updated.id)
         scheduleSave(updated)
     }
 

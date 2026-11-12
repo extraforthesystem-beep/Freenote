@@ -9,6 +9,10 @@ struct NotebookView: View {
     @State private var showsDeletePageConfirmation = false
     @State private var isRenaming = false
     @State private var renameText = ""
+    @State private var exportDocument: PDFExportDocument?
+    @State private var isExporting = false
+    @State private var showExporter = false
+    @State private var exportError: String?
     @State private var tool = InkTool(.pen)
     #if os(iOS)
     @State private var canvasMode: CanvasMode = .ink
@@ -45,6 +49,35 @@ struct NotebookView: View {
                 }
             }
         }
+        .alert(
+            "Export failed",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
+        .fileExporter(
+            isPresented: $showExporter,
+            document: exportDocument,
+            contentType: .pdf,
+            defaultFilename: exportFilename
+        ) { result in
+            if case .failure(let error) = result {
+                exportError = error.localizedDescription
+            }
+        }
+    }
+
+    private var exportFilename: String {
+        let allowed = CharacterSet.alphanumerics.union(.whitespaces).union(CharacterSet(charactersIn: "-_"))
+        let cleaned = session.manifest.title.unicodeScalars
+            .map { allowed.contains($0) ? Character($0) : "-" }
+        let name = String(cleaned).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? "Notebook" : name
     }
 
     private var header: some View {
@@ -87,6 +120,34 @@ struct NotebookView: View {
                 Button("Add Page After", systemImage: "plus") {
                     Task { await session.addPage() }
                 }
+                Button("Export PDF", systemImage: "square.and.arrow.up") {
+                    Task {
+                        isExporting = true
+                        defer { isExporting = false }
+                        do {
+                            let data = try await NotebookExporter.pdfData(session: session)
+                            exportDocument = PDFExportDocument(data: data)
+                            showExporter = true
+                        } catch {
+                            exportError = error.localizedDescription
+                        }
+                    }
+                }
+                .disabled(session.pageCount == 0 || isExporting)
+                Divider()
+                Button("Duplicate Page", systemImage: "plus.square.on.square") {
+                    Task { await session.duplicateCurrentPage() }
+                }
+                .disabled(session.page == nil)
+                Button("Move Page Left", systemImage: "arrow.left") {
+                    Task { await session.moveCurrentPage(by: -1) }
+                }
+                .disabled(session.pageIndex == 0)
+                Button("Move Page Right", systemImage: "arrow.right") {
+                    Task { await session.moveCurrentPage(by: 1) }
+                }
+                .disabled(session.pageIndex + 1 >= session.pageCount)
+                Divider()
                 Menu("Paper Style", systemImage: "square.grid.3x3") {
                     ForEach(["blank", "ruled", "grid", "dotted"], id: \.self) { kind in
                         Button {
@@ -309,52 +370,63 @@ struct NotebookView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 18) {
-            Button {
-                Task { await session.goToPreviousPage() }
-            } label: {
-                Label("Previous", systemImage: "chevron.left")
+        VStack(spacing: 0) {
+            PageThumbnailStrip(session: session) { index in
+                Task { await session.goToPage(index) }
             }
-            .disabled(session.pageIndex == 0)
 
-            Menu {
-                ForEach(0..<max(session.pageCount, 1), id: \.self) { index in
-                    Button {
-                        Task { await session.goToPage(index) }
-                    } label: {
-                        if index == session.pageIndex {
-                            Label("Page \(index + 1)", systemImage: "checkmark")
-                        } else {
-                            Text("Page \(index + 1)")
+            HStack(spacing: 14) {
+                Button {
+                    Task { await session.goToPreviousPage() }
+                } label: {
+                    Label("Previous", systemImage: "chevron.left")
+                }
+                .disabled(session.pageIndex == 0)
+
+                Menu {
+                    ForEach(0..<max(session.pageCount, 1), id: \.self) { index in
+                        Button {
+                            Task { await session.goToPage(index) }
+                        } label: {
+                            if index == session.pageIndex {
+                                Label("Page \(index + 1)", systemImage: "checkmark")
+                            } else {
+                                Text("Page \(index + 1)")
+                            }
                         }
                     }
+                } label: {
+                    Text("\(session.currentPageNumber) of \(max(session.pageCount, 1))")
+                        .font(.subheadline.monospacedDigit())
+                        .frame(minWidth: 70)
                 }
-            } label: {
-                Text("\(session.currentPageNumber) of \(max(session.pageCount, 1))")
-                    .font(.subheadline.monospacedDigit())
-                    .frame(minWidth: 70)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
+                .menuStyle(.borderlessButton)
+                .fixedSize()
 
-            Button {
-                Task { await session.goToNextPage() }
-            } label: {
-                Label("Next", systemImage: "chevron.right")
-            }
-            .disabled(session.pageIndex + 1 >= session.pageCount)
+                Button {
+                    Task { await session.goToNextPage() }
+                } label: {
+                    Label("Next", systemImage: "chevron.right")
+                }
+                .disabled(session.pageIndex + 1 >= session.pageCount)
 
-            Spacer()
+                Spacer()
 
-            Button {
-                Task { await session.addPage() }
-            } label: {
-                Label("Add Page", systemImage: "plus")
+                if session.isSaving {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+
+                Button {
+                    Task { await session.addPage() }
+                } label: {
+                    Label("Add Page", systemImage: "plus")
+                }
             }
+            .buttonStyle(.bordered)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 6)
         }
-        .buttonStyle(.bordered)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
         .background(.bar)
     }
 }

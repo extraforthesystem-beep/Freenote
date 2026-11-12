@@ -1,3 +1,4 @@
+import InkKit
 import NoteCore
 import SwiftUI
 
@@ -210,6 +211,7 @@ struct LibraryView: View {
                 ForEach(model.visibleNotebooks, id: \.id) { notebook in
                     NotebookCard(
                         notebook: notebook,
+                        store: model.store,
                         isFavourite: model.isFavourite(notebook.id),
                         folderName: model.folderName(for: notebook.id)
                     )
@@ -358,8 +360,11 @@ private struct FolderSidebarRow: View {
 
 private struct NotebookCard: View {
     let notebook: NotebookManifest
+    let store: LibraryStore
     let isFavourite: Bool
     let folderName: String?
+
+    @State private var cover: InkImage?
 
     private var coverColors: [Color] {
         let seed = notebook.id.uuidString.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
@@ -376,32 +381,50 @@ private struct NotebookCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack(alignment: .topTrailing) {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: coverColors,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                ZStack(alignment: .bottomLeading) {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: coverColors,
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
+
+                    if let cover {
+                        Image(inkImage: cover)
+                            .resizable()
+                            .scaledToFill()
+                    }
+
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(cover == nil ? 0.15 : 0.62)],
+                        startPoint: .center,
+                        endPoint: .bottom
                     )
-                    .aspectRatio(3 / 4, contentMode: .fit)
-                    .overlay(alignment: .bottomLeading) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Image(systemName: "book.closed")
-                                .font(.title2)
-                                .opacity(0.9)
-                            Text(notebook.title)
-                                .font(.headline)
-                                .lineLimit(3)
-                                .multilineTextAlignment(.leading)
-                                .foregroundStyle(.white)
-                        }
-                        .padding(18)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Image(systemName: "book.closed")
+                            .font(.title2)
+                            .opacity(0.9)
+                        Text(notebook.title)
+                            .font(.headline)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.leading)
                     }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(.white.opacity(0.16), lineWidth: 1)
-                    }
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+                    .padding(18)
+                }
+                .aspectRatio(3 / 4, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.white.opacity(0.16), lineWidth: 1)
+                }
+                .task(id: notebook.id) {
+                    await loadCover()
+                }
 
                 if isFavourite {
                     Image(systemName: "star.fill")
@@ -424,6 +447,24 @@ private struct NotebookCard: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private func loadCover() async {
+        guard let pageID = notebook.pageOrder.first else { return }
+        if let cached = ThumbnailCache.image(notebookID: notebook.id, pageID: pageID) {
+            cover = cached
+            return
+        }
+        guard let page = try? await store.loadPage(pageID, in: notebook.id),
+              let rendered = PageRenderer.image(
+                  strokes: page.strokes,
+                  pageSize: CGSize(width: page.width, height: page.height),
+                  template: page.template,
+                  scale: 1
+              )
+        else { return }
+        ThumbnailCache.store(rendered, notebookID: notebook.id, pageID: pageID)
+        cover = rendered
     }
 
     private var subtitle: String {
