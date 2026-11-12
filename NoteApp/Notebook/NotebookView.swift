@@ -952,7 +952,12 @@ struct NotebookPane: View {
     /// the pen and highlighter ink. A locked layer on the new page refuses it.
     private var inkCapture: InkCapture {
         let inks = !editor.isReadOnly && (editor.tool == .pen || editor.tool == .highlighter)
-        return InkCapture(tool: inks ? editor.inkTool : nil, drawsWithFinger: drawWithFinger, canvas: controller)
+        return InkCapture(
+            tool: inks ? editor.inkTool : nil,
+            drawsWithFinger: drawWithFinger,
+            canvas: controller,
+            onStrokeEnded: { editor.didEndToolGesture() }
+        )
     }
 
     private var canvasIsEditable: Bool {
@@ -1080,6 +1085,30 @@ struct NotebookPane: View {
         zoomView.update(page: page, magnification: zoomMagnification, change)
     }
 
+    /// Moves the band by a button or auto-advance and keeps it on screen. A
+    /// wrap past the bottom margin carries on at the top-left margins of the
+    /// next page; the last page stops at its bottom (no page is added).
+    private func stepZoomBand(_ page: Page, _ step: (inout ZoomBand) -> ZoomBand.Step) {
+        let result = zoomView.update(page: page, magnification: zoomMagnification, step)
+        if result == .nextPage {
+            if let index = session.manifest.pageOrder.firstIndex(of: page.id),
+               index + 1 < session.manifest.pageOrder.count {
+                Task {
+                    await session.goToPage(index + 1)
+                    // A page the band has not been on starts at its margins.
+                    if let next = session.page, let band = zoomBand(next) {
+                        zoomController.reveal(band.rect, onPage: next.id)
+                    }
+                }
+                return
+            }
+            moveZoomBand(page) { $0.newLine() }
+        }
+        if let band = zoomBand(page) {
+            zoomController.reveal(band.rect, onPage: page.id)
+        }
+    }
+
     /// The panel's height: a share of the editor, at least enough to write in
     /// and never more than most of it.
     private var zoomPanelHeight: CGFloat {
@@ -1092,6 +1121,12 @@ struct NotebookPane: View {
         ZoomWindowPanel(
             page: Self.removingTape(from: page),
             band: zoomBand(page),
+            tape: TapeOverlay(
+                page: page,
+                revealedTapeIDs: session.revealedTapeIDs,
+                allowsHitTesting: editor.tool != .elements && editor.tool != .laser,
+                onTap: { session.toggleTapeRevealed($0) }
+            ),
             assetsDirectory: session.assetsDirectory,
             height: zoomPanelHeight,
             showsAdvanceArea: zoomAutoAdvance,
@@ -1106,9 +1141,9 @@ struct NotebookPane: View {
                     zoomView.livePanelHeight = clamped
                 }
             },
-            onBack: { moveZoomBand(page) { $0.back() } },
-            onForward: { moveZoomBand(page) { $0.advance() } },
-            onNewLine: { moveZoomBand(page) { $0.newLine() } },
+            onBack: { stepZoomBand(page) { $0.back() ? .moved : .stopped } },
+            onForward: { stepZoomBand(page) { $0.step() } },
+            onNewLine: { stepZoomBand(page) { $0.wrap() } },
             onClose: {
                 withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
             }
@@ -1151,7 +1186,7 @@ struct NotebookPane: View {
               band.isInAdvanceArea(end)
         else { return }
         zoomView.scheduleAdvance {
-            moveZoomBand(page) { $0.advance() }
+            stepZoomBand(page) { $0.step() }
         }
     }
     #endif

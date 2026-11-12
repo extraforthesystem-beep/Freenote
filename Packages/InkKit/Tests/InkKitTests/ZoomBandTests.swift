@@ -60,6 +60,39 @@ struct ZoomBandTests {
     }
 
     @Test
+    func stepWrapsToTheNextPagePastTheBottomMargin() {
+        // Bottom margin at 840 - 30 = 810; lines are 80 tall.
+        var band = band(origin: CGPoint(x: 330, y: 640))
+        #expect(band.bottomLimitY == 810)
+        // The next line (720...800) still fits above the margin.
+        #expect(band.step() == .moved)
+        #expect(band.rect.origin == CGPoint(x: 30, y: 720))
+        // Mid-line, a step stays on the line.
+        #expect(band.step() == .moved)
+        #expect(abs(band.rect.minX - 174) < 0.001)
+        // At the end of the last line, the next (800...880) would not fit.
+        band.move(to: CGPoint(x: 330, y: 720))
+        #expect(band.step() == .nextPage)
+        #expect(band.rect.origin == CGPoint(x: 330, y: 720))
+        #expect(band.wrap() == .nextPage)
+        // The last page falls back to newLine(), which stops at the bottom.
+        do { let moved = band.newLine(); #expect(moved) }
+        #expect(band.rect.origin == CGPoint(x: 30, y: 760))
+        #expect(band.wrap() == .nextPage)
+        do { let moved = band.newLine(); #expect(!moved) }
+    }
+
+    @Test
+    func wrapMovesDownWhileTheLineFits() {
+        var band = band(origin: CGPoint(x: 200, y: 30))
+        #expect(band.wrap() == .moved)
+        #expect(band.rect.origin == CGPoint(x: 30, y: 110))
+        // A band as tall as the page has no next line here.
+        var tall = ZoomBand(pageSize: page, magnification: 1.5, panelAspect: 0.25)
+        #expect(tall.wrap() == .nextPage)
+    }
+
+    @Test
     func backStepsLeftThenGoesToTheEndOfTheLineAbove() {
         var band = band(origin: CGPoint(x: 100, y: 200))
         do { let moved = band.back(); #expect(moved) }

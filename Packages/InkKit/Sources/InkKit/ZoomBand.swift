@@ -10,7 +10,9 @@ import NoteCore
 ///
 /// Writing moves left to right: `advance()` steps right by 60% of the band,
 /// first stopping flush with the right margin, then wraps to the left margin
-/// one band lower ("next line"). At the bottom of the page it stays put.
+/// one band lower ("next line"). At the bottom of the page it stays put;
+/// `step()` and `wrap()` instead report `.nextPage` once the next line would
+/// pass the bottom margin, so the caller can carry on on the next page.
 public struct ZoomBand: Equatable, Sendable {
     public static let magnificationRange: ClosedRange<Double> = 1.5...5
     public static let defaultMagnification = 2.5
@@ -116,6 +118,45 @@ public struct ZoomBand: Equatable, Sendable {
         guard rect.minY < maxOriginY - 0.5 else { return false }
         rect.origin = clamped(CGPoint(x: lineStartX, y: rect.minY + rect.height))
         return true
+    }
+
+    // MARK: - Stepping across pages
+
+    /// What a step of the band did.
+    public enum Step: Equatable, Sendable {
+        /// The band moved on this page.
+        case moved
+        /// The next line would run past the bottom margin: the band stays
+        /// put and the writing goes on at the next page's top-left margins.
+        /// On the last page the caller falls back to `advance()` or
+        /// `newLine()`, which stop at the bottom of the page.
+        case nextPage
+        /// The band could not move.
+        case stopped
+    }
+
+    /// The lowest the band's bottom edge goes on a wrap before the writing
+    /// moves to the next page: the bottom margin, as far from the bottom as
+    /// the first line starts from the top.
+    public var bottomLimitY: CGFloat {
+        pageSize.height - pageSize.width * Self.marginFraction
+    }
+
+    /// Like `advance()`, but a wrap past the bottom margin is `.nextPage`.
+    public mutating func step() -> Step {
+        if rect.minX >= lineEndX - 0.5 {
+            return wrap()
+        }
+        return advance() ? .moved : .stopped
+    }
+
+    /// Like `newLine()`, but a line past the bottom margin is `.nextPage`.
+    public mutating func wrap() -> Step {
+        let nextMaxY = rect.minY + rect.height * 2
+        if nextMaxY > bottomLimitY + 0.5 {
+            return .nextPage
+        }
+        return newLine() ? .moved : .stopped
     }
 
     // MARK: - Mapping

@@ -31,6 +31,16 @@ final class PageZoomController {
         scrollView.setZoomScale(max(scrollView.zoomScale / 1.35, scrollView.minimumZoomScale), animated: true)
     }
 
+    /// Set by the page container: scrolls a rect of a page into view.
+    @ObservationIgnored var revealHandler: ((CGRect, UUID) -> Void)?
+
+    /// Scrolls the page area so `rect` (page points) on `pageID` is on
+    /// screen, with a little margin, unless the user is scrolling or
+    /// zooming. A page that is not active yet is revealed once it is.
+    func reveal(_ rect: CGRect, onPage pageID: UUID) {
+        revealHandler?(rect, pageID)
+    }
+
     func updateFit(_ scale: CGFloat) {
         fitScale = scale
     }
