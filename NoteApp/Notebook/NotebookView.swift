@@ -878,6 +878,7 @@ struct NotebookPane: View {
                     controller: zoomController,
                     fitMargin: 20,
                     panTouches: panTouches,
+                    inkCapture: inkCapture,
                     onActivate: { index in await session.goToPage(index) }
                 ) {
                     pageContent(page)
@@ -926,6 +927,13 @@ struct NotebookPane: View {
         default: return 1
         }
         #endif
+    }
+
+    /// What a stroke started on a page that is still loading becomes: only
+    /// the pen and highlighter ink. A locked layer on the new page refuses it.
+    private var inkCapture: InkCapture {
+        let inks = !editor.isReadOnly && (editor.tool == .pen || editor.tool == .highlighter)
+        return InkCapture(tool: inks ? editor.inkTool : nil, drawsWithFinger: drawWithFinger, canvas: controller)
     }
 
     private var canvasIsEditable: Bool {
