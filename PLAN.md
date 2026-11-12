@@ -27,7 +27,7 @@ Change from the report: it recommended leaving a custom ink engine as a later de
 Toolchain on this Mac `[TESTED]`:
 
 - Xcode 27.2, Swift 6.4.2, macOS 27.2.1, iOS SDK 27.2 and macOS SDK 27.2 installed.
-- **No simulator runtimes are installed** (`xcrun simctl list runtimes` is empty). Pencil pressure, tilt and palm rejection cannot be tested in a simulator anyway, so a physical iPad is the test device.
+- At planning time no simulator runtimes were installed. The iOS 27.2 runtime is now installed, with an iPad Pro 11-inch (M5) simulator used for UI checks. Pencil pressure, tilt and palm rejection still require the physical iPad.
 - `xcodegen`, `tuist`, `swiftlint`, `swiftformat` are not installed. Nothing in this plan requires them.
 - The project folder is empty and is not a git repository.
 
@@ -73,14 +73,14 @@ Dependencies: none in phases 0 to 5 beyond Apple frameworks. Google sign-in uses
 
 ### 3.2 The central design choice: who owns the stroke data
 
-- **H1 (chosen, pending spike S1):** the app's own stroke record is the stored truth. A `PKDrawing` is built from it for display and is only a cache.
+- **H1 (chosen, confirmed by spike S1 on 2026-11-12):** the app's own stroke record is the stored truth. A `PKDrawing` is built from it for display and is only a cache.
 - **H2 (rival):** Apple's `PKDrawing` blob per page is the stored truth, with a small sidecar file for extra fields.
 
 Strongest case for H2: phases 1 to 5 need nothing more. `PKStroke` already carries an ID and a creation date, merging two versions of a page is a union of `PKDrawing.strokes` by ID, and Apple maintains the format. It is the least code.
 
 Input that breaks H2: a stroke drawn with a custom-engine brush (phase 6) has no `PKInk` type, so it cannot live in a `PKDrawing` blob. The page would then have two stores that must stay in step, and the "open, editable format" goal fails because the blob is opaque.
 
-Discriminating check, run first (spike S1): convert strokes of all eight pen styles to the app's record and back, render both, and compare. If the round trip is lossless, H1 stands. If any pen style loses fidelity, fall back to a hybrid: keep the `PKDrawing` blob for Apple-pen strokes and the app's records for custom strokes, and accept two stores. `[INFERRED from the public PKStroke initialiser taking every stored field]` that the round trip is lossless; not yet tested.
+Discriminating check, run first (spike S1, done): convert strokes of all eight pen styles to the app's record and back, render both, and compare. **Result:** not bit-exact for any style, but rendering is pixel-identical for all eight, and the loss is bounded to PencilKit's own compressed storage — azimuth ≤ 9.6e-5 rad, altitude ≤ 2.4e-5 rad, `size.height` ≤ 0.057 pt, mask vertices 0.01 pt, mask vertex order. Values reach a fixed point after 2–3 round trips, so there is no cumulative drift. H1 stands. Evidence: `Spikes/S1-StrokeRoundTrip/RESULTS.md`. If a future feature needs bit-exact archival reproduction, keep `PKDrawing.dataRepresentation()` beside the record as an optional cache; the plan does not need that today.
 
 ### 3.3 On-disk format
 
@@ -262,7 +262,7 @@ Decision rule: ship option 1 if S5 transcribes the fixed test set well enough th
 
 | Risk | Tag | Resolved by |
 |---|---|---|
-| Stroke round trip loses fidelity for some pen style | `[INFERRED]` lossless | S1 |
+| Stroke round trip loses fidelity for some pen style | **Resolved** — bounded, pixel-identical; see 3.2 | S1, done 2026-11-12 |
 | `ASWebAuthenticationSession` + PKCE yields a durable refresh token on both platforms | `[ASSUMED]` | S2 |
 | A Google project "In production" with only `drive.file` has no weekly expiry for a personal account | `[RESEARCH]`, flagged unconfirmed there | S2, by leaving the spike signed in for more than 7 days |
 | Drawing overlay swallows PDF link taps | `[ASSUMED]` | S4 |

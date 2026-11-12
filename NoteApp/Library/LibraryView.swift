@@ -1,0 +1,437 @@
+import NoteCore
+import SwiftUI
+
+struct LibraryView: View {
+    @Bindable var model: AppModel
+
+    @State private var renameTarget: NotebookManifest?
+    @State private var renameText = ""
+    @State private var deleteTarget: NotebookManifest?
+    @State private var purgeTarget: NotebookManifest?
+    @State private var isCreatingFolder = false
+    @State private var newFolderName = ""
+    @State private var newFolderParent: UUID?
+    @State private var renameFolderTarget: Folder?
+    @State private var renameFolderText = ""
+    @State private var deleteFolderTarget: Folder?
+    @State private var tagTarget: NotebookManifest?
+    @State private var tagsText = ""
+
+    private var locationSelection: Binding<AppModel.Location?> {
+        Binding(
+            get: { model.selectedLocation },
+            set: { if let value = $0 { model.selectedLocation = value } }
+        )
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            detail
+        }
+        .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search notebooks")
+        .alert("Rename notebook", isPresented: renameAlert) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+            Button("Rename") {
+                if let target = renameTarget {
+                    Task { await model.rename(target, to: renameText) }
+                }
+                renameTarget = nil
+            }
+        }
+        .alert("New folder", isPresented: $isCreatingFolder) {
+            TextField("Folder name", text: $newFolderName)
+            Button("Cancel", role: .cancel) { newFolderName = "" }
+            Button("Create") {
+                Task { await model.createFolder(named: newFolderName, parentID: newFolderParent) }
+                newFolderName = ""
+            }
+        }
+        .alert("Rename folder", isPresented: renameFolderAlert) {
+            TextField("Folder name", text: $renameFolderText)
+            Button("Cancel", role: .cancel) { renameFolderTarget = nil }
+            Button("Rename") {
+                if let target = renameFolderTarget {
+                    Task { await model.renameFolder(target, to: renameFolderText) }
+                }
+                renameFolderTarget = nil
+            }
+        }
+        .alert("Move to Recently Deleted?", isPresented: deleteAlert) {
+            Button("Cancel", role: .cancel) { deleteTarget = nil }
+            Button("Delete", role: .destructive) {
+                if let target = deleteTarget {
+                    Task { await model.delete(target) }
+                }
+                deleteTarget = nil
+            }
+        } message: {
+            Text("The notebook can be restored from Recently Deleted.")
+        }
+        .alert("Delete permanently?", isPresented: purgeAlert) {
+            Button("Cancel", role: .cancel) { purgeTarget = nil }
+            Button("Delete", role: .destructive) {
+                if let target = purgeTarget {
+                    Task { await model.purge(target) }
+                }
+                purgeTarget = nil
+            }
+        } message: {
+            Text("This cannot be undone.")
+        }
+        .alert("Tags", isPresented: tagAlert) {
+            TextField("Comma-separated tags", text: $tagsText)
+            Button("Cancel", role: .cancel) { tagTarget = nil }
+            Button("Save") {
+                if let target = tagTarget {
+                    let tags = tagsText.split(separator: ",").map(String.init)
+                    Task { await model.setTags(tags, for: target) }
+                }
+                tagTarget = nil
+            }
+        } message: {
+            Text("Tags belong to the library, not to the notebook file.")
+        }
+        .alert("Delete this folder?", isPresented: deleteFolderAlert) {
+            Button("Cancel", role: .cancel) { deleteFolderTarget = nil }
+            Button("Delete", role: .destructive) {
+                if let target = deleteFolderTarget {
+                    Task { await model.deleteFolder(target) }
+                }
+                deleteFolderTarget = nil
+            }
+        } message: {
+            Text("Only the folder is removed. Its notebooks stay in the library at the root.")
+        }
+    }
+
+    // MARK: - Sidebar
+
+    private var sidebar: some View {
+        List(selection: locationSelection) {
+            Section {
+                Label("All Notebooks", systemImage: "books.vertical")
+                    .tag(AppModel.Location.all)
+                Label("Favourites", systemImage: "star")
+                    .tag(AppModel.Location.favourites)
+            }
+
+            Section("Folders") {
+                ForEach(flattenedFolders()) { row in
+                    FolderSidebarRow(folder: row.folder, depth: row.depth)
+                        .tag(AppModel.Location.folder(row.folder.id))
+                        .contextMenu {
+                            Button("New Subfolder", systemImage: "folder.badge.plus") {
+                                newFolderParent = row.folder.id
+                                newFolderName = ""
+                                isCreatingFolder = true
+                            }
+                            Button("Rename", systemImage: "pencil") {
+                                renameFolderTarget = row.folder
+                                renameFolderText = row.folder.name
+                            }
+                            Divider()
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                deleteFolderTarget = row.folder
+                            }
+                        }
+                }
+            }
+
+            Section {
+                Label("Recently Deleted", systemImage: "trash")
+                    .tag(AppModel.Location.trash)
+            }
+        }
+        .navigationTitle("NoteApp")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    newFolderParent = nil
+                    newFolderName = ""
+                    isCreatingFolder = true
+                } label: {
+                    Label("New Folder", systemImage: "folder.badge.plus")
+                }
+            }
+        }
+    }
+
+    private struct FolderRow: Identifiable {
+        var folder: Folder
+        var depth: Int
+        var id: UUID { folder.id }
+    }
+
+    private func flattenedFolders(parent: UUID? = nil, depth: Int = 0) -> [FolderRow] {
+        model.folderTree.folders
+            .filter { $0.parentID == parent }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .flatMap { folder in
+                [FolderRow(folder: folder, depth: depth)]
+                    + flattenedFolders(parent: folder.id, depth: depth + 1)
+            }
+    }
+
+    // MARK: - Detail
+
+    private var detail: some View {
+        Group {
+            if model.selectedLocation == .trash {
+                trashList
+            } else if model.visibleNotebooks.isEmpty {
+                emptyState
+            } else {
+                notebookGrid
+            }
+        }
+        .navigationTitle(model.selectedLocationTitle)
+        .toolbar {
+            if model.selectedLocation != .trash {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        Task { await model.createNotebook() }
+                    } label: {
+                        Label("New Notebook", systemImage: "plus")
+                    }
+                }
+            }
+        }
+    }
+
+    private var notebookGrid: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: 24)],
+                spacing: 28
+            ) {
+                ForEach(model.visibleNotebooks, id: \.id) { notebook in
+                    NotebookCard(
+                        notebook: notebook,
+                        isFavourite: model.isFavourite(notebook.id),
+                        folderName: model.folderName(for: notebook.id)
+                    )
+                    .onTapGesture {
+                        Task { await model.open(notebook) }
+                    }
+                    .contextMenu {
+                        Button("Open", systemImage: "book") {
+                            Task { await model.open(notebook) }
+                        }
+                        Button(
+                            model.isFavourite(notebook.id) ? "Remove from Favourites" : "Add to Favourites",
+                            systemImage: model.isFavourite(notebook.id) ? "star.slash" : "star"
+                        ) {
+                            Task { await model.toggleFavourite(notebook) }
+                        }
+                        Button("Rename", systemImage: "pencil") {
+                            renameText = notebook.title
+                            renameTarget = notebook
+                        }
+                        Button("Tags…", systemImage: "tag") {
+                            tagsText = model.tags(for: notebook.id).joined(separator: ", ")
+                            tagTarget = notebook
+                        }
+                        Menu("Move to Folder", systemImage: "folder") {
+                            Button("Root") {
+                                Task { await model.move(notebook, to: nil) }
+                            }
+                            ForEach(model.folderTree.folders.sorted(by: { $0.name < $1.name })) { folder in
+                                Button(folder.name) {
+                                    Task { await model.move(notebook, to: folder.id) }
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            deleteTarget = notebook
+                        }
+                    }
+                }
+            }
+            .padding(28)
+        }
+        .background(AppColor.groupedBackground)
+    }
+
+    private var trashList: some View {
+        List {
+            ForEach(model.visibleNotebooks, id: \.id) { notebook in
+                HStack(spacing: 14) {
+                    Image(systemName: "book.closed")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(notebook.title)
+                        Text(notebook.updatedAt, format: .dateTime.day().month().year())
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Restore") {
+                        Task { await model.restore(notebook) }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .swipeActions {
+                    Button("Delete", role: .destructive) {
+                        purgeTarget = notebook
+                    }
+                }
+                .contextMenu {
+                    Button("Restore", systemImage: "arrow.uturn.backward") {
+                        Task { await model.restore(notebook) }
+                    }
+                    Button("Delete Permanently", systemImage: "trash", role: .destructive) {
+                        purgeTarget = notebook
+                    }
+                }
+            }
+        }
+        .overlay {
+            if model.visibleNotebooks.isEmpty {
+                ContentUnavailableView(
+                    "No Deleted Notebooks",
+                    systemImage: "trash",
+                    description: Text("Notebooks you delete appear here for a while.")
+                )
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label(model.searchText.isEmpty ? "No Notebooks" : "No Matches", systemImage: "book.closed")
+        } description: {
+            Text(model.searchText.isEmpty
+                 ? "Create a notebook and start writing."
+                 : "Try a different search.")
+        } actions: {
+            if model.searchText.isEmpty {
+                Button("New Notebook") {
+                    Task { await model.createNotebook() }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    // MARK: - Alert bindings
+
+    private var renameAlert: Binding<Bool> {
+        Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
+    }
+
+    private var renameFolderAlert: Binding<Bool> {
+        Binding(get: { renameFolderTarget != nil }, set: { if !$0 { renameFolderTarget = nil } })
+    }
+
+    private var deleteAlert: Binding<Bool> {
+        Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
+    }
+
+    private var purgeAlert: Binding<Bool> {
+        Binding(get: { purgeTarget != nil }, set: { if !$0 { purgeTarget = nil } })
+    }
+
+    private var deleteFolderAlert: Binding<Bool> {
+        Binding(get: { deleteFolderTarget != nil }, set: { if !$0 { deleteFolderTarget = nil } })
+    }
+
+    private var tagAlert: Binding<Bool> {
+        Binding(get: { tagTarget != nil }, set: { if !$0 { tagTarget = nil } })
+    }
+
+}
+
+private struct FolderSidebarRow: View {
+    let folder: Folder
+    let depth: Int
+
+    var body: some View {
+        Label(folder.name, systemImage: "folder")
+            .padding(.leading, CGFloat(depth) * 14)
+    }
+}
+
+private struct NotebookCard: View {
+    let notebook: NotebookManifest
+    let isFavourite: Bool
+    let folderName: String?
+
+    private var coverColors: [Color] {
+        let seed = notebook.id.uuidString.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        let palettes: [[Color]] = [
+            [.indigo, .blue],
+            [.orange, .pink],
+            [.teal, .green],
+            [.purple, .indigo],
+            [.brown, .orange],
+        ]
+        return palettes[seed % palettes.count]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: coverColors,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .aspectRatio(3 / 4, contentMode: .fit)
+                    .overlay(alignment: .bottomLeading) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Image(systemName: "book.closed")
+                                .font(.title2)
+                                .opacity(0.9)
+                            Text(notebook.title)
+                                .font(.headline)
+                                .lineLimit(3)
+                                .multilineTextAlignment(.leading)
+                                .foregroundStyle(.white)
+                        }
+                        .padding(18)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(.white.opacity(0.16), lineWidth: 1)
+                    }
+
+                if isFavourite {
+                    Image(systemName: "star.fill")
+                        .font(.caption)
+                        .foregroundStyle(.yellow)
+                        .padding(10)
+                        .background(.black.opacity(0.18), in: Circle())
+                        .padding(10)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(notebook.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var subtitle: String {
+        let pages = notebook.pageOrder.count
+        let date = notebook.updatedAt.formatted(.relative(presentation: .named))
+        if let folderName {
+            return "\(folderName) · \(pages) page\(pages == 1 ? "" : "s") · \(date)"
+        }
+        return "\(pages) page\(pages == 1 ? "" : "s") · \(date)"
+    }
+}

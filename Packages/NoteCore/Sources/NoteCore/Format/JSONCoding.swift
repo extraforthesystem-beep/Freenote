@@ -53,7 +53,9 @@ enum Zlib {
                     )
                 }
             }
-            if let written, written > 0 {
+            // A full destination can come back as a partial write rather than 0 on
+            // some SDKs, so a write that fills the buffer is a retry, not success.
+            if let written, written > 0, written < capacity {
                 return output.prefix(written)
             }
             capacity *= 2
@@ -85,7 +87,9 @@ enum Zlib {
                     )
                 }
             }
-            if let written, written > 0 {
+            // A full destination can come back as a partial write rather than 0 on
+            // some SDKs, so a write that fills the buffer is a retry, not success.
+            if let written, written > 0, written < capacity {
                 return output.prefix(written)
             }
             capacity *= 2

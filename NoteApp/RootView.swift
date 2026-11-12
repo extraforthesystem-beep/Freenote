@@ -1,19 +1,30 @@
 import SwiftUI
 
-/// Placeholder shell. The library browser replaces this in phase 1.
 struct RootView: View {
+    @State private var model = AppModel()
+
     var body: some View {
-        NavigationSplitView {
-            List {
-                Label("All Notebooks", systemImage: "books.vertical")
+        Group {
+            if model.isLoading {
+                ProgressView("Opening library…")
+            } else if let session = model.session {
+                NotebookView(session: session, model: model)
+            } else {
+                LibraryView(model: model)
             }
-            .navigationTitle("NoteApp")
-        } detail: {
-            ContentUnavailableView(
-                "No notebook open",
-                systemImage: "pencil.and.scribble",
-                description: Text("The library arrives in phase 1.")
-            )
+        }
+        .task { await model.start() }
+        .alert(
+            model.notice?.title ?? "Something went wrong",
+            isPresented: Binding(
+                get: { model.notice != nil },
+                set: { if !$0 { model.notice = nil } }
+            ),
+            presenting: model.notice
+        ) { _ in
+            Button("OK", role: .cancel) { model.notice = nil }
+        } message: { notice in
+            Text(notice.message)
         }
     }
 }

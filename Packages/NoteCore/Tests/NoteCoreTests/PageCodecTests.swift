@@ -18,6 +18,28 @@ struct PageCodecTests {
         }
     }
 
+    /// Regression: the decompression buffer used to be returned when it filled,
+    /// truncating a page whose JSON was more than eight times its compressed size.
+    @Test func largeCompressedPageIsNotTruncated() throws {
+        var rng = SplitMix64(seed: 0xB1_6B00)
+        let layer = Page.Layer(id: UUID(), name: "Layer 1")
+        let strokes = (0..<10).map { _ in
+            randomStroke(&rng, layerID: layer.id, pointCount: 200)
+        }
+        let page = Page(
+            id: UUID(),
+            width: 612,
+            height: 792,
+            template: .blank,
+            layers: [layer],
+            strokes: strokes
+        )
+        let encoded = try PageCodec.encode(page)
+        let decoded = try PageCodec.decode(encoded)
+        #expect(decoded == page)
+        #expect(decoded.strokes.count == 10)
+    }
+
     @Test func emptyPageRoundTrips() throws {
         let page = Page(id: UUID(), width: 612, height: 792, template: .blank)
         let decoded = try PageCodec.decode(try PageCodec.encode(page))
