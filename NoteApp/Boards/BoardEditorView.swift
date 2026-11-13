@@ -61,6 +61,9 @@ struct BoardEditorView: View {
     @State private var editingText = ""
     /// The finger drag on the selection, while one is in progress.
     @State private var drag: BoardItemDrag?
+    /// Whether the current drag has moved the selection. A tap on the
+    /// selection starts a drag that never moves, and saves nothing.
+    @State private var dragMoved = false
     /// Alignment guides for the current drag.
     @State private var snapGuides: [BoardSnapGuide] = []
     @State private var showsPhotoPicker = false
@@ -280,6 +283,7 @@ struct BoardEditorView: View {
     private var fingerInteraction: CanvasFingerInteraction {
         CanvasFingerInteraction(
             onTap: { point in canvasTapped(at: point) },
+            onDragPossible: { point in dragTarget(at: point) != nil },
             onDragBegan: { point in beginDrag(at: point) },
             onDragChanged: { translation in dragChanged(translation) },
             onDragEnded: { endDrag() }
@@ -861,34 +865,43 @@ extension BoardEditorView {
 
     // MARK: - Dragging
 
-    private func beginDrag(at point: CGPoint) -> Bool {
+    /// The drag a finger at `point` would start, if it lands on the selection.
+    /// Asked at touch-down, so a finger that also draws can wait for it and
+    /// ink anywhere else.
+    private func dragTarget(at point: CGPoint) -> BoardItemDrag? {
         guard !editor.isReadOnly,
               editingItemID == nil,
               let item = selectedItem,
               let frame = item.frame,
               !item.isLocked
-        else { return false }
+        else { return nil }
 
         let zoom = max(viewport.zoom, 0.001)
         if let corner = BoardResizeCorner.corner(at: point, in: frame, tolerance: 22 / zoom) {
-            drag = BoardItemDrag(
+            return BoardItemDrag(
                 itemID: item.id,
                 frame: frame,
                 corner: corner,
                 keepsSquare: isSticky(item)
             )
-            return true
         }
 
         guard frame.insetBy(dx: -2 / zoom, dy: -2 / zoom).contains(point) else {
-            return false
+            return nil
         }
-        drag = BoardItemDrag(itemID: item.id, frame: frame, corner: nil, keepsSquare: false)
+        return BoardItemDrag(itemID: item.id, frame: frame, corner: nil, keepsSquare: false)
+    }
+
+    private func beginDrag(at point: CGPoint) -> Bool {
+        guard let target = dragTarget(at: point) else { return false }
+        drag = target
+        dragMoved = false
         return true
     }
 
     private func dragChanged(_ translation: CGPoint) {
         guard let drag else { return }
+        dragMoved = true
         let now = Date()
 
         if let corner = drag.corner {
@@ -918,9 +931,13 @@ extension BoardEditorView {
     }
 
     private func endDrag() {
+        let moved = dragMoved && drag != nil
         drag = nil
+        dragMoved = false
         snapGuides = []
-        scheduleSave()
+        if moved {
+            scheduleSave()
+        }
     }
 
     private static func resized(
