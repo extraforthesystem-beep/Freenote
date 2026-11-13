@@ -26,6 +26,9 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     var showsElementTool = true
     /// VoiceOver and tooltip label of the leading back button.
     var backLabel = "Library"
+    /// The eraser popover's destructive action: a page in the notebook, the
+    /// whole board on a board.
+    var clearPageLabel = "Clear Page…"
     @ViewBuilder let insertMenu: () -> InsertMenu
     @ViewBuilder let moreMenu: () -> MoreMenu
 
@@ -342,7 +345,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
             Button("Pixel Eraser", systemImage: "eraser.line.dashed") { editor.setEraser(kind: .pixel) }
         }
         .popover(isPresented: popoverBinding(.eraser)) {
-            EraserSettingsPopover(editor: editor) {
+            EraserSettingsPopover(editor: editor, clearLabel: clearPageLabel) {
                 popover = nil
                 onClearPage()
             }
@@ -682,6 +685,7 @@ private struct WidthSlider: View {
 
 private struct EraserSettingsPopover: View {
     @Bindable var editor: EditorToolState
+    let clearLabel: String
     let onClearPage: () -> Void
     @AppStorage(EditorToolState.eraserAutoDeselectKey) private var autoDeselect = false
     @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var highlighterOnly = false
@@ -743,7 +747,7 @@ private struct EraserSettingsPopover: View {
                     .foregroundStyle(.secondary)
             }
             Divider()
-            Button("Clear Page…", systemImage: "trash", role: .destructive) {
+            Button(clearLabel, systemImage: "trash", role: .destructive) {
                 onClearPage()
             }
             .font(.subheadline)

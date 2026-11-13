@@ -96,6 +96,7 @@ struct BoardEditorView: View {
                     showsPageControls: false,
                     showsElementTool: false,
                     backLabel: "Boards",
+                    clearPageLabel: "Clear Board…",
                     insertMenu: { insertMenu },
                     moreMenu: { moreMenu }
                 )
