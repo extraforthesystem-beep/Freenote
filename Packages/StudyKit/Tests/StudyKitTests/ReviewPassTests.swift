@@ -175,5 +175,163 @@ struct ReviewPassTests {
 
         #expect(result.state.lapses == 4)
         #expect(result.state.isLeech)
+        // A card flagged as a leech leaves the pass even though it has
+        // requeues left: the rewrite sheet is the next step, and a stale copy
+        // must not come back after the card is rewritten.
+        #expect(pass.reviewedCount == 1)
+        #expect(pass.remainingCount == 0)
+        #expect(pass.isFinished)
+    }
+
+    @Test func anAgainCardComesBackAfterTheGap() throws {
+        let set = makeSet(cardCount: 6)
+        var pass = ReviewPass(items: StudyQueue.due(in: [set], now: testNow), now: testNow)
+        let failed = try #require(pass.currentItem)
+
+        try pass.gradeCurrent(quality: 1, now: testNow)
+
+        // An attempt is not a completed card: the pass still holds all six
+        // unique cards and the progress bar does not move.
+        #expect(pass.reviewedCount == 0)
+        #expect(pass.remainingCount == pass.itemCount)
+        #expect(pass.progress == 0)
+
+        for _ in 0..<ReviewPass.requeueGap {
+            let item = try #require(pass.currentItem)
+            #expect(item.card.id != failed.card.id)
+            try pass.gradeCurrent(quality: 4, now: testNow)
+        }
+
+        #expect(pass.currentItem?.card.id == failed.card.id)
+        #expect(pass.reviewedCount == ReviewPass.requeueGap)
+        #expect(pass.remainingCount == 3)
+    }
+
+    @Test func anAgainCardAtTheEndOfAShortQueueComesBackLast() throws {
+        let set = makeSet(cardCount: 2)
+        var pass = ReviewPass(items: StudyQueue.due(in: [set], now: testNow), now: testNow)
+        let failed = try #require(pass.currentItem)
+
+        try pass.gradeCurrent(quality: 1, now: testNow)
+
+        // Fewer than the gap remain, so the card waits at the end.
+        let other = try #require(pass.currentItem)
+        #expect(other.card.id != failed.card.id)
+        try pass.gradeCurrent(quality: 4, now: testNow)
+
+        #expect(pass.currentItem?.card.id == failed.card.id)
+        #expect(pass.reviewedCount == 1)
+        #expect(pass.remainingCount == 1)
+    }
+
+    @Test func aCardPassedAfterARequeueIsCountedOnce() throws {
+        let set = makeSet(cardCount: 4)
+        var pass = ReviewPass(items: StudyQueue.due(in: [set], now: testNow), now: testNow)
+        let failed = try #require(pass.currentItem)
+
+        try pass.gradeCurrent(quality: 1, now: testNow)
+
+        var steps = 0
+        while pass.currentItem?.card.id != failed.card.id, steps < 20 {
+            try pass.gradeCurrent(quality: 4, now: testNow)
+            steps += 1
+        }
+        #expect(pass.currentItem?.card.id == failed.card.id)
+
+        try pass.gradeCurrent(quality: 4, now: testNow)
+
+        #expect(pass.reviewedCardIDs.filter { $0 == failed.card.id }.count == 1)
+        #expect(pass.reviewedCount == pass.itemCount)
+        #expect(pass.reviewedCount == 4)
+        #expect(pass.remainingCount == 0)
+        #expect(pass.isFinished)
+        #expect(pass.progress == 1)
+    }
+
+    @Test func requeuesAreCappedPerCard() throws {
+        let set = makeSet(cardCount: 1)
+        let cardID = set.cards[0].id
+        var pass = ReviewPass(items: StudyQueue.due(in: [set], now: testNow), now: testNow)
+        let attempts = ReviewPass.maximumRequeuesPerCard + 1
+
+        for attempt in 1...attempts {
+            let result = try pass.gradeCurrent(quality: 1, now: testNow)
+            #expect(result.state.cardID == cardID)
+            if attempt < attempts {
+                #expect(!pass.isFinished)
+                #expect(pass.remainingCount == 1)
+                #expect(pass.reviewedCount == 0)
+            }
+        }
+
+        // The fourth failure has used every requeue, so the card leaves the
+        // pass and stays scheduled by FSRS.
+        #expect(pass.isFinished)
+        #expect(pass.reviewedCount == 1)
+        #expect(pass.reviewedCardIDs == [cardID])
+        let scheduled = try #require(pass.states[set.id]?[cardID])
+        #expect(scheduled.lapses == attempts)
+        #expect(scheduled.isLeech)
+        #expect(scheduled.dueDate >= testNow.addingTimeInterval(86_400))
+    }
+
+    @Test func canRequeueMatchesWhatAnAgainGradeDoes() throws {
+        let set = makeSet(cardCount: 1)
+        var pass = ReviewPass(items: StudyQueue.due(in: [set], now: testNow), now: testNow)
+        let item = try #require(pass.currentItem)
+
+        for _ in 0..<ReviewPass.maximumRequeuesPerCard {
+            #expect(pass.canRequeue(item))
+            try pass.gradeCurrent(quality: 1, now: testNow)
+            #expect(pass.currentItem?.card.id == item.card.id)
+        }
+
+        #expect(!pass.canRequeue(item))
+        try pass.gradeCurrent(quality: 1, now: testNow)
+        #expect(pass.isFinished)
+    }
+
+    @Test func progressCountsUniqueCardsAndNeverExceedsThePass() throws {
+        let set = makeSet(cardCount: 3)
+        let failingCardID = set.cards[0].id
+        var pass = ReviewPass(items: StudyQueue.due(in: [set], now: testNow), now: testNow)
+        var lastProgress = 0.0
+        var attempts = 0
+        let maximumAttempts = pass.itemCount * (ReviewPass.maximumRequeuesPerCard + 1)
+
+        while let item = pass.currentItem {
+            #expect(pass.reviewedCount <= pass.itemCount)
+            #expect(pass.remainingCount <= pass.itemCount)
+            #expect(pass.reviewedCount + pass.remainingCount == pass.itemCount)
+            #expect(pass.progress <= 1)
+            #expect(pass.progress >= lastProgress)
+            #expect(pass.progress == Double(pass.reviewedCount) / Double(pass.itemCount))
+            lastProgress = pass.progress
+
+            try pass.gradeCurrent(
+                quality: item.card.id == failingCardID ? 1 : 4,
+                now: testNow
+            )
+            attempts += 1
+            #expect(attempts <= maximumAttempts)
+        }
+
+        #expect(pass.reviewedCount == pass.itemCount)
+        #expect(pass.reviewedCount == 3)
+        #expect(pass.progress == 1)
+    }
+
+    @Test func aNewPassDoesNotResurrectAnAgainCardThatIsNotDue() throws {
+        let set = makeSet(cardCount: 3)
+        var pass = ReviewPass(items: StudyQueue.due(in: [set], now: testNow), now: testNow)
+        let failed = try #require(pass.currentItem)
+
+        try pass.gradeCurrent(quality: 1, now: testNow)
+
+        let nextPass = StudyQueue.due(in: [set], states: pass.states, now: testNow)
+
+        #expect(!nextPass.contains { $0.card.id == failed.card.id })
+        #expect(nextPass.count == 2)
+        #expect(pass.remainingCount == 3, "the card is still in the current pass")
     }
 }

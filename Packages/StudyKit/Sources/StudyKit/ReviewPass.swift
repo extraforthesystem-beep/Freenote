@@ -143,30 +143,66 @@ public enum StudyQueue {
 /// A single pass through a due queue, possibly across several sets.
 ///
 /// The queue is captured at `init`, so its order is stable for the whole pass
-/// even if the clock advances. Each card is served once; grading it updates the
-/// state for its set. ``gradeCurrent(quality:now:)`` returns both the set id and
+/// even if the clock advances. Every unique card holds one slot in the pass and
+/// leaves it when it is graded passing (quality 3 or above), when it has used
+/// all of its Again requeues, or when the grade flags it as a leech (the
+/// rewrite sheet takes over at that point). Grading updates the FSRS state for
+/// the card's set; ``gradeCurrent(quality:now:)`` returns both the set id and
 /// the new state so the caller can store them in the right place.
+///
+/// An Again grade (quality below 3) still schedules the card with FSRS, but it
+/// also puts the card back into this pass rather than dropping it. It is shown
+/// again after ``requeueGap`` other cards, or at the end of the queue when
+/// fewer remain. This is deliberately the smallest in-pass rule: there is no
+/// separate learning queue and the stored state still says when the card is
+/// next due, so starting another pass never revives it early.
 public struct ReviewPass: Sendable {
-    /// The cards in this pass, reviewed plus remaining.
+    /// How many cards are shown before an Again card returns to this pass.
+    public static let requeueGap = 3
+    /// How many times one card may return to this pass after an Again grade.
+    /// Once they are used, the card is left to its FSRS schedule.
+    public static let maximumRequeuesPerCard = 3
+
+    /// The unique cards in this pass, reviewed plus remaining.
     public let itemCount: Int
     /// Current states, keyed by set id and then card id. Cards in the queue
     /// without a state are seeded as new at the pass clock.
     public private(set) var states: [UUID: [UUID: ReviewState]]
-    /// The cards graded so far, in the order they were served.
+    /// The cards that have left this pass, in the order they left: passed,
+    /// flagged as a leech, or failed after using every requeue. A card requeued
+    /// by an Again grade appears here once, when it finally leaves.
     public private(set) var reviewedCardIDs: [UUID]
 
+    /// Identifies one card across a mixed-set queue.
+    private struct CardKey: Hashable, Sendable {
+        let setID: UUID
+        let cardID: UUID
+
+        init(_ item: StudyQueueItem) {
+            self.setID = item.setID
+            self.cardID = item.card.id
+        }
+    }
+
     private var pending: [StudyQueueItem]
+    private var requeueCounts: [CardKey: Int] = [:]
+    private var reviewedKeys: Set<CardKey> = []
     private let scheduler = FSRSScheduler()
 
     public init(items: [StudyQueueItem], states: [UUID: [UUID: ReviewState]] = [:], now: Date) {
+        // A queue normally holds one item per card, but keep the unique-count
+        // invariant even if a caller repeats one.
+        var seen: Set<CardKey> = []
+        let uniqueItems = items.filter { seen.insert(CardKey($0)).inserted }
+
         var seeded = states
-        for item in items where seeded[item.setID]?[item.card.id] == nil {
+        for item in uniqueItems where seeded[item.setID]?[item.card.id] == nil {
             seeded[item.setID, default: [:]][item.card.id] = .new(cardID: item.card.id, now: now)
         }
-        self.pending = items
+        self.pending = uniqueItems
         self.states = seeded
         self.reviewedCardIDs = []
-        self.itemCount = items.count
+        self.itemCount = uniqueItems.count
     }
 
     /// The item to show next, or `nil` when the pass is finished.
@@ -179,24 +215,26 @@ public struct ReviewPass: Sendable {
         pending.first?.card
     }
 
-    /// Cards graded so far.
+    /// Unique cards that have left this pass. Attempts are not counted, so a
+    /// card requeued by an Again grade and then passed counts once.
     public var reviewedCount: Int {
         reviewedCardIDs.count
     }
 
-    /// Cards still waiting in this pass.
+    /// Unique cards still waiting in this pass. A requeued card keeps its one
+    /// slot, so an Again grade does not change this count.
     public var remainingCount: Int {
         pending.count
     }
 
-    /// Fraction of this pass that is graded, from 0 to 1. A pass with no cards
-    /// reports 1 because there is nothing left to do.
+    /// Fraction of this pass that has left it, from 0 to 1. A pass with no
+    /// cards reports 1 because there is nothing left to do.
     public var progress: Double {
         guard itemCount > 0 else { return 1 }
-        return Double(reviewedCardIDs.count) / Double(itemCount)
+        return min(1, Double(reviewedCardIDs.count) / Double(itemCount))
     }
 
-    /// True when every card in this pass has been graded, including an empty pass.
+    /// True when every card in this pass has left it, including an empty pass.
     public var isFinished: Bool {
         pending.isEmpty
     }
@@ -206,12 +244,33 @@ public struct ReviewPass: Sendable {
         states[item.setID]?[item.card.id] ?? .new(cardID: item.card.id, now: now)
     }
 
+    /// True when another Again grade would put `item` back into this pass.
+    ///
+    /// False when that grade would flag the card as a leech (its rewrite sheet
+    /// takes over) and once the card has used ``maximumRequeuesPerCard``
+    /// returns; an Again grade then leaves the card to its FSRS schedule. This
+    /// is the same rule ``gradeCurrent(quality:now:)`` applies, exposed so a
+    /// grade button can explain it.
+    public func canRequeue(_ item: StudyQueueItem) -> Bool {
+        guard (requeueCounts[CardKey(item)] ?? 0) < Self.maximumRequeuesPerCard else {
+            return false
+        }
+        let lapses = states[item.setID]?[item.card.id]?.lapses ?? 0
+        return lapses + 1 < ReviewState.leechThreshold
+    }
+
     /// Grades the current card and advances the queue.
     ///
     /// `quality` must be 0...5, or the call throws
     /// ``StudyKitError/invalidQuality(_:)`` and leaves the pass unchanged.
     /// If the pass is already finished, it throws
     /// ``StudyKitError/noCurrentCard``.
+    ///
+    /// Quality below 3 applies the FSRS failure to the card's state and puts
+    /// the card back after ``requeueGap`` cards, up to
+    /// ``maximumRequeuesPerCard`` times. Quality 3 and above, a failure that
+    /// has used every requeue, or a failure that flags the card as a leech lets
+    /// the card leave the pass and counts it as reviewed once.
     ///
     /// - Returns: The set the card belongs to and its new review state.
     @discardableResult
@@ -229,7 +288,17 @@ public struct ReviewPass: Sendable {
         let updated = scheduler.review(state: state(for: item, now: now), quality: quality, now: now)
         states[item.setID, default: [:]][item.card.id] = updated
         pending.removeFirst()
-        reviewedCardIDs.append(item.card.id)
+
+        let key = CardKey(item)
+        let requeues = requeueCounts[key] ?? 0
+        if quality < 3, !updated.isLeech, requeues < Self.maximumRequeuesPerCard {
+            requeueCounts[key] = requeues + 1
+            pending.insert(item, at: min(Self.requeueGap, pending.count))
+        } else if reviewedKeys.insert(key).inserted {
+            // Leaving the pass is what counts as reviewed; attempts on a
+            // requeued card do not.
+            reviewedCardIDs.append(item.card.id)
+        }
         return (item.setID, updated)
     }
 }

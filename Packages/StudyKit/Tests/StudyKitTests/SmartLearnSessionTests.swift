@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Smart Learn session")
 struct SmartLearnSessionTests {
-    @Test func hundredCardSessionDrainsEveryDueCardExactlyOnce() throws {
+    @Test func hundredCardSessionFinishesEveryDueCard() throws {
         let set = makeSet(cardCount: 100)
         var session = SmartLearnSession(set: set, now: testNow)
 
@@ -13,23 +13,26 @@ struct SmartLearnSessionTests {
         #expect(session.remainingCount == 100)
         #expect(session.progress == 0)
 
-        var served = Set<UUID>()
-        var step = 0
+        var servedCounts: [UUID: Int] = [:]
+        var attempts = 0
+        var lastReviewed = 0
         let qualities = [0, 2, 3, 4, 5]
+        let maximumAttempts = 100 * (ReviewPass.maximumRequeuesPerCard + 1)
 
         while let card = session.currentCard {
-            #expect(served.insert(card.id).inserted, "card \(card.id) was served twice")
-            let quality = qualities[step % qualities.count]
+            servedCounts[card.id, default: 0] += 1
+            let quality = qualities[attempts % qualities.count]
             _ = try session.gradeCurrent(quality: quality, now: testNow)
-            step += 1
+            attempts += 1
 
-            #expect(session.reviewedCount == step)
-            #expect(session.remainingCount == 100 - step)
-            #expect(abs(session.progress - Double(step) / 100) < 1e-12)
+            #expect(session.reviewedCount >= lastReviewed)
+            #expect(session.reviewedCount + session.remainingCount == 100)
+            #expect(session.progress <= 1)
+            lastReviewed = session.reviewedCount
+            #expect(attempts <= maximumAttempts)
         }
 
-        #expect(step == 100)
-        #expect(served.count == 100)
+        #expect(servedCounts.count == 100, "every card should be served")
         #expect(Set(session.reviewedCardIDs) == Set(set.cards.map(\.id)))
         #expect(session.reviewedCardIDs.count == 100)
         #expect(session.isFinished)
@@ -111,21 +114,32 @@ struct SmartLearnSessionTests {
 
         var first = SmartLearnSession(set: set, now: testNow)
         var second = SmartLearnSession(set: set, now: testNow)
-        var order: [UUID] = []
+        var firstServed: [UUID] = []
+        var secondServed: [UUID] = []
+        var step = 0
+        let maximumAttempts = set.cards.count * (ReviewPass.maximumRequeuesPerCard + 1)
 
-        for (index, quality) in qualities.enumerated() {
-            guard let card = first.currentCard else {
-                Issue.record("session ran out of cards at step \(index)")
-                return
+        while let card = first.currentCard {
+            firstServed.append(card.id)
+            let quality = qualities[step % qualities.count]
+            let now = times[step % times.count]
+            _ = try first.gradeCurrent(quality: quality, now: now)
+
+            if let other = second.currentCard {
+                secondServed.append(other.id)
+                _ = try second.gradeCurrent(quality: quality, now: now)
             }
-            order.append(card.id)
-            _ = try first.gradeCurrent(quality: quality, now: times[index])
-            _ = try second.gradeCurrent(quality: quality, now: times[index])
+
+            step += 1
+            #expect(step <= maximumAttempts)
         }
 
-        #expect(first.reviewedCardIDs == order)
+        #expect(firstServed == secondServed)
         #expect(first.reviewedCardIDs == second.reviewedCardIDs)
         #expect(first.states == second.states)
+        #expect(Set(first.reviewedCardIDs) == Set(set.cards.map(\.id)))
+        #expect(first.isFinished)
+        #expect(second.isFinished)
         #expect(first.progress == 1)
     }
 
