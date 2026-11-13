@@ -1318,7 +1318,13 @@ struct NotebookPane: View {
                 eraseHighlighterOnly: eraserHighlighterOnly,
                 usesDarkPaper: usesDarkPaper,
                 fingerInteraction: replayFingerInteraction,
-                onStrokesChanged: { [pageID = page.id] in session.strokesChanged($0, onPage: pageID) }
+                onStrokesChanged: { records in
+                    // Follow mode hands the canvas faded copies of the page's
+                    // ink. The canvas takes no input then, so any report (an
+                    // undo from the toolbar) must not write those copies back.
+                    guard cutoff == nil else { return }
+                    session.strokesChanged(records, onPage: page.id)
+                }
             )
             .id(page.id)
 
