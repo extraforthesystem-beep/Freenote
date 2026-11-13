@@ -169,7 +169,7 @@ struct NotebookPane: View {
     @State private var pdfImport: PDFImportFlow?
     @State private var showsLayers = false
     @State private var showsOutline = false
-    @State private var showsSearch = false
+    @State private var pagesPanelTab: NotebookPanelTab = .pages
     @State private var showsAudio = false
     @State private var showsAI = false
     @State private var showsToolbarEditor = false
@@ -242,7 +242,6 @@ struct NotebookPane: View {
                 VStack(spacing: 0) {
                     pageArea
                         .overlay(alignment: .top) { banners }
-                        .overlay(alignment: .top) { searchOverlay }
                         #if os(iOS)
                         .overlay(alignment: .topTrailing) {
                             if showsTapeStudy {
@@ -318,7 +317,7 @@ struct NotebookPane: View {
             Task { await session.audio.load() }
             session.audio.replayPageChanged(session.visibleStrokes)
             // Opened from a search: show its results beside the marked pages.
-            if session.searchHighlight != nil { showsSearch = true }
+            if session.searchHighlight != nil { openSearch() }
         }
         .onChange(of: session.currentPageID) { _, _ in
             // Replay seeks wait on the ink of the page in view.
@@ -328,7 +327,7 @@ struct NotebookPane: View {
             session.audio.replayPageChanged(session.visibleStrokes)
         }
         .onChange(of: session.searchHighlight) { _, highlight in
-            if highlight != nil { showsSearch = true }
+            if highlight != nil { openSearch() }
         }
         .onDisappear {
             session.audio.stopPlayback()
@@ -510,6 +509,9 @@ struct NotebookPane: View {
             PagesSidePanel(
                 session: session,
                 isOnLeft: pagesOnLeft,
+                search: model.search,
+                tab: $pagesPanelTab,
+                onHighlight: { session.searchHighlight = $0 },
                 onSelect: { index in Task { await session.goToPage(index) } },
                 onClose: { pagesPanelBinding.wrappedValue = false }
             )
@@ -612,6 +614,7 @@ struct NotebookPane: View {
         Binding(
             get: { pagesPanelIsInline ? showsThumbnails : showsCompactPages },
             set: { isShown in
+                if isShown { pagesPanelTab = .pages }
                 if pagesPanelIsInline {
                     showsThumbnails = isShown
                 } else {
@@ -636,11 +639,14 @@ struct NotebookPane: View {
         PagesSidePanel(
             session: session,
             isOnLeft: pagesOnLeft,
+            search: model.search,
+            tab: $pagesPanelTab,
+            onHighlight: { session.searchHighlight = $0 },
             onSelect: { index in
                 Task { await session.goToPage(index) }
             },
             onClose: {
-                withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
+                withAnimation(.easeInOut(duration: 0.2)) { pagesPanelBinding.wrappedValue = false }
             }
         )
         .frame(width: 220)
@@ -671,41 +677,19 @@ struct NotebookPane: View {
 
     // MARK: - Search
 
-    /// The find bar floats over the top of the page: the page keeps its size and
-    /// scrolls underneath it.
-    @ViewBuilder
-    private var searchOverlay: some View {
-        if showsSearch {
-            NotebookFindBar(
-                notebookID: session.notebookID,
-                search: model.search,
-                pageCount: session.pageCount,
-                activeHighlight: session.searchHighlight,
-                initialPageID: session.currentPageID,
-                onHighlight: { session.searchHighlight = $0 },
-                onSelectPage: { pageID in
-                    guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
-                    Task { await session.goToPage(index) }
-                },
-                onGoToPage: { index in
-                    Task { await session.goToPage(index) }
-                },
-                onClose: closeSearch
-            )
-            // A new bar per notebook, so one notebook's results never list in another.
-            .id(session.notebookID)
-            .padding(.top, 10)
-            .padding(.horizontal, 16)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
+    /// True while the side panel is showing its Search tab.
+    private var isSearchVisible: Bool {
+        guard pagesPanelTab == .search else { return false }
+        return pagesPanelIsInline ? showsThumbnails : showsCompactPages
     }
 
+    /// Opens the side panel on its Search tab; the page keeps its size.
     private func openSearch() {
-        withAnimation(.easeInOut(duration: 0.2)) { showsSearch = true }
-    }
-
-    private func closeSearch() {
-        withAnimation(.easeInOut(duration: 0.2)) { showsSearch = false }
+        pagesPanelTab = .search
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showsThumbnails = true
+            if !pagesPanelIsInline { showsCompactPages = true }
+        }
     }
 
     // MARK: - Banners
@@ -1265,7 +1249,6 @@ struct NotebookPane: View {
     private func startReadingMode() {
         withAnimation(.easeInOut(duration: 0.2)) {
             pagesPanelBinding.wrappedValue = false
-            showsSearch = false
             editor.isReadingMode = true
             editor.isReadOnly = true
         }
@@ -1578,7 +1561,7 @@ struct NotebookPane: View {
                 onToolGestureEnded: {
                     editor.didEndToolGesture()
                     // Writing on the page ends the search marks; they would go stale.
-                    if !showsSearch { session.searchHighlight = nil }
+                    if !isSearchVisible { session.searchHighlight = nil }
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
@@ -1771,7 +1754,7 @@ struct NotebookPane: View {
                 onToolGestureEnded: {
                     editor.didEndToolGesture()
                     // Writing on the page ends the search marks; they would go stale.
-                    if !showsSearch { session.searchHighlight = nil }
+                    if !isSearchVisible { session.searchHighlight = nil }
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 // The page's canvas answers the Pencil's double-tap; two

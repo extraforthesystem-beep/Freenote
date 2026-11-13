@@ -10,6 +10,8 @@ struct NotebookFindBar: View {
     private let notebookID: UUID
     private let search: HandwritingSearch
     private let pageCount: Int
+    /// Set when the bar fills a side panel instead of floating over the page.
+    private let isEmbedded: Bool
     /// The search the pages already mark, e.g. from the library search.
     private let activeHighlight: SearchHighlight?
     private let onHighlight: (SearchHighlight?) -> Void
@@ -34,6 +36,7 @@ struct NotebookFindBar: View {
     ///   - notebookID: the notebook to search; the index is scoped to it.
     ///   - search: the app's shared `HandwritingSearch`, which owns the index.
     ///   - pageCount: the notebook's pages, so page numbers can be range-checked.
+    ///   - isEmbedded: fills a panel; no floating material or close button.
     ///   - activeHighlight: the search the pages already mark; the bar adopts it.
     ///   - initialPageID: the page the first search should land on, when it has a match.
     ///   - onHighlight: called with the query the page should mark, or nil to clear the marks.
@@ -44,6 +47,7 @@ struct NotebookFindBar: View {
         notebookID: UUID,
         search: HandwritingSearch,
         pageCount: Int,
+        isEmbedded: Bool = false,
         activeHighlight: SearchHighlight? = nil,
         initialPageID: UUID? = nil,
         onHighlight: @escaping (SearchHighlight?) -> Void = { _ in },
@@ -54,6 +58,7 @@ struct NotebookFindBar: View {
         self.notebookID = notebookID
         self.search = search
         self.pageCount = pageCount
+        self.isEmbedded = isEmbedded
         self.activeHighlight = activeHighlight
         self.onHighlight = onHighlight
         _pendingInitialPageID = State(initialValue: initialPageID)
@@ -70,10 +75,8 @@ struct NotebookFindBar: View {
                 results
             }
         }
-        .frame(maxWidth: 620)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
+        .frame(maxWidth: isEmbedded ? .infinity : 620, alignment: .top)
+        .modifier(FindBarChrome(isEmbedded: isEmbedded))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Notebook search")
         .task { isFieldFocused = true }
@@ -173,8 +176,10 @@ struct NotebookFindBar: View {
             .foregroundStyle(showsResults ? Color.accentColor : .secondary)
             .accessibilityLabel(showsResults ? "Hide results" : "Show results")
             .disabled(trimmedQuery.isEmpty)
-            iconButton("xmark", label: "Close search") {
-                onClose()
+            if !isEmbedded {
+                iconButton("xmark", label: "Close search") {
+                    onClose()
+                }
             }
         }
     }
@@ -212,7 +217,7 @@ struct NotebookFindBar: View {
                 }
             }
         }
-        .frame(maxHeight: 320)
+        .frame(maxHeight: isEmbedded ? .infinity : 320)
     }
 
     private func pageNumberRow(_ page: Int) -> some View {
@@ -413,6 +418,24 @@ struct NotebookFindBar: View {
             onGoToPage(pageTarget - 1)
         } else if let first = pageResults.first {
             jump(to: first)
+        }
+    }
+}
+
+/// Floating over the page the bar is a material card; inside a panel it is
+/// just the row and its results.
+private struct FindBarChrome: ViewModifier {
+    let isEmbedded: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEmbedded {
+            content
+        } else {
+            content
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
         }
     }
 }

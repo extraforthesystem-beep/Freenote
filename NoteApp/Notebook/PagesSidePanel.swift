@@ -1,6 +1,13 @@
 import InkKit
 import NoteCore
+import SearchKit
 import SwiftUI
+
+/// The two things the side panel can show.
+enum NotebookPanelTab: Hashable {
+    case pages
+    case search
+}
 
 /// A vertical page switcher that sits beside the page. Only the cells the
 /// viewport reaches decode their page, and rendering happens off the main actor.
@@ -11,6 +18,10 @@ struct PagesSidePanel: View {
     let session: NotebookSession
     /// Which edge the panel sits on; its divider faces the page.
     let isOnLeft: Bool
+    /// The app's shared search, shown in the Search tab.
+    let search: HandwritingSearch
+    @Binding var tab: NotebookPanelTab
+    let onHighlight: (SearchHighlight?) -> Void
     let onSelect: (Int) -> Void
     let onClose: () -> Void
 
@@ -28,24 +39,11 @@ struct PagesSidePanel: View {
             VStack(spacing: 0) {
                 header
                 Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 10) {
-                            ForEach(0..<session.pageCount, id: \.self) { index in
-                                pageCell(index)
-                            }
-                            addPageTile
-                        }
-                        .padding(10)
-                    }
-                    .onChange(of: session.pageIndex) { _, index in
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            proxy.scrollTo(index, anchor: .center)
-                        }
-                    }
-                    .onAppear {
-                        proxy.scrollTo(session.pageIndex, anchor: .center)
-                    }
+                switch tab {
+                case .pages:
+                    pagesGrid
+                case .search:
+                    searchTab
                 }
             }
             if isOnLeft { edge }
@@ -58,25 +56,73 @@ struct PagesSidePanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Text("Pages")
-                .font(.subheadline.weight(.semibold))
-            Text("\(session.pageCount)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 4)
+        HStack(spacing: 8) {
+            Picker("Panel", selection: $tab) {
+                Text("Pages").tag(NotebookPanelTab.pages)
+                Text("Search").tag(NotebookPanelTab.search)
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .labelsHidden()
+            .accessibilityLabel("Pages or search")
+
             Button(action: onClose) {
                 Image(systemName: isOnLeft ? "sidebar.leading" : "sidebar.trailing")
                     .font(.system(size: 15, weight: .medium))
-                    .frame(width: 32, height: 32)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Hide Pages")
-            .help("Hide Pages")
+            .accessibilityLabel("Hide Panel")
+            .help("Hide Panel")
         }
         .padding(.horizontal, 10)
         .frame(height: 44)
+    }
+
+    private var pagesGrid: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(0..<session.pageCount, id: \.self) { index in
+                        pageCell(index)
+                    }
+                    addPageTile
+                }
+                .padding(10)
+            }
+            .onChange(of: session.pageIndex) { _, index in
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    proxy.scrollTo(index, anchor: .center)
+                }
+            }
+            .onAppear {
+                proxy.scrollTo(session.pageIndex, anchor: .center)
+            }
+        }
+    }
+
+    /// The find bar fills the panel: field pinned on top, results scrolling
+    /// beneath. The panel's own header closes it.
+    private var searchTab: some View {
+        NotebookFindBar(
+            notebookID: session.notebookID,
+            search: search,
+            pageCount: session.pageCount,
+            isEmbedded: true,
+            activeHighlight: session.searchHighlight,
+            initialPageID: session.currentPageID,
+            onHighlight: onHighlight,
+            onSelectPage: { pageID in
+                guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
+                onSelect(index)
+            },
+            onGoToPage: { index in onSelect(index) },
+            onClose: onClose
+        )
+        // A new bar per notebook, so one notebook's results never list in another.
+        .id(session.notebookID)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private func pageCell(_ index: Int) -> some View {
