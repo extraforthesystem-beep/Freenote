@@ -12,14 +12,14 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 
 | ID | Feature | State | Branch | Notes |
 |---|---|---|---|---|
-| A | Selection model + lasso actions | running | t3 worktree | PencilCanvasView, new `Selection*.swift`, lasso in `EditorToolState` |
+| A | Selection model + lasso actions | merged `418d7d1` | `feat/w4-selection` | 12 app tests, InkKit 117, build green. |
 | B | Durability + backup | running | t3 worktree | NoteCore store, HistoryKit, new `NoteApp/Backup` |
 | C | AI + search correctness | merged `f288ec1` | `t3/52d9d85f` | SearchKit 46 tests, app build green. Follow-ups below. |
 | D | Audio replay | running | t3 worktree | AudioKit playback ↔ stroke time, transcripts |
 | E | Study engine | merged `6ced4a7` | `feat/w4-e` | FSRS + SM-2 migration, recall-first, one due queue, tape mode, leech. StudyKit 77 tests. |
 | F | Ink tools | running | t3 worktree | stabilisation, dashed, scratch-out, shapes |
 | G | Navigation + library | running | t3 worktree | page history, Continue rail, page grid, tags |
-| H | PDF reading + templates | running | t3 worktree | writing margin, dark PDF paper, templates |
+| H | PDF reading + templates | merged `b9f4cbb` | `feat/w4-h` | writing margin, dark PDF paper, link history, custom templates, Reading Mode. NoteCore 97, InkKit 120. |
 
 ## Merge protocol
 
@@ -36,6 +36,11 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 - E: cards made by the AI panel still have no `sourceNotebookID`/`sourcePageID` (that file is C's).
 - E: leech handling is text rewrite/split only; ink-crop attachment needs the lasso model from A.
 - E: desired retention is a global 0.9, not per card.
+- A: copying image/PDF elements is not supported (notebook-local assets); duplicate works in place. Selection actions register undo but not redo.
+- A: the floating selection bar can cover the bottom of the page while active.
+- H: Reading Mode hides toolbar, divider, counter and panels, but not the notebook tab bar or the system status bar.
+- H: custom templates cannot be renamed after import; PDF templates use page 1 only.
+- H: PDF link history is per-notebook and in memory, separate from G's page history — consider unifying.
 
 ## Next waves
 
