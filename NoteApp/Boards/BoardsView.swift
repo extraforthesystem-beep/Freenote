@@ -61,9 +61,17 @@ struct BoardsView: View {
                 } message: {
                     Text(model.lastError ?? "")
                 }
+                // A board is its own workspace: a sheet leaves it as a small
+                // form window on iPad, so it takes the whole screen instead.
+                #if os(iOS)
+                .fullScreenCover(item: $selectedBoard) { board in
+                    BoardEditorView(model: model, board: board)
+                }
+                #else
                 .sheet(item: $selectedBoard) { board in
                     BoardEditorView(model: model, board: board)
                 }
+                #endif
                 .task { await model.load() }
         }
     }
