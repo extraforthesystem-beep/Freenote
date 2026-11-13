@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// The editor's single toolbar row.
 ///
-/// Left (pinned): back, thumbnails, undo, redo. Centre: the pen chip and the
+/// Left (pinned): back, pages, undo, redo. Centre: the pen chip and the
 /// customisable tool items, the colour favourites and the width presets.
 /// Right: recording and the More menu. Only the colour favourites scroll; when
 /// the row is too narrow for every tool the extra ones move into an overflow
@@ -15,6 +15,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     @Bindable var editor: EditorToolState
     let controller: PencilCanvasController
     @Binding var showsThumbnails: Bool
+    /// Which edge the Pages panel sits on.
+    let pagesOnLeft: Bool
     let isRecording: Bool
     let recordingLabel: String
     let onBack: () -> Void
@@ -114,7 +116,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             ToolbarIconButton("Library", systemImage: "chevron.backward", action: onBack)
             ToolbarIconButton(
                 showsThumbnails ? "Hide Pages" : "Show Pages",
-                systemImage: showsThumbnails ? "rectangle.bottomthird.inset.filled" : "rectangle"
+                systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing",
+                isSelected: showsThumbnails
             ) {
                 withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
             }
