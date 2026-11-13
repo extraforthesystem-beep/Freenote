@@ -178,7 +178,8 @@ struct NotebookPane: View {
     @State private var showsLassoHint = false
     @State private var studyScope: NotebookStudyScope?
     @State private var showsTapeStudy = false
-    @State private var selectedElementID: UUID?
+    /// The lasso's selection and the elements the Select Elements tool picked.
+    @State private var selection = InkSelection()
     @State private var isRulerActive = false
     @State private var editor = EditorToolState()
     #if os(iOS)
@@ -242,8 +243,21 @@ struct NotebookPane: View {
                         }
                         #endif
                         .overlay(alignment: .bottom) {
-                            PageCounterPill(session: session) { index in
-                                Task { await session.goToPage(index) }
+                            VStack(spacing: 8) {
+                                #if os(iOS)
+                                if showsSelectionActions {
+                                    SelectionActionBar(
+                                        selection: $selection,
+                                        editor: editor,
+                                        session: session,
+                                        controller: controller
+                                    )
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                                }
+                                #endif
+                                PageCounterPill(session: session) { index in
+                                    Task { await session.goToPage(index) }
+                                }
                             }
                             .padding(.bottom, 12)
                         }
@@ -287,14 +301,27 @@ struct NotebookPane: View {
             }
         }
         .onChange(of: editor.tool) { _, newTool in
-            if newTool != .elements { selectedElementID = nil }
+            if newTool != .elements { selection.elementIDs = [] }
+            if newTool != .lasso {
+                selection.strokeIDs = []
+                #if os(iOS)
+                controller.clearSelection()
+                #endif
+            }
             showsLassoHint = newTool == .lasso && !editor.isReadOnly
         }
         .onChange(of: editor.isReadOnly) { _, isReadOnly in
             if isReadOnly {
                 showsLassoHint = false
-                selectedElementID = nil
+                selection.clear()
+                #if os(iOS)
+                controller.clearSelection()
+                #endif
             }
+        }
+        .onChange(of: session.currentPageID) {
+            // A selection belongs to the page it was made on.
+            selection.clear()
         }
         .task(id: showsLassoHint) {
             guard showsLassoHint else { return }
@@ -672,7 +699,7 @@ struct NotebookPane: View {
             if showsLassoHint, !hasLayerBlock {
                 EditorBanner(
                     systemImage: "lasso",
-                    message: "Circle ink with the lasso, then drag the selection to move it.",
+                    message: "Circle ink with the lasso, then drag to move it or use the bar to recolour, resize or copy it.",
                     tint: .accentColor,
                     onDismiss: { showsLassoHint = false }
                 )
@@ -1228,6 +1255,22 @@ struct NotebookPane: View {
         }
     }
 
+    /// The lasso or the element tool has something to act on.
+    private var showsSelectionActions: Bool {
+        !editor.isReadOnly
+            && !selection.isEmpty
+            && (editor.tool == .lasso || editor.tool == .elements)
+    }
+
+    /// The Select Elements layer edits one element at a time; the shared
+    /// selection model is what the actions read.
+    private var selectedElementID: Binding<UUID?> {
+        Binding(
+            get: { selection.elementIDs.first },
+            set: { selection.elementIDs = $0.map { [$0] } ?? [] }
+        )
+    }
+
     private func pageContent(_ page: Page) -> some View {
         ZStack(alignment: .topLeading) {
             // Tape is drawn by `TapeOverlay` above the ink so it can hide and
@@ -1275,6 +1318,14 @@ struct NotebookPane: View {
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
                 eraseHighlighterOnly: eraserHighlighterOnly,
                 usesDarkPaper: usesDarkPaper,
+                onSelectionChanged: { ids in
+                    // Only the lasso selects ink. An empty report can also come
+                    // from the canvas rebuilding after an action while those
+                    // strokes still exist, so the bar is cleared explicitly on a
+                    // tool or page change instead.
+                    guard editor.tool == .lasso, !ids.isEmpty else { return }
+                    selection.strokeIDs = Set(ids)
+                },
                 onStrokesChanged: { [pageID = page.id] in session.strokesChanged($0, onPage: pageID) }
             )
             .id(page.id)
@@ -1324,7 +1375,7 @@ struct NotebookPane: View {
             if editor.tool == .elements, !editor.isReadOnly {
                 ElementEditLayer(
                     page: page,
-                    selectedID: $selectedElementID,
+                    selectedID: selectedElementID,
                     onFrame: { elementID, frame in
                         Task { await session.updateElementFrame(elementID, frame: frame) }
                     },
@@ -1332,7 +1383,7 @@ struct NotebookPane: View {
                         Task { await session.setElementLocked(elementID, isLocked: isLocked) }
                     },
                     onDelete: { elementID in
-                        selectedElementID = nil
+                        selection.elementIDs = []
                         Task { await session.removeElement(elementID) }
                     },
                     onMoveZ: { elementID, offset in

@@ -46,6 +46,24 @@ public final class PencilCanvasController: ObservableObject {
         return true
     }
 
+    /// Adds one undo step to the canvas's own stack, so a change the app made
+    /// to the page's records undoes with the ink. `undo` runs on the main actor.
+    public func registerUndo(name: String, _ undo: @escaping @MainActor () -> Void) {
+        guard let canvas = target, let undoManager = canvas.undoManager else { return }
+        undoManager.registerUndo(withTarget: canvas) { _ in
+            MainActor.assumeIsolated { undo() }
+        }
+        undoManager.setActionName(name)
+    }
+
+    /// Drops the lasso selection on every view of the page, e.g. when the tool
+    /// changes away from the lasso.
+    public func clearSelection() {
+        for view in [canvas, lastUsedCanvas] where view?.selection.isEmpty == false {
+            view?.selection = []
+        }
+    }
+
     private static func setDrawing(_ drawing: PKDrawing, replacing previous: PKDrawing, on canvas: InkCanvasView) {
         canvas.undoManager?.registerUndo(withTarget: canvas) { canvas in
             MainActor.assumeIsolated {
@@ -321,6 +339,10 @@ public struct PencilCanvasView: UIViewRepresentable {
     /// Called after a pan, zoom or layout of a free canvas with the visible
     /// part of the page (page points) and the zoom scale.
     public var onViewportChange: ((CGRect, CGFloat) -> Void)?
+    /// The ids of the strokes the lasso has selected, whenever the selection
+    /// changes. The ids match `StrokeRecord.id`, so the app can inspect and act
+    /// on the selected ink.
+    public var onSelectionChanged: (([UUID]) -> Void)?
     /// Finger taps and drags over the canvas, for selecting and moving objects
     /// drawn under the ink. The Pencil keeps drawing.
     public var fingerInteraction: CanvasFingerInteraction?
@@ -356,6 +378,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         freeZoom: ClosedRange<CGFloat>? = nil,
         onViewportChange: ((CGRect, CGFloat) -> Void)? = nil,
         fingerInteraction: CanvasFingerInteraction? = nil,
+        onSelectionChanged: (([UUID]) -> Void)? = nil,
         onStrokesChanged: @escaping ([StrokeRecord]) -> Void
     ) {
         self.strokes = strokes
@@ -381,6 +404,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.freeZoom = freeZoom
         self.onViewportChange = onViewportChange
         self.fingerInteraction = fingerInteraction
+        self.onSelectionChanged = onSelectionChanged
         self.onStrokesChanged = onStrokesChanged
     }
 
@@ -417,6 +441,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         configureFreeScroll(canvas)
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
+        context.coordinator.appliedTool = Coordinator.CanvasToolState(mode: mode, tool: tool)
         canvas.isRulerActive = isRulerActive
         // Black ink stays black on white paper; on dark paper PencilKit
         // lightens ink for display without touching the stored colours.
@@ -528,7 +553,13 @@ public struct PencilCanvasView: UIViewRepresentable {
 
         canvas.isUserInteractionEnabled = isEditable
         applyDrawingPolicy(to: canvas)
-        canvas.tool = canvasTool(for: mode)
+        let toolState = Coordinator.CanvasToolState(mode: mode, tool: tool)
+        // Assigning the tool re-creates the PencilKit tool, which drops the
+        // lasso selection; only a real change needs to.
+        if coordinator.appliedTool != toolState {
+            canvas.tool = canvasTool(for: mode)
+            coordinator.appliedTool = toolState
+        }
         canvas.isRulerActive = isRulerActive
         canvas.overrideUserInterfaceStyle = usesDarkPaper ? .dark : .light
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
@@ -598,6 +629,12 @@ public struct PencilCanvasView: UIViewRepresentable {
         // Hold to straighten (see HoldToShape.swift).
         weak var holdObserver: UIGestureRecognizer?
         var canvasFeedback: UICanvasFeedbackGenerator?
+        /// The mode and ink tool last given to the canvas.
+        struct CanvasToolState: Equatable {
+            var mode: CanvasMode
+            var tool: InkTool
+        }
+        var appliedTool: CanvasToolState?
         /// The current touch paused before lifting.
         var holdDetected = false
         /// Strokes on the canvas when the current touch began (as last seen,
@@ -645,8 +682,22 @@ public struct PencilCanvasView: UIViewRepresentable {
             }
 
             isApplyingInput = true
+            let selection = canvas.selection
             canvas.drawing = PKDrawing(strokes: next)
             isApplyingInput = false
+            // Rebuilding the drawing drops the lasso selection. Keep the strokes
+            // that still exist selected, so a recolour or a width change can be
+            // followed by another action on the same selection. Applied after
+            // this update, so its selection callback is not a state change
+            // during a view update.
+            let live = Set(next.map(\.id))
+            let kept = selection.intersection(live)
+            if !kept.isEmpty, canvas.selection != kept {
+                Task { @MainActor [weak canvas] in
+                    guard let canvas, canvas.selection.isEmpty else { return }
+                    canvas.selection = kept
+                }
+            }
             baselineStrokes = next
             converter.seed(strokes: next, records: strokes)
             syncedRecords = Dictionary(
@@ -754,6 +805,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         public func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             host?.isToolActive = false
             parent.onToolGestureEnded?()
+        }
+
+        public func canvasViewSelectionDidChange(_ canvasView: PKCanvasView) {
+            parent.onSelectionChanged?(Array(canvasView.selection))
         }
 
         // MARK: - Free canvas viewport
