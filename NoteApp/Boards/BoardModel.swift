@@ -14,6 +14,11 @@ final class BoardModel {
     /// Directory containing the board files.
     let rootURL: URL
 
+    /// Folder holding images inserted into boards, shared by every board.
+    var assetsDirectory: URL {
+        rootURL.appendingPathComponent("Assets", isDirectory: true)
+    }
+
     private let store: BoardStore
     /// Last saved camera per board, so a plain `save(board)` does not discard
     /// the viewport stored by an earlier editing session.
@@ -138,10 +143,11 @@ final class BoardModel {
         boards.first { $0.id == id }
     }
 
-    /// Deletes a board file and removes it from the list.
+    /// Deletes a board file and the image assets only it referenced, then
+    /// removes it from the list.
     func delete(_ board: Board) async {
         do {
-            try await store.delete(board.id)
+            try await store.delete(board)
             boards.removeAll { $0.id == board.id }
             cameras.removeValue(forKey: board.id)
         } catch {

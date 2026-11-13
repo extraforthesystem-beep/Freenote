@@ -267,6 +267,11 @@ public enum CanvasMode: Hashable, Sendable {
 public struct CanvasFingerInteraction {
     /// A one-finger tap, in page points.
     public var onTap: ((CGPoint) -> Void)?
+    /// Whether a one-finger drag from this page point would be taken by the
+    /// app. Asked when the finger comes down, before it has moved, so a
+    /// drawing finger can wait for the answer. It must not start anything;
+    /// `onDragBegan` does that once the drag is real.
+    public var onDragPossible: ((CGPoint) -> Bool)?
     /// A one-finger drag is about to begin at this page point. Return true to
     /// take the drag, and the canvas does not pan; `onDragChanged` then
     /// reports how far the finger has moved, in page points.
@@ -276,14 +281,83 @@ public struct CanvasFingerInteraction {
 
     public init(
         onTap: ((CGPoint) -> Void)? = nil,
+        onDragPossible: ((CGPoint) -> Bool)? = nil,
         onDragBegan: ((CGPoint) -> Bool)? = nil,
         onDragChanged: ((CGPoint) -> Void)? = nil,
         onDragEnded: (() -> Void)? = nil
     ) {
         self.onTap = onTap
+        self.onDragPossible = onDragPossible
         self.onDragBegan = onDragBegan
         self.onDragChanged = onDragChanged
         self.onDragEnded = onDragEnded
+    }
+}
+
+/// A one-finger drag that decides at touch-down whether the app wants it.
+///
+/// It begins as soon as the finger lands on something the app owns, and fails
+/// at once anywhere else or for the Pencil. A drawing gesture that waits for
+/// it therefore never loses the start of an ordinary stroke.
+final class FingerDragGestureRecognizer: UIGestureRecognizer {
+    /// Whether a drag from this point in the recognizer's view is the app's.
+    var shouldTrack: ((CGPoint) -> Bool)?
+    /// The finger landed on an app object, at this point in the view.
+    var onBegan: ((CGPoint) -> Void)?
+    /// How far the finger has moved since it landed, in view points.
+    var onChanged: ((CGPoint) -> Void)?
+    var onEnded: (() -> Void)?
+
+    private var startLocation: CGPoint?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .possible else { return }
+        // The Pencil never drags app objects; failing at once lets it ink.
+        guard !touches.contains(where: { $0.type == .pencil }),
+              let view, let touch = touches.first,
+              let shouldTrack, shouldTrack(touch.location(in: view))
+        else {
+            state = .failed
+            return
+        }
+        let start = touch.location(in: view)
+        startLocation = start
+        state = .began
+        onBegan?(start)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed,
+              let view, let touch = touches.first, let start = startLocation
+        else { return }
+        let location = touch.location(in: view)
+        let translation = CGPoint(x: location.x - start.x, y: location.y - start.y)
+        // A few points of slop keep a tap on the selection from nudging it.
+        if state == .began, hypot(translation.x, translation.y) < 4 {
+            return
+        }
+        state = .changed
+        onChanged?(translation)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else { return }
+        state = .ended
+        onEnded?()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else {
+            state = .failed
+            return
+        }
+        state = .cancelled
+        onEnded?()
+    }
+
+    override func reset() {
+        super.reset()
+        startLocation = nil
     }
 }
 
@@ -305,7 +379,9 @@ public struct PencilCanvasView: UIViewRepresentable {
     public var controller: PencilCanvasController?
     /// When on, a finger draws as well as the Pencil; when off, one finger
     /// scrolls and only the Pencil inks. The simulator always draws with any
-    /// input, because a mouse cannot produce Pencil touches.
+    /// input, because a mouse cannot produce Pencil touches. With a
+    /// `fingerInteraction`, a finger drag that starts on an app object still
+    /// moves it instead of drawing.
     public var drawsWithFinger: Bool
     /// Two-finger double-tap undoes, three-finger double-tap redoes.
     public var undoOnTwoFingerDoubleTap: Bool
@@ -588,9 +664,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
         coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
         coordinator.fingerTap?.isEnabled = fingerInteraction?.onTap != nil
-        // With finger drawing on, the finger belongs to the ink.
-        coordinator.fingerPan?.isEnabled =
-            fingerInteraction?.onDragBegan != nil && !drawsWithFinger
+        // A finger drag is always offered to the app first. When a finger also
+        // draws, the ink waits for a drag that starts on an app object to be
+        // declined; see `installFingerInteraction`.
+        coordinator.fingerPan?.isEnabled = fingerInteraction?.onDragBegan != nil
         coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap
         coordinator.redoDoubleTap?.isEnabled = redoOnThreeFingerDoubleTap
         if viewport == nil, freeZoom != nil, canvas.pageSize != pageSize {
@@ -623,7 +700,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         weak var host: InkCanvasHost?
         weak var tapRecognizer: UITapGestureRecognizer?
         weak var fingerTap: UITapGestureRecognizer?
-        weak var fingerPan: UIPanGestureRecognizer?
+        weak var fingerPan: FingerDragGestureRecognizer?
         weak var undoDoubleTap: UITapGestureRecognizer?
         weak var redoDoubleTap: UITapGestureRecognizer?
         /// Set while the app owns a finger drag, so its end is reported once.
@@ -754,9 +831,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         }
 
         /// Installs the app's finger gestures, once, when the canvas is made.
-        /// They never see Pencil touches, so the Pencil keeps drawing.
+        /// The Pencil is never taken by them: the drag fails at once on a
+        /// Pencil touch, so the Pencil keeps drawing.
         func installFingerInteraction(on canvas: InkCanvasView) {
-            guard parent.fingerInteraction != nil else { return }
+            guard let interaction = parent.fingerInteraction else { return }
 
             let tap = UITapGestureRecognizer(
                 target: self,
@@ -768,18 +846,57 @@ public struct PencilCanvasView: UIViewRepresentable {
             canvas.addGestureRecognizer(tap)
             fingerTap = tap
 
-            let pan = UIPanGestureRecognizer(
-                target: self,
-                action: #selector(handleFingerPan(_:))
-            )
-            pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-            pan.maximumNumberOfTouches = 1
+            let pan = FingerDragGestureRecognizer()
+            // The Pencil is included so a drag that would wait for a finger to
+            // decline it fails at once instead of holding the ink back.
+            pan.allowedTouchTypes = [
+                NSNumber(value: UITouch.TouchType.direct.rawValue),
+                NSNumber(value: UITouch.TouchType.pencil.rawValue),
+            ]
             pan.cancelsTouchesInView = false
             pan.delegate = self
+            if interaction.onDragPossible != nil {
+                // Read the app's current interaction, not the one at install:
+                // the selection it tests against changes as the user works.
+                pan.shouldTrack = { [weak self, weak canvas] point in
+                    guard let self, let canvas,
+                          let possible = self.parent.fingerInteraction?.onDragPossible
+                    else { return false }
+                    return possible(self.pagePoint(for: point, on: canvas))
+                }
+            }
+            pan.onBegan = { [weak self, weak canvas] point in
+                guard let self, let canvas else { return }
+                let pagePoint = self.pagePoint(for: point, on: canvas)
+                self.isFingerDragging =
+                    self.parent.fingerInteraction?.onDragBegan?(pagePoint) ?? false
+                if self.isFingerDragging {
+                    canvas.panGestureRecognizer.isEnabled = false
+                }
+            }
+            pan.onChanged = { [weak self, weak canvas] translation in
+                guard let self, let canvas, self.isFingerDragging else { return }
+                let scale = max(canvas.zoomScale, 0.0001)
+                self.parent.fingerInteraction?.onDragChanged?(
+                    CGPoint(x: translation.x / scale, y: translation.y / scale)
+                )
+            }
+            pan.onEnded = { [weak self, weak canvas] in
+                guard let self, self.isFingerDragging else { return }
+                self.isFingerDragging = false
+                canvas?.panGestureRecognizer.isEnabled = true
+                self.parent.fingerInteraction?.onDragEnded?()
+            }
             canvas.addGestureRecognizer(pan)
             // A captured drag wins over the canvas pan. Elsewhere the drag
             // recognizer fails before the pan needs it, so panning is unchanged.
             canvas.panGestureRecognizer.require(toFail: pan)
+            // When a finger draws too, the ink waits for a drag that starts on
+            // an app object to be declined. The drag fails at touch-down
+            // everywhere else, so drawing there starts without a delay.
+            if pan.shouldTrack != nil, canvas.drawingPolicy == .anyInput {
+                canvas.drawingGestureRecognizer.require(toFail: pan)
+            }
             fingerPan = pan
         }
 
@@ -793,26 +910,6 @@ public struct PencilCanvasView: UIViewRepresentable {
         @objc func handleFingerTap(_ gesture: UITapGestureRecognizer) {
             guard let canvas, let onTap = parent.fingerInteraction?.onTap else { return }
             onTap(pagePoint(for: gesture.location(in: canvas), on: canvas))
-        }
-
-        @objc func handleFingerPan(_ gesture: UIPanGestureRecognizer) {
-            guard let canvas, let interaction = parent.fingerInteraction else { return }
-            switch gesture.state {
-            case .changed:
-                guard isFingerDragging else { return }
-                let translation = gesture.translation(in: canvas)
-                let scale = max(canvas.zoomScale, 0.0001)
-                interaction.onDragChanged?(
-                    CGPoint(x: translation.x / scale, y: translation.y / scale)
-                )
-            case .ended, .cancelled, .failed:
-                guard isFingerDragging else { return }
-                isFingerDragging = false
-                canvas.panGestureRecognizer.isEnabled = true
-                interaction.onDragEnded?()
-            default:
-                break
-            }
         }
 
         public func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
@@ -865,26 +962,6 @@ public struct PencilCanvasView: UIViewRepresentable {
             let isCanvasPan = gestureRecognizer === canvas?.panGestureRecognizer
                 || otherGestureRecognizer === canvas?.panGestureRecognizer
             return !(isFingerDrag && isCanvasPan)
-        }
-
-        /// Asks the app whether a finger drag starts on something it owns, such
-        /// as a selected object. If it does, the canvas pan is held back for
-        /// the drag; if not, the drag recognizer fails and the pan runs.
-        public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard gestureRecognizer === fingerPan else { return true }
-            guard let canvas, let began = parent.fingerInteraction?.onDragBegan else {
-                return false
-            }
-            // The finger has already moved past the pan slop: hit-test the
-            // point where it first touched down.
-            let location = gestureRecognizer.location(in: canvas)
-            let translation = (gestureRecognizer as? UIPanGestureRecognizer)?
-                .translation(in: canvas) ?? .zero
-            let start = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
-            guard began(pagePoint(for: start, on: canvas)) else { return false }
-            isFingerDragging = true
-            canvas.panGestureRecognizer.isEnabled = false
-            return true
         }
 
         // MARK: - Apple Pencil

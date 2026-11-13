@@ -184,6 +184,61 @@ public actor BoardStore {
         }
     }
 
+    /// Deletes one board file, then the image assets that only it referenced.
+    ///
+    /// The assets folder is shared by every board, so an asset is removed only
+    /// when no remaining board file still names it. An asset is also kept when
+    /// a board file cannot be read: leaking a file is better than deleting one
+    /// that is still in use.
+    ///
+    /// - Returns: The names of the assets that were removed.
+    @discardableResult
+    public func delete(_ board: Board) throws -> [String] {
+        try delete(board.id)
+        return deleteUnreferencedAssets(of: board)
+    }
+
+    private func deleteUnreferencedAssets(of board: Board) -> [String] {
+        let candidates = Self.assetNames(in: board)
+        guard !candidates.isEmpty else { return [] }
+
+        var stillUsed = Set<String>()
+        do {
+            for id in try list() {
+                do {
+                    stillUsed.formUnion(Self.assetNames(in: try load(id).board))
+                } catch {
+                    // An unreadable board may still point at any asset.
+                    return []
+                }
+            }
+        } catch {
+            return []
+        }
+
+        var removed: [String] = []
+        for name in candidates.subtracting(stillUsed).sorted() {
+            let file = assetsDirectoryURL.appendingPathComponent(name, isDirectory: false)
+            // Never follow a name out of the assets folder.
+            guard file.lastPathComponent == name else { continue }
+            if (try? FileManager.default.removeItem(at: file)) != nil {
+                removed.append(name)
+            }
+        }
+        return removed
+    }
+
+    /// Every asset name the board's stored items point at.
+    private nonisolated static func assetNames(in board: Board) -> Set<String> {
+        var names = Set<String>()
+        for item in board.items {
+            if case let .image(assetName, _) = item.content, !assetName.isEmpty {
+                names.insert(assetName)
+            }
+        }
+        return names
+    }
+
     private struct VersionProbe: Decodable {
         struct BoardProbe: Decodable {
             let schemaVersion: Int
