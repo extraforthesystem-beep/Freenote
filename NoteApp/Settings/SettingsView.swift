@@ -23,6 +23,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.pageScrollMode) private var pageScrollMode: PageScrollMode = .vertical
     @AppStorage(AppSettings.Key.rememberLastTool) private var rememberLastTool = true
     @AppStorage(AppSettings.Key.hideStatusBar) private var hideStatusBar = false
+    @AppStorage(AppSettings.Key.keepScreenAwake) private var keepScreenAwake = false
     @AppStorage(AppSettings.Key.zoomAutoAdvance) private var zoomAutoAdvance = true
     @AppStorage(AppSettings.Key.zoomMagnification) private var zoomMagnification = 2.5
     @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesPanelOnLeft = false
@@ -32,6 +33,7 @@ struct SettingsView: View {
     @State private var isRegeneratingThumbnails = false
     @State private var didRegenerateThumbnails = false
     @State private var showsToolbarEditor = false
+    @State private var showsBackup = false
 
     var body: some View {
         NavigationStack {
@@ -45,6 +47,7 @@ struct SettingsView: View {
                 #endif
                 newNotebooks
                 handwritingRecognitionSection
+                backup
                 troubleshooting
                 about
             }
@@ -56,6 +59,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showsToolbarEditor) {
                 ToolbarEditorView()
+            }
+            .sheet(isPresented: $showsBackup) {
+                BackupView(model: model)
             }
         }
     }
@@ -102,6 +108,7 @@ struct SettingsView: View {
             Toggle("Two-Finger Double-Tap to Undo", isOn: $twoFingerDoubleTapUndo)
             Toggle("Three-Finger Double-Tap to Redo", isOn: $threeFingerDoubleTapRedo)
             Toggle("Hide Status Bar in Notebooks", isOn: $hideStatusBar)
+            Toggle("Keep iPad Awake", isOn: $keepScreenAwake)
             Toggle("Pages Panel on Left", isOn: $pagesPanelOnLeft)
             Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
                 showsToolbarEditor = true
@@ -111,7 +118,7 @@ struct SettingsView: View {
             Text("Writing")
         } footer: {
             #if os(iOS)
-            Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last. With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, rectangle, triangle or ellipse. The status bar stays visible in the library.")
+            Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last. With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, rectangle, triangle or ellipse. Keep iPad Awake stops the screen dimming while NoteApp is open. The status bar stays visible in the library.")
             #else
             Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last.")
             #endif
@@ -176,6 +183,18 @@ struct SettingsView: View {
             Text("Handwriting Recognition")
         } footer: {
             Text("Notebooks will be searchable when enabled. Recognition runs on this device.")
+        }
+    }
+
+    private var backup: some View {
+        Section {
+            Button("Backup & Restore…", systemImage: "externaldrive.badge.timemachine") {
+                showsBackup = true
+            }
+        } header: {
+            Text("Backup")
+        } footer: {
+            Text("A backup holds every notebook, page and attachment, with a checksum for each file. Restoring checks them before it writes anything.")
         }
     }
 

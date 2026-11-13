@@ -51,6 +51,9 @@ final class NotebookSession: Identifiable {
     /// A short sentence about the last page operation that failed. The editor
     /// shows it and sets it back to nil.
     var errorMessage: String?
+    /// Pages whose file did not decode and was moved aside. A blank page with the
+    /// same id stands in until version history restores the last good one.
+    private(set) var quarantinedPageIDs: Set<UUID> = []
     /// Bumped after an edit so the current page's thumbnail re-renders.
     private(set) var revision = 0
     /// Changes whenever pages other than the one on screen are rewritten in
@@ -262,10 +265,60 @@ final class NotebookSession: Identifiable {
             loadError = nil
             rememberVisitedPage()
         } catch {
-            page = nil
-            loadError = error.localizedDescription
+            if let leaving {
+                snapshotUnsaved(pageID: leaving, reason: "closed page")
+            }
+            if let recovered = await recoverQuarantinedPage(
+                pageID: manifest.pageOrder[clamped],
+                error: error
+            ) {
+                revealedTapeIDs.removeAll()
+                page = recovered
+                pageIndex = clamped
+                if activeLayerID == nil || !recovered.layers.contains(where: { $0.id == activeLayerID }) {
+                    activeLayerID = recovered.layers.first?.id
+                }
+                loadError = nil
+                rememberVisitedPage()
+            } else {
+                page = nil
+                loadError = error.localizedDescription
+            }
         }
         isLoadingPage = false
+    }
+
+    /// A page file that does not decode is moved out of the notebook and replaced
+    /// with a blank page of the same id, so one damaged file cannot stop the
+    /// notebook opening. The bytes are kept in the library cache and the banner
+    /// offers version history, never a silent deletion.
+    private func recoverQuarantinedPage(pageID: UUID, error: any Error) async -> Page? {
+        guard let noteCoreError = error as? NoteCoreError,
+              case .corruptFile = noteCoreError
+        else { return nil }
+        guard (try? await store.quarantinePage(pageID, in: manifest.id)) != nil else {
+            return nil
+        }
+        let placeholder = Page(
+            id: pageID,
+            width: page?.width ?? PageDefaults.width,
+            height: page?.height ?? PageDefaults.height,
+            template: page?.template ?? PageDefaults.blank
+        )
+        do {
+            try await store.savePage(placeholder, in: manifest.id)
+        } catch {
+            errorMessage = "A damaged page could not be replaced."
+        }
+        quarantinedPageIDs.insert(pageID)
+        return placeholder
+    }
+
+    /// True while the page on screen is the blank stand-in for a file that did
+    /// not decode, so the editor can offer history.
+    var currentPageWasQuarantined: Bool {
+        guard let currentPageID else { return false }
+        return quarantinedPageIDs.contains(currentPageID)
     }
 
     /// Maps a PDF-page destination to the notebook page holding that PDF page.
@@ -1000,7 +1053,10 @@ final class NotebookSession: Identifiable {
             errorMessage = "The page could not be saved before restoring."
             return false
         }
-        await recordSnapshot(latest, reason: "before restore").value
+        if !quarantinedPageIDs.contains(latest.id) {
+            // A blank stand-in is not worth keeping; it is not what the user had.
+            await recordSnapshot(latest, reason: "before restore").value
+        }
 
         // Ink and items added since the version are tombstoned, and anything
         // the version brings back is no longer deleted, so a merge agrees.
@@ -1021,7 +1077,13 @@ final class NotebookSession: Identifiable {
         }
 
         let saved = await saveEditedPage(restored, failure: "The version could not be restored.")
-        if !saved { loadError = "The version could not be restored." }
+        if saved {
+            // The page file is valid again, so the stand-in notice has served its
+            // purpose.
+            quarantinedPageIDs.remove(restored.id)
+        } else {
+            loadError = "The version could not be restored."
+        }
         return saved
     }
 

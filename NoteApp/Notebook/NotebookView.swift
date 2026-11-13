@@ -579,6 +579,7 @@ struct NotebookPane: View {
     private var bannerState: [String] {
         var state: [String] = []
         if session.errorMessage != nil { state.append("error") }
+        if session.currentPageWasQuarantined { state.append("quarantine") }
         if hasLayerBlock { state.append("layer") }
         if showsLassoHint { state.append("lasso") }
         if isExporting || isExportingPNG { state.append("export") }
@@ -613,6 +614,14 @@ struct NotebookPane: View {
                     message: message,
                     tint: .red,
                     onDismiss: { session.errorMessage = nil }
+                )
+            }
+            if session.currentPageWasQuarantined {
+                EditorBanner(
+                    systemImage: "doc.badge.exclamationmark",
+                    message: "This page could not be read. The damaged file was kept; restore the last good version.",
+                    actionTitle: "Version History",
+                    action: { showsHistory = true }
                 )
             }
             switch layerBlock {
