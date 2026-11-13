@@ -1557,6 +1557,7 @@ struct NotebookPane: View {
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
                 eraseHighlighterOnly: eraserHighlighterOnly,
                 usesDarkPaper: usesDarkPaper,
+                fingerInteraction: replayFingerInteraction,
                 onSelectionChanged: { ids in
                     // Only the lasso selects ink. An empty report can also come
                     // from the canvas rebuilding after an action while those
@@ -1565,7 +1566,6 @@ struct NotebookPane: View {
                     guard editor.tool == .lasso, !ids.isEmpty else { return }
                     selection.strokeIDs = Set(ids)
                 },
-                fingerInteraction: replayFingerInteraction,
                 onStrokesChanged: { records in
                     // Follow mode hands the canvas faded copies of the page's
                     // ink. The canvas takes no input then, so any report (an
