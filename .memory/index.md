@@ -24,6 +24,6 @@
 
 ## Token Budget
 
-- Estimated injection size: ~490 tokens
+- Estimated injection size: ~470 tokens
 - Budget: <500 tokens
 - Status: ✅ Under budget
