@@ -59,7 +59,12 @@ struct ClipTranscriptView: View {
         List {
             Section {
                 ForEach(transcript.segments) { segment in
-                    line(segment)
+                    TranscriptLine(
+                        audio: session.audio,
+                        clipID: clip.id,
+                        segment: segment,
+                        onPlay: { play(from: segment.startSeconds) }
+                    )
                 }
             } footer: {
                 Text("Tap a line to play the recording from that moment.")
@@ -70,36 +75,12 @@ struct ClipTranscriptView: View {
         #endif
     }
 
-    private func line(_ segment: TranscriptSegment) -> some View {
-        Button {
-            session.audio.play(
-                clip,
-                from: segment.startSeconds,
-                strokes: session.visibleStrokes
-            )
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(NowPlayingBar.timeLabel(segment.startSeconds))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .leading)
-                Text(segment.text)
-                    .font(.body)
-                    .foregroundStyle(isCurrent(segment) ? Color.accentColor : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
-        .accessibilityLabel("Play from \(NowPlayingBar.timeLabel(segment.startSeconds)): \(segment.text)")
-    }
-
-    /// The line the playhead is inside, while this clip is the one playing.
-    private func isCurrent(_ segment: TranscriptSegment) -> Bool {
-        guard session.audio.playingClipID == clip.id else { return false }
-        let time = session.audio.playheadSeconds
-        return time >= segment.startSeconds && time < segment.endSeconds
+    private func play(from offset: TimeInterval) {
+        session.audio.play(
+            clip,
+            from: offset,
+            strokes: session.visibleStrokes
+        )
     }
 
     private var emptyState: some View {
@@ -127,5 +108,42 @@ struct ClipTranscriptView: View {
             guard session.audio.transcript(for: clip) != nil else { return }
             onTranscriptStored()
         }
+    }
+}
+
+/// One timed line. It reads the playhead itself, so the four-times-a-second
+/// position redraws this row and not the whole transcript.
+private struct TranscriptLine: View {
+    let audio: NotebookAudio
+    let clipID: UUID
+    let segment: TranscriptSegment
+    let onPlay: () -> Void
+
+    var body: some View {
+        Button(action: onPlay) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(NowPlayingBar.timeLabel(segment.startSeconds))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .leading)
+                Text(segment.text)
+                    .font(.body)
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+        .accessibilityLabel(
+            "Play from \(NowPlayingBar.timeLabel(segment.startSeconds)): \(segment.text)"
+        )
+    }
+
+    /// The line the playhead is inside, while this clip is the one playing.
+    private var isCurrent: Bool {
+        guard audio.playingClipID == clipID else { return false }
+        let time = audio.playheadSeconds
+        return time >= segment.startSeconds && time < segment.endSeconds
     }
 }
