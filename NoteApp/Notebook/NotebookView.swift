@@ -168,6 +168,7 @@ struct NotebookPane: View {
     @State private var showsSearch = false
     @State private var showsAudio = false
     @State private var showsAI = false
+    @State private var showsToolbarEditor = false
     @State private var showsHistory = false
     @State private var showsLassoHint = false
     @State private var selectedElementID: UUID?
@@ -206,8 +207,12 @@ struct NotebookPane: View {
                 onBack: { model.showLibrary() },
                 onStopRecording: { Task { await session.audio.stopRecording() } },
                 onClearPage: { showsClearPageConfirmation = true },
+                isRulerActive: $isRulerActive,
+                onItemAction: { item in handleToolbarItem(item) },
+                onCustomizeToolbar: { showsToolbarEditor = true },
                 insertMenu: { insertMenuItems },
-                moreMenu: { moreMenuItems }
+                moreMenu: { moreMenuItems },
+                itemMenu: { item in toolbarItemMenu(for: item) }
             )
             #else
             macHeader
@@ -425,6 +430,9 @@ struct NotebookPane: View {
         .sheet(isPresented: $showsHistory) {
             VersionHistoryView(session: session)
         }
+        .sheet(isPresented: $showsToolbarEditor) {
+            ToolbarEditorView()
+        }
         .fileImporter(
             isPresented: $showsPDFImporter,
             allowedContentTypes: [.pdf],
@@ -623,8 +631,54 @@ struct NotebookPane: View {
         }
     }
 
+    /// Runs an optional toolbar item's existing action.
+    private func handleToolbarItem(_ item: ToolbarItemID) {
+        switch item {
+        case .textBox:
+            guard session.currentPageID != nil else { return }
+            showsTextComposer = true
+        case .image:
+            guard session.currentPageID != nil else { return }
+            showsImageImporter = true
+        case .addPage:
+            Task { await session.addPage() }
+        case .search:
+            showsSearch = true
+        default:
+            break
+        }
+    }
+
+    /// The menus behind the Shapes and Sticky Note toolbar items.
+    @ViewBuilder
+    private func toolbarItemMenu(for item: ToolbarItemID) -> some View {
+        switch item {
+        case .shapes:
+            Button("Rectangle", systemImage: "rectangle") { addShape("rect") }
+            Button("Ellipse", systemImage: "circle") { addShape("ellipse") }
+            Button("Line", systemImage: "line.diagonal") { addShape("line") }
+        case .stickyNote:
+            ForEach(Array(zip(Self.stickyColorNames, NotebookSession.stickyColors)), id: \.0) { name, color in
+                Button(name) { addSticky(color) }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
     @ViewBuilder
     private var moreMenuItems: some View {
+        #if os(iOS)
+        Section {
+            Toggle("Read Only", systemImage: "lock.doc", isOn: Binding(
+                get: { editor.isReadOnly },
+                set: { editor.isReadOnly = $0 }
+            ))
+            Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
+                showsToolbarEditor = true
+            }
+        }
+        #endif
         Section(session.manifest.title) {
             Button("Rename…", systemImage: "pencil") {
                 renameText = session.manifest.title
