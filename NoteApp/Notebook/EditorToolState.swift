@@ -103,6 +103,10 @@ final class EditorToolState {
     private(set) var highlighterFavorites: ColorFavorites
     /// The last eight colours used by either ink tool, newest first.
     private(set) var recentColors: ColorRecents
+    /// The three width slots the pen shows in the toolbar.
+    private(set) var penWidthPresets: WidthPresets
+    /// The three width slots the highlighter shows in the toolbar.
+    private(set) var highlighterWidthPresets: WidthPresets
     /// Saved pens: style, colour and width. Owns its own persistence.
     let favoritePens: FavoritePens
     /// Bumped when the Apple Pencil asks for the colour palette. The toolbar
@@ -125,6 +129,8 @@ final class EditorToolState {
         static let laserMode = "noteapp.editor.laserMode"
         static let penFavorites = "noteapp.editor.penFavorites.v1"
         static let highlighterFavorites = "noteapp.editor.highlighterFavorites.v1"
+        static let penWidthPresets = "noteapp.editor.penWidthPresets.v1"
+        static let highlighterWidthPresets = "noteapp.editor.highlighterWidthPresets.v1"
         static let recentColors = "noteapp.editor.recentColors.v1"
         /// The pre-palette list of five recent colours, migrated once.
         static let legacySwatches = "noteapp.editor.swatches.v1"
@@ -166,6 +172,20 @@ final class EditorToolState {
             recentColors = ColorRecents(legacySwatches ?? [])
         }
 
+        if let data = defaults.data(forKey: Keys.penWidthPresets),
+           let stored = try? JSONDecoder().decode(WidthPresets.self, from: data) {
+            penWidthPresets = stored
+        } else {
+            penWidthPresets = WidthPresets(WidthPresetDefaults.pen)
+        }
+
+        if let data = defaults.data(forKey: Keys.highlighterWidthPresets),
+           let stored = try? JSONDecoder().decode(WidthPresets.self, from: data) {
+            highlighterWidthPresets = stored
+        } else {
+            highlighterWidthPresets = WidthPresets(WidthPresetDefaults.highlighter)
+        }
+
         tool = Self.restoredTool(in: defaults)
         if tool.drawsInk { lastInkTool = tool }
         previousTool = tool.drawsInk ? tool : .pen
@@ -190,8 +210,16 @@ final class EditorToolState {
 
     // MARK: - Derived
 
-    var penTool: InkTool { presets.tool(for: penStyle) }
-    var highlighterTool: InkTool { presets.highlighter }
+    var penTool: InkTool { clamped(presets.tool(for: penStyle)) }
+    var highlighterTool: InkTool { clamped(presets.highlighter) }
+
+    /// A stored width is clamped into the ink's own range, which PencilKit
+    /// enforces anyway.
+    private func clamped(_ tool: InkTool) -> InkTool {
+        var result = tool
+        result.width = PenWidth.clamp(result.width, to: tool.widthRange)
+        return result
+    }
 
     /// The ink tool the toolbar edits: the current one, or the last one used
     /// while erasing, lassoing or in another non-drawing tool.
@@ -221,13 +249,16 @@ final class EditorToolState {
     }
     #endif
 
-    /// Three quick widths for whatever the width dots currently change.
+    /// Three quick widths for whatever the width dots currently change. The
+    /// eraser keeps its own fixed sizes; the ink tools have editable slots,
+    /// clamped into the current style's range.
     var widthPresets: [Double] {
         if tool == .eraser { return [8, 20, 44] }
-        let ink = inkTool
-        if ink.isHighlighter { return [12, 24, 40] }
-        let base = ink.style.defaultWidth
-        return [base * 0.6, base, base * 1.8].map { min(max($0, inkWidthRange.lowerBound), inkWidthRange.upperBound) }
+        return activeWidthPresets.clamped(to: inkWidthRange)
+    }
+
+    private var activeWidthPresets: WidthPresets {
+        activeInkTool == .highlighter ? highlighterWidthPresets : penWidthPresets
     }
 
     var currentWidth: Double {
@@ -235,7 +266,7 @@ final class EditorToolState {
     }
 
     var inkWidthRange: ClosedRange<Double> {
-        inkTool.isHighlighter ? 8...60 : 1...40
+        inkTool.widthRange
     }
 
     func isCurrentColor(_ color: RGBAColor) -> Bool {
@@ -392,6 +423,32 @@ final class EditorToolState {
         scheduleSave()
     }
 
+    // MARK: - Width presets
+
+    /// Saves a width into one of the active ink tool's slots and applies it.
+    /// The eraser's fixed sizes are not editable.
+    func setWidthPreset(at index: Int, to width: Double) {
+        guard tool != .eraser else { return }
+        let clamped = PenWidth.clamp(width, to: inkWidthRange)
+        if activeInkTool == .highlighter {
+            highlighterWidthPresets.setWidth(clamped, at: index, range: inkWidthRange)
+        } else {
+            penWidthPresets.setWidth(clamped, at: index, range: inkWidthRange)
+        }
+        setWidth(clamped)
+    }
+
+    /// Restores the active ink tool's three default widths.
+    func resetWidthPresets() {
+        guard tool != .eraser else { return }
+        if activeInkTool == .highlighter {
+            highlighterWidthPresets = WidthPresets(WidthPresetDefaults.highlighter)
+        } else {
+            penWidthPresets = WidthPresets(WidthPresetDefaults.pen)
+        }
+        scheduleSave()
+    }
+
     // MARK: - Persistence
 
     private func scheduleSave() {
@@ -424,6 +481,12 @@ final class EditorToolState {
         }
         if let data = try? JSONEncoder().encode(recentColors) {
             defaults.set(data, forKey: Keys.recentColors)
+        }
+        if let data = try? JSONEncoder().encode(penWidthPresets) {
+            defaults.set(data, forKey: Keys.penWidthPresets)
+        }
+        if let data = try? JSONEncoder().encode(highlighterWidthPresets) {
+            defaults.set(data, forKey: Keys.highlighterWidthPresets)
         }
     }
 }
