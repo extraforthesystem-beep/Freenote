@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreText
 import Foundation
+import ImageIO
 import NoteCore
 #if os(iOS)
 import UIKit
@@ -13,10 +14,25 @@ import AppKit
 public enum TemplateRenderer {
     /// Draws `template` in page points into a context whose y axis already grows
     /// downwards, as `PageRenderer` sets it up.
-    public static func draw(_ template: PageTemplate, in context: CGContext, pageSize: CGSize) {
+    ///
+    /// A custom template (`PageTemplate.customAssetName`) draws its picture
+    /// aspect-fit, centred, over the paper; `assetsDirectory` is where the
+    /// notebook's assets live. Without the file the page keeps its paper colour,
+    /// so a broken asset costs the picture, never the page.
+    public static func draw(
+        _ template: PageTemplate,
+        in context: CGContext,
+        pageSize: CGSize,
+        assetsDirectory: URL? = nil
+    ) {
         let page = CGRect(origin: .zero, size: pageSize)
         context.setFillColor(cgColor(template.paperColor))
         context.fill(page)
+
+        if let assetName = template.customAssetName {
+            drawCustom(assetName, in: context, page: page, assetsDirectory: assetsDirectory)
+            return
+        }
 
         let line = template.lineColor
         let spacing = template.spacing > 0 ? template.spacing : 24
@@ -73,7 +89,8 @@ public enum TemplateRenderer {
     public static func image(
         _ template: PageTemplate,
         pageSize: CGSize,
-        scale: CGFloat = 2
+        scale: CGFloat = 2,
+        assetsDirectory: URL? = nil
     ) -> InkImage? {
         guard pageSize.width > 0, pageSize.height > 0, scale > 0 else { return nil }
         let pixelWidth = Int((pageSize.width * scale).rounded(.up))
@@ -92,7 +109,7 @@ public enum TemplateRenderer {
 
         context.translateBy(x: 0, y: CGFloat(pixelHeight))
         context.scaleBy(x: scale, y: -scale)
-        draw(template, in: context, pageSize: pageSize)
+        draw(template, in: context, pageSize: pageSize, assetsDirectory: assetsDirectory)
 
         guard let cgImage = context.makeImage() else { return nil }
         #if os(iOS)
@@ -100,6 +117,36 @@ public enum TemplateRenderer {
         #else
         return NSImage(cgImage: cgImage, size: pageSize)
         #endif
+    }
+
+    // MARK: - Custom templates
+
+    /// Draws an imported picture as the page background, aspect-fit and centred
+    /// so nothing is cropped. A missing or corrupt file leaves the paper plain.
+    private static func drawCustom(
+        _ assetName: String,
+        in context: CGContext,
+        page: CGRect,
+        assetsDirectory: URL?
+    ) {
+        guard let assetsDirectory else { return }
+        let url = assetsDirectory.appendingPathComponent(assetName)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              CGImageSourceGetCount(source) > 0,
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              image.width > 0, image.height > 0
+        else { return }
+
+        let size = CGSize(width: image.width, height: image.height)
+        let scale = min(page.width / size.width, page.height / size.height)
+        let drawn = CGSize(width: size.width * scale, height: size.height * scale)
+        let box = CGRect(
+            x: page.midX - drawn.width / 2,
+            y: page.midY - drawn.height / 2,
+            width: drawn.width,
+            height: drawn.height
+        )
+        context.draw(image, in: box)
     }
 
     // MARK: - Basic patterns
