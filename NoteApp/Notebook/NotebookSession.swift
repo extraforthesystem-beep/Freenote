@@ -843,6 +843,27 @@ final class NotebookSession: Identifiable {
         await commitPendingSave()
     }
 
+    /// Replaces the page's ink and items as one edit, for a lasso action and
+    /// its undo. Ids that leave get tombstones; ids that come back lose theirs,
+    /// the same rule `strokesChanged` follows.
+    func applySelectionEdit(
+        strokes: [StrokeRecord],
+        elements: [PageElement],
+        failure: String
+    ) async {
+        guard var updated = page else { return }
+        let newStrokeIDs = Set(strokes.map(\.id))
+        let newElementIDs = Set(elements.map(\.id))
+        updated.deletedStrokeIDs.formUnion(Set(updated.strokes.map(\.id)).subtracting(newStrokeIDs))
+        updated.deletedStrokeIDs.subtract(newStrokeIDs)
+        updated.deletedElementIDs.formUnion(Set(updated.elements.map(\.id)).subtracting(newElementIDs))
+        updated.deletedElementIDs.subtract(newElementIDs)
+        updated.strokes = StrokeOrder.renderOrder(strokes, layerOrder: updated.layers.map(\.id))
+        updated.elements = elements
+        revealedTapeIDs.formIntersection(newElementIDs)
+        await saveEditedPage(updated, failure: failure)
+    }
+
     // MARK: - Saving
 
     /// Replaces the page and writes it now, through the ordered queue.
