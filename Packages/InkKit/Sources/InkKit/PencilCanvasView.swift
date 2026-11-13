@@ -62,6 +62,9 @@ public final class InkCanvasView: PKCanvasView {
     /// The part of the page to show across the canvas's width, in page
     /// points; nil fits the whole page. See `PencilCanvasView.viewport`.
     var viewport: CGRect?
+    /// The part of the page the canvas renders when `InkCanvasHost` sizes it
+    /// for the zoom it is seen at; nil fits the whole page.
+    var renderViewport: CGRect?
     private var appliedViewport: (rect: CGRect, bounds: CGSize, page: CGSize)?
 
     /// PencilKit registers undo with the canvas's own undo manager, and a
@@ -73,7 +76,7 @@ public final class InkCanvasView: PKCanvasView {
         guard pageSize.width > 0, pageSize.height > 0,
               bounds.width > 0, bounds.height > 0
         else { return }
-        if let viewport {
+        if let viewport = viewport ?? renderViewport {
             showViewport(viewport)
             return
         }
@@ -108,6 +111,14 @@ public final class InkCanvasView: PKCanvasView {
     override public func layoutSubviews() {
         super.layoutSubviews()
         fitPageIfNeeded()
+    }
+
+    /// A stroke, erase or lasso is under way.
+    var isDrawingInProgress: Bool {
+        switch drawingGestureRecognizer.state {
+        case .began, .changed: true
+        default: false
+        }
     }
 }
 
@@ -263,8 +274,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    public func makeUIView(context: Context) -> InkCanvasView {
-        let canvas = InkCanvasView()
+    public func makeUIView(context: Context) -> InkCanvasHost {
+        let host = InkCanvasHost()
+        let canvas = host.canvas
         canvas.delegate = context.coordinator
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
@@ -275,12 +287,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.alwaysBounceHorizontal = false
         canvas.pageSize = pageSize
         canvas.viewport = viewport
-        if viewport == nil {
-            canvas.contentSize = pageSize
-        } else {
-            // The panel sits above the home indicator; insets would shift ink.
-            canvas.contentInsetAdjustmentBehavior = .never
-        }
+        host.pageSize = pageSize
+        // A Zoom View canvas is already magnified by its own viewport.
+        host.managesRenderScale = viewport == nil
+        context.coordinator.host = host
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
@@ -330,7 +340,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.addInteraction(pencil)
 
         context.coordinator.apply(strokes, to: canvas)
-        return canvas
+        return host
     }
 
     /// A finger-only double-tap. It runs alongside the page host's pinch and
@@ -358,10 +368,12 @@ public struct PencilCanvasView: UIViewRepresentable {
         #endif
     }
 
-    public func updateUIView(_ canvas: InkCanvasView, context: Context) {
+    public func updateUIView(_ host: InkCanvasHost, context: Context) {
+        let canvas = host.canvas
         let coordinator = context.coordinator
         coordinator.parent = self
         coordinator.canvas = canvas
+        coordinator.host = host
         if viewport == nil {
             controller?.canvas = canvas
         }
@@ -375,22 +387,23 @@ public struct PencilCanvasView: UIViewRepresentable {
         coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
         coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap
         coordinator.redoDoubleTap?.isEnabled = redoOnThreeFingerDoubleTap
-        if viewport == nil {
-            canvas.contentSize = pageSize
-        }
         if canvas.pageSize != pageSize {
             canvas.pageSize = pageSize
         }
         canvas.viewport = viewport
+        host.pageSize = pageSize
+        host.managesRenderScale = viewport == nil
 
         coordinator.apply(strokes, to: canvas)
         canvas.fitPageIfNeeded()
+        host.refresh()
     }
 
     @MainActor
     public final class Coordinator: NSObject, PKCanvasViewDelegate, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
         var parent: PencilCanvasView
         weak var canvas: InkCanvasView?
+        weak var host: InkCanvasHost?
         weak var tapRecognizer: UITapGestureRecognizer?
         weak var undoDoubleTap: UITapGestureRecognizer?
         weak var redoDoubleTap: UITapGestureRecognizer?
@@ -510,10 +523,12 @@ public struct PencilCanvasView: UIViewRepresentable {
             } else if parent.controller?.lastUsedCanvas != nil {
                 parent.controller?.lastUsedCanvas = nil
             }
+            host?.isToolActive = true
             parent.onToolGestureBegan?()
         }
 
         public func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            host?.isToolActive = false
             parent.onToolGestureEnded?()
         }
 
