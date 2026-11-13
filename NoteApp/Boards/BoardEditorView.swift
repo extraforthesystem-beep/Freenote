@@ -249,7 +249,7 @@ struct BoardEditorView: View {
     }
 
     private var assetsDirectory: URL {
-        model.rootURL.appendingPathComponent("Assets", isDirectory: true)
+        model.assetsDirectory
     }
 
     #if os(iOS)

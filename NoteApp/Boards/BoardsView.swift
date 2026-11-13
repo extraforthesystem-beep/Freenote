@@ -125,7 +125,7 @@ struct BoardsView: View {
 
     private func boardRow(_ board: Board) -> some View {
         HStack(spacing: 14) {
-            BoardThumbnail(board: board)
+            BoardThumbnail(board: board, assetsDirectory: model.assetsDirectory)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(board.title)

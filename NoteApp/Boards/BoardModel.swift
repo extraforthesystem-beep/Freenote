@@ -14,6 +14,11 @@ final class BoardModel {
     /// Directory containing the board files.
     let rootURL: URL
 
+    /// Folder holding images inserted into boards, shared by every board.
+    var assetsDirectory: URL {
+        rootURL.appendingPathComponent("Assets", isDirectory: true)
+    }
+
     private let store: BoardStore
     /// Last saved camera per board, so a plain `save(board)` does not discard
     /// the viewport stored by an earlier editing session.
