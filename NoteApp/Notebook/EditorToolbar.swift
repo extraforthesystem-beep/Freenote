@@ -6,10 +6,12 @@ import UniformTypeIdentifiers
 
 /// The editor's single toolbar row.
 ///
-/// Left (pinned): back, thumbnails, undo, redo. Centre: tools. Right: colour
-/// swatches and widths. The More menu is pinned at the trailing edge. When the
-/// row is too narrow (split view) only the tools and colours scroll.
-struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
+/// Left (pinned): back, thumbnails, undo, redo. Centre: the pen chip and the
+/// customisable tool items, the colour favourites and the width presets.
+/// Right: recording and the More menu. Only the colour favourites scroll; when
+/// the row is too narrow for every tool the extra ones move into an overflow
+/// menu. Reading a notebook hides the tools and shows a Read Only pill instead.
+struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     @Bindable var editor: EditorToolState
     let controller: PencilCanvasController
     @Binding var showsThumbnails: Bool
@@ -20,9 +22,16 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     let onStopRecording: () -> Void
     /// Opens the notebook's Clear Page confirmation.
     let onClearPage: () -> Void
+    /// Bound to the notebook's ruler, for the optional Ruler item.
+    @Binding var isRulerActive: Bool
+    /// Runs an optional item's existing action. Menu-style items use `itemMenu`.
+    let onItemAction: (ToolbarItemID) -> Void
+    let onCustomizeToolbar: () -> Void
     @ViewBuilder let insertMenu: () -> InsertMenu
     @ViewBuilder let moreMenu: () -> MoreMenu
+    @ViewBuilder let itemMenu: (ToolbarItemID) -> ItemMenu
 
+    @AppStorage(ToolbarLayout.storageKey) private var layoutStorage = ToolbarLayout.defaultStorage
     @State private var popover: ToolPopover?
     @State private var showsPalette = false
     @State private var showsFavoritePens = false
@@ -31,6 +40,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     @State private var editingFavorite: Int?
     /// The favourite a dragged colour is hovering over, for the drop ring.
     @State private var dropTarget: Int?
+    /// Which edges of the colour strip have more colours off screen.
+    @State private var swatchEdges = SwatchEdges()
 
     private enum ToolPopover: Hashable {
         case pen, highlighter, eraser, laser
@@ -40,23 +51,26 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         HStack(spacing: 0) {
             leading
             ToolbarDivider()
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    scrollingContent
-                    Spacer(minLength: 0)
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    scrollingContent
-                }
+            centre
+                .frame(maxWidth: .infinity)
+            if !editor.isReadOnly {
+                ToolbarDivider()
             }
-            .frame(maxWidth: .infinity)
-            ToolbarDivider()
             trailing
         }
         .padding(.horizontal, 6)
         .frame(height: 52)
         .background(.bar)
+        .background {
+            // Long-pressing an empty part of the bar opens the toolbar editor.
+            Color.clear
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
+                        onCustomizeToolbar()
+                    }
+                }
+        }
         .background(alignment: .topLeading) { toolShortcuts }
         .onChange(of: editor.paletteRequestID) {
             popover = nil
@@ -67,7 +81,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     /// One key per tool, so the tools work with a hardware keyboard. The
     /// buttons are invisible: the real toolbar buttons keep the visible state,
     /// and a shortcut selects a tool, it never opens a popover. A focused text
-    /// field takes the keys first, as it should.
+    /// field takes the keys first, as it should. The keys work whether or not
+    /// the item is shown in the toolbar.
     private var toolShortcuts: some View {
         Group {
             shortcut(.lasso, "v")
@@ -132,91 +147,321 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         }
     }
 
-    /// Reading a notebook: the tools go away and nothing can be drawn or
-    /// edited, but pages still scroll, zoom and follow PDF links.
+    /// Entering Read Only. Leaving it is the pill in the centre.
+    @ViewBuilder
     private var readOnlyButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                editor.isReadOnly.toggle()
-            }
-        } label: {
-            if editor.isReadOnly {
-                HStack(spacing: 5) {
-                    Image(systemName: "lock.fill")
-                        .font(.caption.weight(.semibold))
-                    Text("Read Only")
-                        .font(.caption.weight(.semibold))
-                }
-                .padding(.horizontal, 10)
-                .frame(minHeight: 44)
-                .foregroundStyle(Color.white)
-                .background(Color.accentColor, in: Capsule())
-                .contentShape(Rectangle())
-            } else {
+        if !editor.isReadOnly {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { editor.isReadOnly = true }
+            } label: {
                 ToolbarIcon(systemImage: "lock.doc")
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Read Only")
+            .accessibilityHint("Hides the tools and stops editing")
+            .help("Read Only: hide the tools and stop editing")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(editor.isReadOnly ? "Read Only, on" : "Read Only")
-        .accessibilityHint(editor.isReadOnly ? "Turns editing back on" : "Hides the tools and stops editing")
-        .help(editor.isReadOnly ? "Read Only: tap to edit again" : "Read Only: hide the tools and stop editing")
     }
 
-    // MARK: - Tools and colours
+    // MARK: - Centre
 
-    private var scrollingContent: some View {
-        HStack(spacing: 2) {
-            tools
+    @ViewBuilder
+    private var centre: some View {
+        if editor.isReadOnly {
+            readOnlyPill
+        } else {
+            editingGroups
+        }
+    }
+
+    /// Reading a notebook: the tools go away and nothing can be drawn or
+    /// edited, but pages still scroll, zoom and follow PDF links.
+    private var readOnlyPill: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { editor.isReadOnly = false }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "lock.fill")
+                    .font(.caption.weight(.semibold))
+                Text("Read Only")
+                    .font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .foregroundStyle(Color.white)
+            .background(Color.accentColor, in: Capsule())
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Read Only, on")
+        .accessibilityHint("Turns editing back on")
+        .accessibilityAddTraits(.isSelected)
+        .help("Read Only: tap to edit again")
+    }
+
+    private var editingGroups: some View {
+        HStack(spacing: 0) {
+            customisableTools
+                .layoutPriority(1)
             ToolbarDivider()
-            swatches
+            colorGroup
             ToolbarDivider()
             widths
         }
-        .padding(.horizontal, 4)
-        .disabled(editor.isReadOnly)
+        .padding(.horizontal, 2)
     }
 
-    private var tools: some View {
+    // MARK: - Customisable tools
+
+    private var layout: ToolbarLayout {
+        ToolbarLayout(storage: layoutStorage)
+    }
+
+    /// All the chosen items when they fit; otherwise the important ones plus a
+    /// "More Tools" overflow menu. This group never scrolls.
+    private var customisableTools: some View {
+        ViewThatFits(in: .horizontal) {
+            toolRow(layout.items, overflow: [])
+            toolRow(priorityItems, overflow: overflowItems)
+            toolRow(compactItems, overflow: compactOverflow)
+            toolRow([], overflow: layout.items)
+        }
+    }
+
+    private func toolRow(_ items: [ToolbarItemID], overflow: [ToolbarItemID]) -> some View {
         HStack(spacing: 2) {
             penChip
-            favoritePensButton
+            ForEach(items) { item in
+                toolView(item)
+            }
+            if !overflow.isEmpty {
+                overflowMenu(overflow)
+            }
+        }
+    }
+
+    /// The tool the current mode uses, when it is in the toolbar.
+    private var activeToolItem: ToolbarItemID? {
+        guard let item = ToolbarItemID(tool: editor.tool), layout.items.contains(item) else { return nil }
+        return item
+    }
+
+    /// Pen chip, the two ink tools people switch between, and the active tool.
+    private var priorityItems: [ToolbarItemID] {
+        var priority: Set<ToolbarItemID> = [.highlighter, .eraser]
+        if let active = activeToolItem { priority.insert(active) }
+        return layout.items.filter { priority.contains($0) }
+    }
+
+    private var overflowItems: [ToolbarItemID] {
+        layout.items.filter { !priorityItems.contains($0) }
+    }
+
+    /// A last resort: the pen chip, the active tool and the overflow menu.
+    private var compactItems: [ToolbarItemID] {
+        guard let active = activeToolItem, active != .highlighter, active != .eraser else { return [] }
+        return [active]
+    }
+
+    private var compactOverflow: [ToolbarItemID] {
+        layout.items.filter { !compactItems.contains($0) }
+    }
+
+    private func overflowMenu(_ items: [ToolbarItemID]) -> some View {
+        Menu {
+            ForEach(items) { item in
+                overflowMenuItem(item)
+            }
+        } label: {
+            ToolbarIcon(systemImage: "chevron.down.circle")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .accessibilityLabel("More Tools")
+        .help("More tools")
+    }
+
+    @ViewBuilder
+    private func overflowMenuItem(_ item: ToolbarItemID) -> some View {
+        switch item {
+        case .insert:
+            Menu(item.title, systemImage: item.systemImage) { insertMenu() }
+        case .shapes:
+            Menu(item.title, systemImage: item.systemImage) { itemMenu(item) }
+        case .stickyNote:
+            Menu(item.title, systemImage: item.systemImage) { itemMenu(item) }
+        case .favoritePens:
+            Menu(item.title, systemImage: item.systemImage) { favoritePensMenuItems }
+        case .ruler:
+            Toggle(item.title, systemImage: item.systemImage, isOn: $isRulerActive)
+        default:
+            Button(item.title, systemImage: item.systemImage) {
+                activate(item)
+            }
+        }
+    }
+
+    /// Recall a saved pen from the overflow menu; the star's popover lives in
+    /// the toolbar row itself.
+    @ViewBuilder
+    private var favoritePensMenuItems: some View {
+        ForEach(editor.favoritePens.pens) { pen in
+            Button("\(pen.style.displayName), \(editor.colorName(for: pen.color))") {
+                editor.recallPen(pen)
+            }
+        }
+        if !editor.favoritePens.pens.isEmpty {
+            Divider()
+        }
+        Button("Add Current Pen", systemImage: "plus") {
+            editor.saveCurrentPen()
+        }
+        .disabled(editor.favoritePens.isFull || editor.isCurrentPenSaved)
+    }
+
+    /// One toolbar item, at its full size.
+    @ViewBuilder
+    private func toolView(_ item: ToolbarItemID) -> some View {
+        switch item {
+        case .highlighter:
             highlighterButton
+        case .eraser:
             eraserButton
-            ToolbarIconButton(
-                "Lasso",
-                systemImage: "lasso",
-                isSelected: editor.tool == .lasso,
-                help: "Lasso (V): circle ink, then drag it to move"
-            ) {
-                editor.tool = .lasso
-            }
+        case .lasso:
+            lassoButton
+        case .elements:
+            elementsButton
+        case .insert:
+            insertButton
+        case .laser:
             laserButton
+        case .zoomView:
             zoomViewButton
-            ToolbarIconButton(
-                "Select Elements",
-                systemImage: "cursorarrow.rays",
-                isSelected: editor.tool == .elements
-            ) {
-                editor.tool = .elements
-            }
-            .help("Move, resize or delete text, images and shapes")
-            Menu {
-                insertMenu()
-            } label: {
-                ToolbarIcon(systemImage: "plus.circle")
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .accessibilityLabel("Insert")
-            .help("Insert text, image or shape")
-            ToolbarIconButton(
-                "Follow Links",
-                systemImage: "hand.point.up.left",
-                isSelected: editor.tool == .links
-            ) {
-                editor.tool = .links
-            }
-            .help("Tap links in imported PDFs")
+        case .followLinks:
+            followLinksButton
+        case .ruler:
+            rulerButton
+        case .shapes:
+            shapesButton
+        case .textBox, .image, .addPage, .search:
+            plainItemButton(item)
+        case .stickyNote:
+            stickyNoteButton
+        case .favoritePens:
+            favoritePensButton
+        }
+    }
+
+    /// Runs the item's existing action; used by the overflow menu too.
+    private func activate(_ item: ToolbarItemID) {
+        switch item {
+        case .highlighter:
+            editor.tool = .highlighter
+        case .eraser:
+            editor.tool = .eraser
+        case .lasso:
+            editor.tool = .lasso
+        case .laser:
+            editor.tool = .laser
+        case .elements:
+            editor.tool = .elements
+        case .followLinks:
+            editor.tool = .links
+        case .zoomView:
+            withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown.toggle() }
+        case .ruler:
+            isRulerActive.toggle()
+        case .textBox, .image, .addPage, .search:
+            onItemAction(item)
+        case .insert, .shapes, .stickyNote, .favoritePens:
+            break
+        }
+    }
+
+    private var lassoButton: some View {
+        ToolbarIconButton(
+            "Lasso",
+            systemImage: "lasso",
+            isSelected: editor.tool == .lasso,
+            help: "Lasso (V): circle ink, then drag it to move"
+        ) {
+            editor.tool = .lasso
+        }
+    }
+
+    private var elementsButton: some View {
+        ToolbarIconButton(
+            "Select Elements",
+            systemImage: "cursorarrow.rays",
+            isSelected: editor.tool == .elements,
+            help: "Move, resize or delete text, images and shapes"
+        ) {
+            editor.tool = .elements
+        }
+    }
+
+    private var insertButton: some View {
+        Menu {
+            insertMenu()
+        } label: {
+            ToolbarIcon(systemImage: "plus.circle")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Insert")
+        .help("Insert text, image or shape")
+    }
+
+    private var followLinksButton: some View {
+        ToolbarIconButton(
+            "Follow Links",
+            systemImage: "hand.point.up.left",
+            isSelected: editor.tool == .links,
+            help: "Tap links in imported PDFs"
+        ) {
+            editor.tool = .links
+        }
+    }
+
+    private var rulerButton: some View {
+        ToolbarIconButton(
+            "Ruler",
+            systemImage: "ruler",
+            isSelected: isRulerActive,
+            help: "Ruler: draw straight lines along its edge"
+        ) {
+            isRulerActive.toggle()
+        }
+    }
+
+    private var shapesButton: some View {
+        Menu {
+            itemMenu(.shapes)
+        } label: {
+            ToolbarIcon(systemImage: ToolbarItemID.shapes.systemImage)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .accessibilityLabel(ToolbarItemID.shapes.title)
+        .help("Add a shape")
+    }
+
+    private var stickyNoteButton: some View {
+        Menu {
+            itemMenu(.stickyNote)
+        } label: {
+            ToolbarIcon(systemImage: ToolbarItemID.stickyNote.systemImage)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .accessibilityLabel(ToolbarItemID.stickyNote.title)
+        .help("Add a sticky note")
+    }
+
+    private func plainItemButton(_ item: ToolbarItemID) -> some View {
+        ToolbarIconButton(item.title, systemImage: item.systemImage, help: item.title) {
+            onItemAction(item)
         }
     }
 
@@ -369,23 +614,73 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         )
     }
 
-    /// The active ink tool's eight favourites, a free slot while there are
-    /// fewer than eight, then the palette button. Favourites can be dragged
-    /// onto one another to reorder; the same move has VoiceOver actions.
-    private var swatches: some View {
+    // MARK: - Colours
+
+    /// The active ink tool's favourites in their own scroll view, with the
+    /// palette button fixed beside it. This is the only part of the bar that
+    /// scrolls.
+    private var colorGroup: some View {
         let favorites = editor.favoriteColors
         return HStack(spacing: 0) {
-            ForEach(Array(favorites.colors.enumerated()), id: \.element) { index, color in
-                favoriteSwatch(color, index: index)
-            }
-            if !favorites.isFull {
-                addFavoriteSlot
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(Array(favorites.colors.enumerated()), id: \.element) { index, color in
+                            favoriteSwatch(color, index: index)
+                                .id(index)
+                        }
+                        if !favorites.isFull {
+                            addFavoriteSlot
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .layoutPriority(-1)
+                .mask(swatchMask)
+                .onScrollGeometryChange(for: SwatchEdges.self) { geometry in
+                    SwatchEdges(
+                        leading: geometry.contentOffset.x > 1,
+                        trailing: geometry.contentOffset.x + geometry.containerSize.width
+                            < geometry.contentSize.width - 1
+                    )
+                } action: { _, edges in
+                    swatchEdges = edges
+                }
+                .onAppear { revealSelectedColor(proxy) }
+                .onChange(of: editor.activeInkTool) { revealSelectedColor(proxy) }
+                .onChange(of: editor.inkTool.color) { revealSelectedColor(proxy) }
+                .onChange(of: favorites.colors.count) { revealSelectedColor(proxy) }
             }
             paletteButton
         }
+        .frame(maxWidth: .infinity)
         .popover(isPresented: editingFavoriteBinding) {
             ColorPalettePopover(editor: editor, replacingFavorite: editingFavorite)
                 .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    /// Fades an edge of the colour strip only when more colours sit past it.
+    private var swatchMask: some View {
+        LinearGradient(
+            stops: [
+                .init(color: swatchEdges.leading ? .clear : .black, location: 0),
+                .init(color: .black, location: 0.04),
+                .init(color: .black, location: 0.96),
+                .init(color: swatchEdges.trailing ? .clear : .black, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    /// Keeps the colour in use visible, on appear and when the colour changes.
+    private func revealSelectedColor(_ proxy: ScrollViewProxy) {
+        guard let index = editor.favoriteColors.colors.firstIndex(where: { editor.isCurrentColor($0) })
+        else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            proxy.scrollTo(index, anchor: .center)
         }
     }
 
@@ -524,6 +819,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         }
     }
 
+    // MARK: - Widths
+
     private var widths: some View {
         let presets = editor.widthPresets
         let current = editor.currentWidth
@@ -546,6 +843,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(["Thin", "Medium", "Thick"][min(index, 2)])
+                .accessibilityHint(isApplicable ? "Sets the current width" : "No width for this tool")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
@@ -558,6 +856,34 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     }
 }
 
+/// Which edges of the colour strip have more colours off screen.
+private struct SwatchEdges: Equatable {
+    var leading = false
+    var trailing = false
+}
+
+private extension ToolbarItemID {
+    /// The toolbar item that selects a tool, when there is one.
+    init?(tool: EditorTool) {
+        switch tool {
+        case .pen:
+            return nil
+        case .highlighter:
+            self = .highlighter
+        case .eraser:
+            self = .eraser
+        case .lasso:
+            self = .lasso
+        case .laser:
+            self = .laser
+        case .elements:
+            self = .elements
+        case .links:
+            self = .followLinks
+        }
+    }
+}
+
 // MARK: - Popovers
 
 private struct PenSettingsPopover: View {
@@ -566,9 +892,12 @@ private struct PenSettingsPopover: View {
     private let columns = [GridItem(.adaptive(minimum: 64), spacing: 8)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Pen")
-                .font(.headline)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                FavoritePensContent(editor: editor)
+                Divider()
+                Text("Pen")
+                    .font(.headline)
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(PenStyle.allCases, id: \.self) { style in
                     let isSelected = editor.penStyle == style
@@ -596,10 +925,12 @@ private struct PenSettingsPopover: View {
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
-            WidthSlider(editor: editor)
+                WidthSlider(editor: editor)
+            }
+            .padding(16)
         }
-        .padding(16)
         .frame(width: 320)
+        .frame(maxHeight: 620)
     }
 }
 

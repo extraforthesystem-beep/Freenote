@@ -124,6 +124,19 @@ extension EditorToolState {
 /// to reorder with drag handles.
 struct FavoritePensPopover: View {
     @Bindable var editor: EditorToolState
+
+    var body: some View {
+        FavoritePensContent(editor: editor)
+            .padding(16)
+            .frame(width: 300)
+    }
+}
+
+/// The saved-pen list: tap to recall, swipe or touch and hold to delete, Edit
+/// to reorder with drag handles. Shared by the star's popover and the pen
+/// settings popover.
+struct FavoritePensContent: View {
+    @Bindable var editor: EditorToolState
     @Environment(\.dismiss) private var dismiss
     @State private var editMode: EditMode = .inactive
 
@@ -151,8 +164,6 @@ struct FavoritePensPopover: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(16)
-        .frame(width: 300)
     }
 
     private var header: some View {

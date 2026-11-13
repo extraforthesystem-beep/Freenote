@@ -30,6 +30,7 @@ struct SettingsView: View {
     @State private var didRebuildSearch = false
     @State private var isRegeneratingThumbnails = false
     @State private var didRegenerateThumbnails = false
+    @State private var showsToolbarEditor = false
 
     var body: some View {
         NavigationStack {
@@ -51,6 +52,9 @@ struct SettingsView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .sheet(isPresented: $showsToolbarEditor) {
+                ToolbarEditorView()
             }
         }
     }
@@ -97,6 +101,9 @@ struct SettingsView: View {
             Toggle("Two-Finger Double-Tap to Undo", isOn: $twoFingerDoubleTapUndo)
             Toggle("Three-Finger Double-Tap to Redo", isOn: $threeFingerDoubleTapRedo)
             Toggle("Hide Status Bar in Notebooks", isOn: $hideStatusBar)
+            Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
+                showsToolbarEditor = true
+            }
             #endif
         } header: {
             Text("Writing")
