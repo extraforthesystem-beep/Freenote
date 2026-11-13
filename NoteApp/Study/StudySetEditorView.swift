@@ -5,6 +5,8 @@ import SwiftUI
 struct StudySetEditorView: View {
     @Bindable var study: StudyModel
     let setID: UUID
+    /// Opens the notebook page a card came from; `nil` hides the source button.
+    var onOpenSource: ((UUID, UUID) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var cardEditor: CardEditorTarget?
@@ -50,7 +52,12 @@ struct StudySetEditorView: View {
                     )
                 }
                 .sheet(isPresented: $showsReview) {
-                    StudyReviewView(study: study, setID: setID)
+                    StudyReviewView(
+                        study: study,
+                        scope: .set(setID),
+                        passTitle: set?.title ?? "Review",
+                        onOpenSource: onOpenSource
+                    )
                 }
                 .alert("Study error", isPresented: Binding(
                     get: { errorText != nil },
@@ -121,11 +128,14 @@ struct StudySetEditorView: View {
 
     private var studyBar: some View {
         let count = set?.cards.count ?? 0
+        let due = set.map { study.dueCount(for: $0) } ?? 0
         return Button {
             showsReview = true
         } label: {
             Label(
-                count == 0 ? "Study" : "Study \(count) Card\(count == 1 ? "" : "s")",
+                count == 0
+                    ? "Study"
+                    : due == 0 ? "Nothing Due" : "Review \(due) Due Card\(due == 1 ? "" : "s")",
                 systemImage: "play.fill"
             )
             .font(.headline)
@@ -133,7 +143,7 @@ struct StudySetEditorView: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
-        .disabled(count == 0)
+        .disabled(count == 0 || due == 0)
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)

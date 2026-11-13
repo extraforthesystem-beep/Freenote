@@ -247,6 +247,7 @@ struct LibraryView: View {
                 Label("Whiteboards", systemImage: "rectangle.3.group")
                     .tag(AppModel.Location.whiteboards)
                 Label("Study Sets", systemImage: "rectangle.stack")
+                    .badge(model.study.totalDueCount)
                     .tag(AppModel.Location.studySets)
             }
 
@@ -464,7 +465,10 @@ struct LibraryView: View {
             case .whiteboards:
                 BoardsView(model: model.boards, showsDoneButton: false)
             case .studySets:
-                StudyLibraryView(study: model.study, showsDoneButton: false)
+                StudyLibraryView(study: model.study, showsDoneButton: false) { notebookID, pageID in
+                    guard let notebook = model.notebook(withID: notebookID) else { return }
+                    Task { await model.open(notebook, pageID: pageID) }
+                }
             case .all, .recents, .favourites, .folder:
                 notebookLibrary
             }
