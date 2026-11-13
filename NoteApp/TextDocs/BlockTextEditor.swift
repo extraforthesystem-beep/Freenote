@@ -296,6 +296,11 @@ final class BlockTextView: UITextView {
     var onMovedToWindow: (() -> Void)?
     var onDeleteBackwardAtStart: (() -> Void)?
 
+    /// The document editor keeps one snapshot stack for the whole page. A
+    /// per-field stack would replay the same keystrokes into a second history,
+    /// so the block opts out of the system undo manager entirely.
+    override var undoManager: UndoManager? { nil }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard window != nil else { return }

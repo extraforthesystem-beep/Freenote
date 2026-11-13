@@ -66,6 +66,61 @@ struct TextDocumentTests {
         #expect(document.blocks.map(\.text) == ["D", "B", "C", "A"])
     }
 
+    @Test("Moving before a later block inserts it one slot earlier")
+    func moveBlockBeforeUsesOriginalTargetIndex() {
+        let a = paragraph("A")
+        let b = paragraph("B")
+        let c = paragraph("C")
+        let d = paragraph("D")
+        var document = TextDocument(blocks: [a, b, c, d])
+
+        let first = document.moveBlock(a.id, before: c.id)
+        #expect(first)
+        #expect(document.blocks.map(\.text) == ["B", "A", "C", "D"])
+
+        let second = document.moveBlock(d.id, before: b.id)
+        #expect(second)
+        #expect(document.blocks.map(\.text) == ["D", "B", "A", "C"])
+    }
+
+    @Test("Moving before is a no-op for an adjacent block and invalid ids")
+    func moveBlockBeforeHandlesEdges() {
+        let a = paragraph("A")
+        let b = paragraph("B")
+        let c = paragraph("C")
+        var document = TextDocument(blocks: [a, b, c])
+
+        let adjacent = document.moveBlock(a.id, before: b.id)
+        #expect(adjacent)
+        #expect(document.blocks.map(\.text) == ["A", "B", "C"])
+
+        let sameBlock = document.moveBlock(b.id, before: b.id)
+        let missingSource = document.moveBlock(UUID(), before: c.id)
+        let missingTarget = document.moveBlock(a.id, before: UUID())
+        #expect(sameBlock == false)
+        #expect(missingSource == false)
+        #expect(missingTarget == false)
+        #expect(document.blocks.map(\.text) == ["A", "B", "C"])
+    }
+
+    @Test("Adjacent up and down moves stay correct")
+    func adjacentMovesAreCorrect() {
+        let a = paragraph("A")
+        let b = paragraph("B")
+        let c = paragraph("C")
+        var document = TextDocument(blocks: [a, b, c])
+
+        // Down one: the post-removal destination is the old index + 1.
+        let down = document.moveBlock(from: 1, to: 2)
+        #expect(down)
+        #expect(document.blocks.map(\.text) == ["A", "C", "B"])
+
+        // Up one: the post-removal destination is the old index - 1.
+        let up = document.moveBlock(from: 2, to: 1)
+        #expect(up)
+        #expect(document.blocks.map(\.text) == ["A", "B", "C"])
+    }
+
     @Test("plainText joins block text without list markers")
     func plainTextSkipsNonTextBlocks() {
         let document = TextDocument(

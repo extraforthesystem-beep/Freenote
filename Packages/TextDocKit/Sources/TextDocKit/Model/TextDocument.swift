@@ -76,6 +76,22 @@ public struct TextDocument: Codable, Hashable, Identifiable, Sendable {
         return moveBlock(from: source, to: destination)
     }
 
+    /// Moves the block with `id` in front of the block with `targetID`.
+    ///
+    /// `targetID` is interpreted at its position *before* the move, which is
+    /// what a drag-and-drop call site naturally has. Moving a block down onto a
+    /// later block therefore inserts it immediately before that block instead
+    /// of one slot too far. Returns `false` when either block is missing or
+    /// both ids are the same.
+    @discardableResult
+    public mutating func moveBlock(_ id: UUID, before targetID: UUID) -> Bool {
+        guard id != targetID,
+              let source = blocks.firstIndex(where: { $0.id == id }),
+              let target = blocks.firstIndex(where: { $0.id == targetID })
+        else { return false }
+        return moveBlock(from: source, to: source < target ? target - 1 : target)
+    }
+
     /// Records an edit at `date`, which defaults to now.
     public mutating func touch(at date: Date = Date()) {
         updatedAt = date

@@ -26,14 +26,18 @@ final class TextDocModel {
 
     // MARK: - Loading
 
-    /// Reads every document from disk, most recently updated first.
+    /// Reads every readable document from disk, most recently updated first.
+    ///
+    /// A corrupt or future-schema file is skipped instead of hiding the rest of
+    /// the library; the skipped count is published through ``lastError``.
     func load() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            documents = try await store.list()
+            let listing = try await store.listReportingIssues()
+            documents = listing.documents
             sortDocuments()
-            lastError = nil
+            lastError = Self.skippedMessage(count: listing.issues.count)
         } catch {
             lastError = Self.message(for: error)
         }
@@ -128,5 +132,13 @@ final class TextDocModel {
             return textDocError.description
         }
         return error.localizedDescription
+    }
+
+    private static func skippedMessage(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        if count == 1 {
+            return "1 text document couldn't be read and was skipped; the rest are fine."
+        }
+        return "\(count) text documents couldn't be read and were skipped; the rest are fine."
     }
 }

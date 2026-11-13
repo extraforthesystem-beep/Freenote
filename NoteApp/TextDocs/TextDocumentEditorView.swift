@@ -19,6 +19,7 @@ struct TextDocumentEditorView: View {
     @State private var focusedKey: BlockKey?
     @State private var focusRequest: FocusRequest?
     @State private var scrollTarget: UUID?
+    @State private var history = TextDocumentHistory()
 
     @State private var pendingSave: Task<Void, Never>?
     @State private var editGeneration = 0
@@ -64,11 +65,30 @@ struct TextDocumentEditorView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .background(alignment: .topLeading) { historyShortcuts }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Done") { finishEditing() }
             }
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    undo()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .disabled(!history.canUndo)
+                .accessibilityLabel("Undo")
+                .help("Undo")
+
+                Button {
+                    redo()
+                } label: {
+                    Image(systemName: "arrow.uturn.forward")
+                }
+                .disabled(!history.canRedo)
+                .accessibilityLabel("Redo")
+                .help("Redo")
+
                 Menu {
                     addBlockMenuItems
                 } label: {
@@ -91,8 +111,8 @@ struct TextDocumentEditorView: View {
                 requestFocus(BlockKey(blockID: document.blocks[0].id), caret: 0)
             }
         }
-        .alert("Couldn't Save Document", isPresented: errorBinding) {
-            Button("Keep Editing", role: .cancel) { model.clearError() }
+        .alert("Text Document Error", isPresented: errorBinding) {
+            Button("OK", role: .cancel) { model.clearError() }
         } message: {
             Text(model.lastError ?? "")
         }
@@ -115,12 +135,39 @@ struct TextDocumentEditorView: View {
     }
 
     private var titleField: some View {
-        TextField("Untitled", text: $document.title)
+        TextField("Untitled", text: documentTitle)
             .font(.system(size: 32, weight: .bold))
             .textFieldStyle(.plain)
             .submitLabel(.next)
             .onSubmit { focusFirstBlock() }
             .accessibilityLabel("Document title")
+    }
+
+    /// The title as an undoable typing edit.
+    private var documentTitle: Binding<String> {
+        Binding(
+            get: { document.title },
+            set: { newValue in
+                guard newValue != document.title else { return }
+                history.recordTyping(document)
+                document.title = newValue
+                hasUnsavedChanges = true
+            }
+        )
+    }
+
+    /// The blocks as undoable typing edits. Structural edits change `document`
+    /// directly and record their own snapshots.
+    private var blockList: Binding<[TextBlock]> {
+        Binding(
+            get: { document.blocks },
+            set: { newValue in
+                guard newValue != document.blocks else { return }
+                history.recordTyping(document)
+                document.blocks = newValue
+                hasUnsavedChanges = true
+            }
+        )
     }
 
     /// Puts the caret in the first block, creating one when the page is empty.
@@ -158,7 +205,7 @@ struct TextDocumentEditorView: View {
             if document.blocks.isEmpty {
                 emptyBlocks
             } else {
-                ForEach($document.blocks) { $block in
+                ForEach(blockList) { $block in
                     BlockRow(
                         block: $block,
                         focusedKey: focusedKey,
@@ -172,7 +219,11 @@ struct TextDocumentEditorView: View {
                         onConvert: { convert(block.id, to: $0) },
                         onInsertBelow: { insertBelow(block.id) },
                         onMove: { moveBlock(block.id, by: $0) },
-                        onDelete: { deleteBlock(block.id) }
+                        onDelete: { deleteBlock(block.id) },
+                        onChecklistChange: {
+                            history.recordStructural(document)
+                            hasUnsavedChanges = true
+                        }
                     )
                     .id(block.id)
                     .dropDestination(for: String.self) { payloads, _ in
@@ -236,6 +287,7 @@ struct TextDocumentEditorView: View {
     }
 
     private func addBlock(_ kind: TextBlockKind) {
+        let before = document
         let block = TextBlock(kind: kind)
         if let focusedKey,
            let index = document.blocks.firstIndex(where: { $0.id == focusedKey.blockID }) {
@@ -243,53 +295,62 @@ struct TextDocumentEditorView: View {
         } else {
             document.insert(block, at: document.blocks.count)
         }
+        recordStructuralChange(from: before)
         requestFocus(BlockKey(blockID: block.id, itemIndex: 0), caret: 0)
     }
 
     private func insertBelow(_ blockID: UUID) {
+        let before = document
         guard let caret = document.insertBlock(after: blockID, kind: .paragraph(text: "")) else {
             return
         }
+        recordStructuralChange(from: before)
         requestFocus(BlockKey(blockID: caret.blockID, itemIndex: caret.itemIndex), caret: caret.offset)
     }
 
     private func moveBlock(_ id: UUID, by offset: Int) {
+        let before = document
         guard let index = document.blocks.firstIndex(where: { $0.id == id }) else { return }
         let destination = index + offset
         guard document.blocks.indices.contains(destination) else { return }
         document.moveBlock(from: index, to: destination)
+        recordStructuralChange(from: before)
         focusedKey = BlockKey(blockID: id, itemIndex: focusedKey?.itemIndex ?? 0)
     }
 
     /// Moves a dragged block in front of the block it was dropped on.
     @discardableResult
     private func moveBlock(_ sourceID: UUID, before targetID: UUID) -> Bool {
-        guard sourceID != targetID,
-              let source = document.blocks.firstIndex(where: { $0.id == sourceID }),
-              let target = document.blocks.firstIndex(where: { $0.id == targetID })
-        else { return false }
-        document.moveBlock(from: source, to: target)
+        let before = document
+        guard document.moveBlock(sourceID, before: targetID) else { return false }
+        recordStructuralChange(from: before)
         focusedKey = BlockKey(blockID: sourceID, itemIndex: 0)
         return true
     }
 
     private func deleteBlock(_ id: UUID) {
+        let before = document
+        guard document.removeBlock(id: id) != nil else { return }
         if focusedKey?.blockID == id { focusedKey = nil }
-        document.removeBlock(id: id)
+        recordStructuralChange(from: before)
     }
 
     private func convert(_ blockID: UUID, to choice: BlockStyleChoice) {
+        let before = document
         guard document.convertBlock(id: blockID, to: choice.tag, headingLevel: choice.headingLevel)
         else { return }
+        recordStructuralChange(from: before)
         requestFocus(BlockKey(blockID: blockID, itemIndex: 0), caret: 0)
     }
 
     private func handleReturn(_ key: BlockKey, offset: Int) {
+        let before = document
         guard let caret = document.splitBlock(
             id: key.blockID,
             itemIndex: key.itemIndex,
             offset: offset
         ) else { return }
+        recordStructuralChange(from: before)
         requestFocus(
             BlockKey(blockID: caret.blockID, itemIndex: caret.itemIndex),
             caret: caret.offset
@@ -297,12 +358,24 @@ struct TextDocumentEditorView: View {
     }
 
     private func handleMerge(_ key: BlockKey) {
+        let before = document
         guard let caret = document.mergeBlockBackward(id: key.blockID, itemIndex: key.itemIndex)
         else { return }
+        recordStructuralChange(from: before)
         requestFocus(
             BlockKey(blockID: caret.blockID, itemIndex: caret.itemIndex),
             caret: caret.offset
         )
+    }
+
+    /// Pushes one undo step for a structural edit that has already been applied
+    /// to `document`.
+    private func recordStructuralChange(from before: TextDocument) {
+        guard document != before else { return }
+        history.recordStructural(before)
+        // Mark dirty now: a background transition in this same run loop must
+        // flush the new structure even before `onChange` schedules its save.
+        hasUnsavedChanges = true
     }
 
     private func requestFocus(_ key: BlockKey, caret: Int) {
@@ -312,12 +385,54 @@ struct TextDocumentEditorView: View {
     }
 
     private func focusChanged(_ key: BlockKey, isFocused: Bool) {
+        // Moving between blocks ends a typing run, so the next keystroke is a
+        // separate undo step even when the user types again immediately.
+        history.endTypingRun()
         if isFocused {
             focusedKey = key
             if focusRequest?.key == key { focusRequest = nil }
         } else if focusedKey == key {
             focusedKey = nil
         }
+    }
+
+    // MARK: - Undo
+
+    /// Invisible buttons so ⌘Z / ⇧⌘Z work even when the toolbar collapses the
+    /// real buttons into an overflow menu.
+    private var historyShortcuts: some View {
+        Group {
+            Button("Undo") { undo() }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!history.canUndo)
+            Button("Redo") { redo() }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!history.canRedo)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    private func undo() {
+        guard let snapshot = history.undo(current: document) else { return }
+        restore(snapshot)
+    }
+
+    private func redo() {
+        guard let snapshot = history.redo(current: document) else { return }
+        restore(snapshot)
+    }
+
+    /// Shows `snapshot`; the normal `onChange` path saves it and updates the
+    /// status line, so backgrounding afterwards still flushes this version.
+    private func restore(_ snapshot: TextDocument) {
+        if let focusedKey, !snapshot.blocks.contains(where: { $0.id == focusedKey.blockID }) {
+            self.focusedKey = nil
+        }
+        focusRequest = nil
+        hasUnsavedChanges = true
+        document = snapshot
     }
 
     // MARK: - Saving
@@ -363,6 +478,9 @@ struct TextDocumentEditorView: View {
         }
     }
 
+    /// Saves the document as it is now: leaving the screen or the app going to
+    /// the background must persist the latest edit, including an undo, redo or
+    /// structural change. The snapshot is taken before the async write.
     private func flushIfNeeded() {
         pendingSave?.cancel()
         pendingSave = nil
@@ -519,6 +637,9 @@ private struct BlockRow: View {
     let onInsertBelow: () -> Void
     let onMove: (Int) -> Void
     let onDelete: () -> Void
+    /// Called before a checkbox toggle, which is a discrete undo step rather
+    /// than part of the current typing run.
+    let onChecklistChange: () -> Void
 
     private var isFocused: Bool { focusedKey?.blockID == block.id }
 
@@ -884,6 +1005,7 @@ private struct BlockRow: View {
         } else {
             items = [ChecklistItem(text: "", isChecked: value)]
         }
+        onChecklistChange()
         block.kind = .checklist(items: items)
     }
 }
