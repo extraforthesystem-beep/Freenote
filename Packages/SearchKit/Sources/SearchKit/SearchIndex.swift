@@ -9,6 +9,8 @@ public enum PageTextSource: String, Codable, Hashable, Sendable, CaseIterable {
     case handwriting
     case typedText
     case pdf
+    /// Spoken words from a recording, attached to the pages written during it.
+    case transcript
 
     /// Section heading a search UI shows for this source.
     public var sectionTitle: String {
@@ -16,15 +18,17 @@ public enum PageTextSource: String, Codable, Hashable, Sendable, CaseIterable {
         case .handwriting: "Written Notes"
         case .typedText: "Text"
         case .pdf: "PDFs"
+        case .transcript: "Transcript"
         }
     }
 
-    /// Stable display order: handwriting, typed text, then PDF text.
+    /// Stable display order: handwriting, typed text, PDF text, then audio.
     var displayOrder: Int {
         switch self {
         case .handwriting: 0
         case .typedText: 1
         case .pdf: 2
+        case .transcript: 3
         }
     }
 }
@@ -323,11 +327,15 @@ public actor SearchIndex {
     ///
     /// `pageIndex` is the page's 1-based position in the notebook, carried into
     /// every hit so search UIs can label it without looking the order up again.
+    /// `transcriptText` is the audio transcript of the recordings made while this
+    /// page was written; it is searchable as its own source and re-indexes the
+    /// page only when the words changed.
     @discardableResult
     public func update(
         page: Page,
         in notebookID: UUID,
         pageIndex: Int = 0,
+        transcriptText: String = "",
         using recognizer: any HandwritingRecognizing,
         assetsDirectory: URL? = nil
     ) async throws -> PageSearchRecord? {
@@ -335,9 +343,11 @@ public actor SearchIndex {
 
         let contentHash = Self.contentHash(of: page)
         let key = PageKey(notebookID: notebookID, pageID: page.id)
+        let transcript = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let existing = records[key],
            existing.contentHash == contentHash,
-           existing.recognitionVersion == recognizer.recognitionVersion {
+           existing.recognitionVersion == recognizer.recognitionVersion,
+           Self.transcriptText(of: existing) == transcript {
             // The text is unchanged but the page moved: refresh the number only,
             // without paying for recognition again.
             // Records from before edit dates were stored get theirs the same way.
@@ -369,6 +379,9 @@ public actor SearchIndex {
                     )
                 )
             }
+        }
+        if !transcript.isEmpty {
+            segments.append(PageTextSegment(source: .transcript, text: transcript))
         }
         let text = segments.map(\.text).joined(separator: "\n")
 
@@ -613,6 +626,11 @@ public actor SearchIndex {
         let strokeDates = page.strokes.map(\.createdAt)
         let elementDates = page.elements.map(\.updatedAt)
         return (strokeDates + elementDates).max()
+    }
+
+    /// The text a record kept for its transcript source, if any.
+    private static func transcriptText(of record: PageSearchRecord) -> String {
+        record.segments.first { $0.source == .transcript }?.text ?? ""
     }
 
     private static func typedText(in page: Page) -> String {
