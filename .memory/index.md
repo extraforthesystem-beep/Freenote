@@ -24,6 +24,6 @@
 
 ## Token Budget
 
-- Estimated injection size: ~1434 tokens
+- Estimated injection size: ~490 tokens
 - Budget: <500 tokens
-- Status: ⚠️ Over budget — run /memory-compact
+- Status: ✅ Under budget

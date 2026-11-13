@@ -40,6 +40,7 @@ The notebook autosave was a 400 ms debounce, while element, layer and restore ed
 - [PDF export is vector; import rewrites only when it must](2026-11-12-pdf-vector-export-and-import.md)
 - [Sticky notes and tape are page elements; search hits carry source and snippet](2026-11-12-sticky-tape-and-search-hits.md)
 - [Editor toolbar is customisable and only the colours scroll](2026-11-13-customisable-toolbar.md)
+- [Page thumbnails live in a side panel; Undo and Redo leave the default toolbar](2026-11-13-pages-side-panel.md)
 - [Live ink renders at its own zoom through a counter-scaled host](2026-11-13-sharp-ink-zoom.md)
 - [Lazy Code Ladder](../meta/lazy-code.md)
 - [SRE Memory Routing](../meta/sre-routing.md)

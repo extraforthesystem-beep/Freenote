@@ -11,6 +11,7 @@
 * [Page bookmarks stay app-side](2026-11-12-page-bookmarks-app-side.md)
 * [Page operations are pure NoteCore functions; app settings live in UserDefaults](2026-11-12-page-operations-and-settings.md)
 * [Page saves go through one ordered write queue](2026-11-12-ordered-page-writes.md)
+* [Page thumbnails live in a side panel; Undo and Redo leave the default toolbar](2026-11-13-pages-side-panel.md)
 * [PDF export is vector; import rewrites only when it must](2026-11-12-pdf-vector-export-and-import.md)
 * [Physical iPad installs use the personal team and automatic signing](2026-11-12-device-install-signing.md)
 * [Sticky notes and tape are page elements; search hits carry source and snippet](2026-11-12-sticky-tape-and-search-hits.md)
