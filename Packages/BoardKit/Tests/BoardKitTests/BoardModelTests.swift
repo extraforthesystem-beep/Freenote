@@ -314,7 +314,8 @@ final class BoardModelTests: XCTestCase {
             BoardItem(id: textID, zIndex: 2, createdAt: epoch, content: .text("Note", frame: CGRect(x: 5, y: 6, width: 70, height: 80), fontSize: 18, color: .black)),
             BoardItem(id: UUID(), zIndex: 3, createdAt: epoch, content: .shape(kind: .ellipse, frame: CGRect(x: 9, y: 10, width: 11, height: 12), strokeColor: .black, fillColor: .white, lineWidth: 2)),
             BoardItem(id: UUID(), zIndex: 4, createdAt: epoch, content: .shape(kind: .rectangle, frame: CGRect(x: 13, y: 14, width: 15, height: 16), strokeColor: .black, fillColor: nil, lineWidth: 1)),
-            BoardItem(id: UUID(), zIndex: 5, createdAt: epoch, content: .connector(fromItemID: imageID, toItemID: textID, style: .elbow)),
+            BoardItem(id: UUID(), zIndex: 5, createdAt: epoch, content: .sticky("Remember", frame: CGRect(x: 20, y: 21, width: 200, height: 200), color: RGBAColor(r: 1, g: 0.95, b: 0.62))),
+            BoardItem(id: UUID(), zIndex: 6, createdAt: epoch, content: .connector(fromItemID: imageID, toItemID: textID, style: .elbow)),
         ]
         let board = Board(
             id: UUID(),

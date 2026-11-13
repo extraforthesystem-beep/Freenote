@@ -123,7 +123,7 @@ func randomItem(
     let createdAt = randomDate(&rng)
     let updatedAt = createdAt.addingTimeInterval(rng.double(in: 0...100_000))
     let content: BoardItemContent
-    switch rng.int(in: 0...4) {
+    switch rng.int(in: 0...5) {
     case 0:
         let strokeCount = rng.int(in: 0...2)
         content = .ink(strokes: (0..<strokeCount).map { _ in makeStroke(&rng) })
@@ -146,6 +146,12 @@ func randomItem(
             strokeColor: randomColor(&rng),
             fillColor: rng.chance(0.5) ? randomColor(&rng) : nil,
             lineWidth: rng.double(in: 0.5...8)
+        )
+    case 4:
+        content = .sticky(
+            "note-\(rng.int(in: 0...99))",
+            frame: randomFrame(&rng),
+            color: randomColor(&rng)
         )
     default:
         content = .connector(

@@ -280,6 +280,9 @@ private extension View {
 struct StickyNoteElementView: View {
     let text: String
     let color: RGBAColor
+    /// The board shrinks the text to fit its card; the notebook uses the
+    /// standard size.
+    var fontSize: CGFloat = 15
 
     var body: some View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -291,7 +294,7 @@ struct StickyNoteElementView: View {
             }
             .overlay(alignment: .topLeading) {
                 Text(text)
-                    .font(.system(size: 15))
+                    .font(.system(size: fontSize))
                     .foregroundStyle(.black.opacity(0.85))
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

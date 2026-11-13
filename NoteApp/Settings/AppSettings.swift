@@ -24,6 +24,7 @@ enum AppSettings {
         static let threeFingerDoubleTapRedo = "noteapp.settings.threeFingerDoubleTapRedo"
         static let pencilDoubleTapAction = "noteapp.settings.pencilDoubleTapAction"
         static let eraserHighlighterOnly = "noteapp.settings.eraserHighlighterOnly"
+        static let boardDotGrid = "noteapp.settings.boardDotGrid"
         static let pageScrollMode = "noteapp.settings.pageScrollMode"
         static let rememberLastTool = "noteapp.settings.rememberLastTool"
         static let hideStatusBar = "noteapp.settings.hideStatusBar"

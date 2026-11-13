@@ -62,10 +62,20 @@ public final class InkCanvasView: PKCanvasView {
     /// The part of the page to show across the canvas's width, in page
     /// points; nil fits the whole page. See `PencilCanvasView.viewport`.
     var viewport: CGRect?
+    /// Free pan and zoom over the whole page, inside this range. nil keeps the
+    /// notebook's locked fit zoom. See `PencilCanvasView.freeZoom`.
+    var freeZoom: ClosedRange<CGFloat>?
+    var onViewportChange: ((CGRect, CGFloat) -> Void)?
     /// The part of the page the canvas renders when `InkCanvasHost` sizes it
     /// for the zoom it is seen at; nil fits the whole page.
     var renderViewport: CGRect?
     private var appliedViewport: (rect: CGRect, bounds: CGSize, page: CGSize)?
+    private var didCenterFreeCanvas = false
+    private var didReportFreeViewport = false
+    private var lastReportedBounds: CGSize = .zero
+    /// Set while layout positions a free canvas, so its own offset change does
+    /// not report a viewport back into SwiftUI in the middle of a layout pass.
+    private var isPositioningFreeCanvas = false
 
     /// PencilKit registers undo with the canvas's own undo manager, and a
     /// SwiftUI-hosted view has none on its responder chain, so supply one.
@@ -73,6 +83,9 @@ public final class InkCanvasView: PKCanvasView {
     override public var undoManager: UndoManager? { canvasUndoManager }
 
     func fitPageIfNeeded() {
+        // A free canvas pans and zooms like a scroll view; locking the zoom to
+        // the page fit would take that away.
+        guard freeZoom == nil else { return }
         guard pageSize.width > 0, pageSize.height > 0,
               bounds.width > 0, bounds.height > 0
         else { return }
@@ -111,6 +124,71 @@ public final class InkCanvasView: PKCanvasView {
     override public func layoutSubviews() {
         super.layoutSubviews()
         fitPageIfNeeded()
+        isPositioningFreeCanvas = true
+        centerFreeCanvasIfNeeded()
+        syncFreeContentSize()
+        isPositioningFreeCanvas = false
+        reportFreeViewportIfNeeded()
+    }
+
+    /// Reports the visible rect after layout, and again after a resize such as
+    /// a rotation, so SwiftUI is not updated in the middle of its own view
+    /// update. Later pans and zooms come from the scroll delegate.
+    private func reportFreeViewportIfNeeded() {
+        guard freeZoom != nil, bounds.width > 1, bounds.height > 1 else { return }
+        guard !didReportFreeViewport || lastReportedBounds != bounds.size else { return }
+        didReportFreeViewport = true
+        lastReportedBounds = bounds.size
+        Task { @MainActor [weak self] in
+            self?.reportViewport()
+        }
+    }
+
+    /// A free canvas always scrolls over the whole page at the current zoom.
+    /// The scroll view scales its content size with the zoom; keeping it in
+    /// step here also covers a programmatic zoom that changed the scale.
+    private func syncFreeContentSize() {
+        guard freeZoom != nil, pageSize.width > 0, pageSize.height > 0, zoomScale > 0 else { return }
+        let expected = CGSize(
+            width: pageSize.width * zoomScale,
+            height: pageSize.height * zoomScale
+        )
+        if contentSize != expected {
+            contentSize = expected
+        }
+    }
+
+    /// A free canvas opens on the middle of the page, before any camera is
+    /// applied. Board coordinates are stored around the origin, so the middle
+    /// of a 50,000-point page is where a board's old 0,0 lands.
+    private func centerFreeCanvasIfNeeded() {
+        guard freeZoom != nil, !didCenterFreeCanvas,
+              bounds.width > 1, bounds.height > 1,
+              pageSize.width > 0, pageSize.height > 0
+        else { return }
+        didCenterFreeCanvas = true
+        zoomScale = min(max(1, freeZoom?.lowerBound ?? 1), freeZoom?.upperBound ?? 1)
+        contentOffset = CGPoint(
+            x: (pageSize.width * zoomScale - bounds.width) / 2,
+            y: (pageSize.height * zoomScale - bounds.height) / 2
+        )
+    }
+
+    /// Reports the visible part of the page in page points, for a free
+    /// canvas's background grid and content layer.
+    func reportViewport() {
+        guard !isPositioningFreeCanvas else { return }
+        guard freeZoom != nil, bounds.width > 1, bounds.height > 1, zoomScale > 0 else { return }
+        let scale = zoomScale
+        onViewportChange?(
+            CGRect(
+                x: contentOffset.x / scale,
+                y: contentOffset.y / scale,
+                width: bounds.width / scale,
+                height: bounds.height / scale
+            ),
+            scale
+        )
     }
 
     /// A stroke, erase or lasso is under way.
@@ -166,6 +244,31 @@ public enum CanvasMode: Hashable, Sendable {
     }
 }
 
+/// Finger-only gestures on a free canvas, for an app that places objects over
+/// the ink. The Pencil is never reported here, so it keeps drawing.
+public struct CanvasFingerInteraction {
+    /// A one-finger tap, in page points.
+    public var onTap: ((CGPoint) -> Void)?
+    /// A one-finger drag is about to begin at this page point. Return true to
+    /// take the drag, and the canvas does not pan; `onDragChanged` then
+    /// reports how far the finger has moved, in page points.
+    public var onDragBegan: ((CGPoint) -> Bool)?
+    public var onDragChanged: ((CGPoint) -> Void)?
+    public var onDragEnded: (() -> Void)?
+
+    public init(
+        onTap: ((CGPoint) -> Void)? = nil,
+        onDragBegan: ((CGPoint) -> Bool)? = nil,
+        onDragChanged: ((CGPoint) -> Void)? = nil,
+        onDragEnded: (() -> Void)? = nil
+    ) {
+        self.onTap = onTap
+        self.onDragBegan = onDragBegan
+        self.onDragChanged = onDragChanged
+        self.onDragEnded = onDragEnded
+    }
+}
+
 /// A drawing canvas for one page.
 ///
 /// Strokes flow in as records and come back out as records; the view never
@@ -211,6 +314,16 @@ public struct PencilCanvasView: UIViewRepresentable {
     /// viewport canvas does not take over the controller until the Pencil
     /// touches it, so the page canvas keeps undo otherwise.
     public var viewport: CGRect?
+    /// When set, the canvas is its own scroll view over `pageSize`, with free
+    /// pan and this zoom range instead of the notebook's locked fit zoom.
+    /// nil keeps the notebook behaviour exactly.
+    public var freeZoom: ClosedRange<CGFloat>?
+    /// Called after a pan, zoom or layout of a free canvas with the visible
+    /// part of the page (page points) and the zoom scale.
+    public var onViewportChange: ((CGRect, CGFloat) -> Void)?
+    /// Finger taps and drags over the canvas, for selecting and moving objects
+    /// drawn under the ink. The Pencil keeps drawing.
+    public var fingerInteraction: CanvasFingerInteraction?
     /// The paper behind the canvas is dark: PencilKit uses dark appearance and
     /// draws the ink light-on-dark for display. Stored stroke colours are
     /// untouched, and .light keeps black ink black on white paper.
@@ -240,6 +353,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         viewport: CGRect? = nil,
         usesDarkPaper: Bool = false,
         onToolGestureBegan: (() -> Void)? = nil,
+        freeZoom: ClosedRange<CGFloat>? = nil,
+        onViewportChange: ((CGRect, CGFloat) -> Void)? = nil,
+        fingerInteraction: CanvasFingerInteraction? = nil,
         onStrokesChanged: @escaping ([StrokeRecord]) -> Void
     ) {
         self.strokes = strokes
@@ -262,6 +378,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.viewport = viewport
         self.usesDarkPaper = usesDarkPaper
         self.onToolGestureBegan = onToolGestureBegan
+        self.freeZoom = freeZoom
+        self.onViewportChange = onViewportChange
+        self.fingerInteraction = fingerInteraction
         self.onStrokesChanged = onStrokesChanged
     }
 
@@ -282,15 +401,20 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.isOpaque = false
         // The page host owns scrolling and zooming; the canvas must not fight
         // it for finger pans. Pencil drawing still works with scrolling off.
+        // A free canvas (below) is the page host itself, so it does scroll.
         canvas.isScrollEnabled = false
         canvas.alwaysBounceVertical = false
         canvas.alwaysBounceHorizontal = false
         canvas.pageSize = pageSize
         canvas.viewport = viewport
+        canvas.freeZoom = freeZoom
+        canvas.onViewportChange = onViewportChange
         host.pageSize = pageSize
-        // A Zoom View canvas is already magnified by its own viewport.
-        host.managesRenderScale = viewport == nil
+        // A Zoom View canvas is already magnified by its own viewport, and a
+        // free canvas zooms itself, so PencilKit renders it sharp on its own.
+        host.managesRenderScale = viewport == nil && freeZoom == nil
         context.coordinator.host = host
+        configureFreeScroll(canvas)
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
         canvas.isRulerActive = isRulerActive
@@ -315,6 +439,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         tap.isEnabled = mode == .links && onFingerTap != nil
         canvas.addGestureRecognizer(tap)
         context.coordinator.tapRecognizer = tap
+        context.coordinator.installFingerInteraction(on: canvas)
         context.coordinator.installHoldObserver(on: canvas)
 
         let undo = doubleTap(
@@ -341,6 +466,29 @@ public struct PencilCanvasView: UIViewRepresentable {
 
         context.coordinator.apply(strokes, to: canvas)
         return host
+    }
+
+    /// Lets the canvas itself pan and zoom, with the free range, instead of
+    /// the notebook's fixed page fit. Called for every update so a changed
+    /// range takes effect.
+    private func configureFreeScroll(_ canvas: InkCanvasView) {
+        guard let freeZoom else {
+            canvas.isScrollEnabled = false
+            return
+        }
+        canvas.isScrollEnabled = true
+        canvas.bouncesZoom = true
+        canvas.showsHorizontalScrollIndicator = false
+        canvas.showsVerticalScrollIndicator = false
+        canvas.contentInsetAdjustmentBehavior = .never
+        // With finger drawing on, a finger draws, so panning takes two.
+        canvas.panGestureRecognizer.minimumNumberOfTouches = drawsWithFinger ? 2 : 1
+        if canvas.minimumZoomScale != freeZoom.lowerBound {
+            canvas.minimumZoomScale = freeZoom.lowerBound
+        }
+        if canvas.maximumZoomScale != freeZoom.upperBound {
+            canvas.maximumZoomScale = freeZoom.upperBound
+        }
     }
 
     /// A finger-only double-tap. It runs alongside the page host's pinch and
@@ -385,14 +533,29 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.overrideUserInterfaceStyle = usesDarkPaper ? .dark : .light
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
         coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
+        coordinator.fingerTap?.isEnabled = fingerInteraction?.onTap != nil
+        // With finger drawing on, the finger belongs to the ink.
+        coordinator.fingerPan?.isEnabled =
+            fingerInteraction?.onDragBegan != nil && !drawsWithFinger
         coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap
         coordinator.redoDoubleTap?.isEnabled = redoOnThreeFingerDoubleTap
+        if viewport == nil, freeZoom != nil, canvas.pageSize != pageSize {
+            // A zoomed canvas keeps its scroll size scaled by the zoom;
+            // resetting it to the raw page size would shrink the world.
+            canvas.contentSize = CGSize(
+                width: pageSize.width * canvas.zoomScale,
+                height: pageSize.height * canvas.zoomScale
+            )
+        }
         if canvas.pageSize != pageSize {
             canvas.pageSize = pageSize
         }
         canvas.viewport = viewport
+        canvas.freeZoom = freeZoom
+        canvas.onViewportChange = onViewportChange
+        configureFreeScroll(canvas)
         host.pageSize = pageSize
-        host.managesRenderScale = viewport == nil
+        host.managesRenderScale = viewport == nil && freeZoom == nil
 
         coordinator.apply(strokes, to: canvas)
         canvas.fitPageIfNeeded()
@@ -405,8 +568,12 @@ public struct PencilCanvasView: UIViewRepresentable {
         weak var canvas: InkCanvasView?
         weak var host: InkCanvasHost?
         weak var tapRecognizer: UITapGestureRecognizer?
+        weak var fingerTap: UITapGestureRecognizer?
+        weak var fingerPan: UIPanGestureRecognizer?
         weak var undoDoubleTap: UITapGestureRecognizer?
         weak var redoDoubleTap: UITapGestureRecognizer?
+        /// Set while the app owns a finger drag, so its end is reported once.
+        private var isFingerDragging = false
 
         /// Set while the SwiftUI input is being pushed into the canvas, so the
         /// change is not echoed straight back.
@@ -509,12 +676,69 @@ public struct PencilCanvasView: UIViewRepresentable {
             guard case .links = parent.mode,
                   let canvas, let onTap = parent.onFingerTap
             else { return }
-            let point = gesture.location(in: canvas)
-            let pagePoint = CGPoint(
-                x: (point.x + canvas.contentOffset.x) / canvas.zoomScale,
-                y: (point.y + canvas.contentOffset.y) / canvas.zoomScale
+            onTap(pagePoint(for: gesture.location(in: canvas), on: canvas))
+        }
+
+        /// Installs the app's finger gestures, once, when the canvas is made.
+        /// They never see Pencil touches, so the Pencil keeps drawing.
+        func installFingerInteraction(on canvas: InkCanvasView) {
+            guard parent.fingerInteraction != nil else { return }
+
+            let tap = UITapGestureRecognizer(
+                target: self,
+                action: #selector(handleFingerTap(_:))
             )
-            onTap(pagePoint)
+            tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+            tap.cancelsTouchesInView = false
+            tap.delegate = self
+            canvas.addGestureRecognizer(tap)
+            fingerTap = tap
+
+            let pan = UIPanGestureRecognizer(
+                target: self,
+                action: #selector(handleFingerPan(_:))
+            )
+            pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+            pan.maximumNumberOfTouches = 1
+            pan.cancelsTouchesInView = false
+            pan.delegate = self
+            canvas.addGestureRecognizer(pan)
+            // A captured drag wins over the canvas pan. Elsewhere the drag
+            // recognizer fails before the pan needs it, so panning is unchanged.
+            canvas.panGestureRecognizer.require(toFail: pan)
+            fingerPan = pan
+        }
+
+        /// A view point inside the canvas as a page point. The point is in the
+        /// scroll view's content space, which already includes its offset.
+        private func pagePoint(for point: CGPoint, on canvas: InkCanvasView) -> CGPoint {
+            let scale = max(canvas.zoomScale, 0.0001)
+            return CGPoint(x: point.x / scale, y: point.y / scale)
+        }
+
+        @objc func handleFingerTap(_ gesture: UITapGestureRecognizer) {
+            guard let canvas, let onTap = parent.fingerInteraction?.onTap else { return }
+            onTap(pagePoint(for: gesture.location(in: canvas), on: canvas))
+        }
+
+        @objc func handleFingerPan(_ gesture: UIPanGestureRecognizer) {
+            guard let canvas, let interaction = parent.fingerInteraction else { return }
+            switch gesture.state {
+            case .changed:
+                guard isFingerDragging else { return }
+                let translation = gesture.translation(in: canvas)
+                let scale = max(canvas.zoomScale, 0.0001)
+                interaction.onDragChanged?(
+                    CGPoint(x: translation.x / scale, y: translation.y / scale)
+                )
+            case .ended, .cancelled, .failed:
+                guard isFingerDragging else { return }
+                isFingerDragging = false
+                canvas.panGestureRecognizer.isEnabled = true
+                interaction.onDragEnded?()
+            default:
+                break
+            }
         }
 
         public func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
@@ -532,6 +756,16 @@ public struct PencilCanvasView: UIViewRepresentable {
             parent.onToolGestureEnded?()
         }
 
+        // MARK: - Free canvas viewport
+
+        public func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            (scrollView as? InkCanvasView)?.reportViewport()
+        }
+
+        public func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            (scrollView as? InkCanvasView)?.reportViewport()
+        }
+
         // MARK: - Finger double-taps
 
         @objc func handleUndoDoubleTap(_ gesture: UITapGestureRecognizer) {
@@ -542,12 +776,37 @@ public struct PencilCanvasView: UIViewRepresentable {
             canvas?.undoManager?.redo()
         }
 
-        /// The page host's pinch and pan keep working alongside these taps.
+        /// The page host's pinch and pan keep working alongside these taps,
+        /// except that a finger drag the app has taken never pans the canvas.
         public func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            true
+            let isFingerDrag = gestureRecognizer === fingerPan
+                || otherGestureRecognizer === fingerPan
+            let isCanvasPan = gestureRecognizer === canvas?.panGestureRecognizer
+                || otherGestureRecognizer === canvas?.panGestureRecognizer
+            return !(isFingerDrag && isCanvasPan)
+        }
+
+        /// Asks the app whether a finger drag starts on something it owns, such
+        /// as a selected object. If it does, the canvas pan is held back for
+        /// the drag; if not, the drag recognizer fails and the pan runs.
+        public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer === fingerPan else { return true }
+            guard let canvas, let began = parent.fingerInteraction?.onDragBegan else {
+                return false
+            }
+            // The finger has already moved past the pan slop: hit-test the
+            // point where it first touched down.
+            let location = gestureRecognizer.location(in: canvas)
+            let translation = (gestureRecognizer as? UIPanGestureRecognizer)?
+                .translation(in: canvas) ?? .zero
+            let start = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+            guard began(pagePoint(for: start, on: canvas)) else { return false }
+            isFingerDragging = true
+            canvas.panGestureRecognizer.isEnabled = false
+            return true
         }
 
         // MARK: - Apple Pencil
