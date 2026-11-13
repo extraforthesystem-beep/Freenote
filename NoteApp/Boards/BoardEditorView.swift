@@ -9,16 +9,24 @@ import AppKit
 import UIKit
 #endif
 
-/// One board on a large fixed page, with the notebook's PencilKit canvas and
-/// zoom/pan host reused as-is.
+/// One board on a Freeform-style infinite canvas, with the notebook's tools.
 ///
-/// All ink lives in a single `.ink(strokes:)` item so this pass can add text,
-/// shapes and connectors later without changing the on-disk shape. The ink
-/// layer ID is stable so every new stroke belongs to the same layer.
+/// The board's PencilKit canvas is itself the scroll view: a fixed 50,000-point
+/// world, free zoom from 10 % to 400 %, and the same `EditorToolState` the
+/// notebook uses. Ink is stored in board coordinates; while the board is open
+/// it is shifted into the middle of the world, and shifted back when saved.
 struct BoardEditorView: View {
-    /// Temporary board page size for v1. Large enough to feel like an infinite
-    /// canvas while keeping the saved page and rendering cheap.
-    static let boardSize = CGSize(width: 3_000, height: 3_000)
+    /// The world the canvas scrolls over. Far larger than any board needs, so
+    /// the edge is never reachable in practice.
+    static let worldSize = CGSize(width: 50_000, height: 50_000)
+    /// Added to stored coordinates while editing, so an old board's origin is
+    /// the middle of the world. Removed again by `savedBoard`.
+    static let worldOffset = CGPoint(x: 25_000, y: 25_000)
+    /// Free zoom range of the board canvas, as in Freeform.
+    static let zoomRange: ClosedRange<CGFloat> = 0.1...4.0
+    /// Empty page points kept around content by Zoom to Fit.
+    private static let fitPadding: CGFloat = 48
+
     /// Stable layer for every stroke drawn on a board.
     static let inkLayerID = UUID(uuidString: "B0A2D000-0000-4000-8000-000000000001")!
     /// Stable item ID used when a board has no ink item yet.
@@ -27,13 +35,10 @@ struct BoardEditorView: View {
     let model: BoardModel
 
     @State private var board: Board
-    @State private var tool = InkTool.pen
-    @State private var presets = PenPresets()
     @State private var isSaving = false
     @State private var hasUnsavedChanges = false
     @State private var saveGeneration = 0
     @State private var saveTask: Task<Void, Never>?
-    @State private var undoRevision = 0
     /// The camera on disk when the board opened, so Done can skip writes that
     /// would only bump the modified date.
     @State private var savedCamera: BoardCamera?
@@ -43,57 +48,85 @@ struct BoardEditorView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     #if os(iOS)
-    @State private var canvasMode: CanvasMode = .ink
+    @State private var editor = EditorToolState()
     @State private var controller = PencilCanvasController()
-    @State private var zoomController = PageZoomController()
+    @State private var viewport = BoardViewportState()
+    @State private var showsClearConfirmation = false
+    @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
+    @AppStorage(AppSettings.Key.drawWithFinger) private var drawWithFinger = false
+    @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
+    @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
+    @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
+    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
+    @AppStorage(AppSettings.Key.boardDotGrid) private var showsDotGrid = true
     #endif
 
     init(model: BoardModel, board: Board) {
         self.model = model
-        _board = State(initialValue: board)
-        let presets = PenPresets.load()
-        _presets = State(initialValue: presets)
-        _tool = State(initialValue: presets.tool(for: .pen))
+        _board = State(initialValue: Self.translated(board, by: Self.worldOffset))
     }
 
     var body: some View {
         NavigationStack {
-            canvasArea
-                .safeAreaInset(edge: .bottom) {
-                    #if os(iOS)
-                    toolBar
-                    #endif
-                }
-                .navigationTitle(board.title)
+            VStack(spacing: 0) {
                 #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
+                EditorToolbar(
+                    editor: editor,
+                    controller: controller,
+                    showsThumbnails: .constant(false),
+                    isRecording: false,
+                    recordingLabel: "",
+                    onBack: { Task { await finishEditing() } },
+                    onStopRecording: {},
+                    onClearPage: { showsClearConfirmation = true },
+                    showsPageControls: false,
+                    showsElementTool: false,
+                    backLabel: "Boards",
+                    insertMenu: { insertMenu },
+                    moreMenu: { moreMenu }
+                )
+                Divider()
                 #endif
-                .toolbar { toolbarContent }
-                .alert("Couldn't Save Board", isPresented: errorBinding) {
-                    Button("Try Again") {
-                        Task { _ = await saveNow() }
-                    }
-                    Button("Keep Editing", role: .cancel) { model.clearError() }
-                    Button("Close Without Saving", role: .destructive) {
-                        model.clearError()
-                        dismiss()
-                    }
-                } message: {
-                    Text(model.lastError ?? "")
+                canvasArea
+            }
+            .navigationTitle(board.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog("Clear Board?", isPresented: $showsClearConfirmation, titleVisibility: .visible) {
+                Button("Clear Board", role: .destructive) { clearBoard() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Removes every stroke from this board.")
+            }
+            #endif
+            .toolbar { toolbarContent }
+            .alert("Couldn't Save Board", isPresented: errorBinding) {
+                Button("Try Again") {
+                    Task { _ = await saveNow() }
                 }
-                .onChange(of: scenePhase) { _, phase in
-                    if phase != .active { flush() }
+                Button("Keep Editing", role: .cancel) { model.clearError() }
+                Button("Close Without Saving", role: .destructive) {
+                    model.clearError()
+                    dismiss()
                 }
-                .onDisappear { flush() }
+            } message: {
+                Text(model.lastError ?? "")
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { flush() }
+            }
+            .onDisappear {
+                flush()
                 #if os(iOS)
-                .onAppear { normalizeWidth() }
+                editor.saveNow()
                 #endif
-                .task {
-                    savedCamera = model.camera(for: board.id)
-                    #if os(iOS)
-                    await restoreCameraIfNeeded()
-                    #endif
-                }
+            }
+            .task {
+                savedCamera = model.camera(for: board.id)
+                #if os(iOS)
+                await restoreCameraIfNeeded()
+                #endif
+            }
         }
     }
 
@@ -102,10 +135,54 @@ struct BoardEditorView: View {
     @ViewBuilder
     private var canvasArea: some View {
         #if os(iOS)
-        ZoomablePageView(pageSize: Self.boardSize, controller: zoomController) {
-            pageContent
+        ZStack {
+            BoardDotGrid(viewport: viewport, isVisible: showsDotGrid, origin: Self.worldOffset)
+
+            BoardItemLayer(
+                items: board.normalizedZOrder().filter { $0.frame != nil },
+                viewport: viewport,
+                assetsDirectory: assetsDirectory
+            )
+
+            PencilCanvasView(
+                strokes: inkStrokes,
+                pageSize: Self.worldSize,
+                tool: editor.inkTool,
+                mode: canvasMode,
+                activeLayerID: Self.inkLayerID,
+                isEditable: canvasIsEditable,
+                controller: controller,
+                drawsWithFinger: drawWithFinger,
+                undoOnTwoFingerDoubleTap: twoFingerDoubleTapUndo,
+                redoOnThreeFingerDoubleTap: threeFingerDoubleTapRedo,
+                pencilDoubleTapAction: pencilDoubleTapAction,
+                onToolGestureEnded: { editor.didEndToolGesture() },
+                holdToDrawShapes: holdToDrawShapes,
+                onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
+                eraseHighlighterOnly: eraserHighlighterOnly,
+                onViewportChange: { rect, zoom in
+                    viewport.update(visibleRect: rect, zoom: zoom)
+                },
+                onStrokesChanged: { strokesChanged($0) }
+            )
+            .id(board.id)
+
+            if editor.tool == .laser, !editor.isReadOnly {
+                LaserPointerOverlay(mode: editor.laserMode)
+            }
         }
-        .background(AppColor.groupedBackground)
+        .overlay(alignment: .bottomLeading) {
+            BoardZoomPill(
+                viewport: viewport,
+                onFit: { zoomToFit(animated: true) },
+                onZoom: { zoom(to: $0, animated: true) }
+            )
+            .padding(16)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            BoardGridToggle(isOn: $showsDotGrid)
+                .padding(16)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #else
         macCanvas
@@ -113,38 +190,30 @@ struct BoardEditorView: View {
     }
 
     #if os(iOS)
-    private var pageContent: some View {
-        ZStack(alignment: .topLeading) {
-            BoardPaper(size: Self.boardSize)
+    /// Read Only takes every tool away, as in the notebook.
+    private var canvasMode: CanvasMode {
+        editor.isReadOnly ? .links : editor.canvasMode
+    }
 
-            PencilCanvasView(
-                strokes: inkStrokes,
-                pageSize: Self.boardSize,
-                tool: tool,
-                mode: canvasMode,
-                activeLayerID: Self.inkLayerID,
-                isEditable: true,
-                controller: controller,
-                onStrokesChanged: { strokesChanged($0) }
-            )
-            .id(board.id)
+    private var canvasIsEditable: Bool {
+        if editor.isReadOnly { return true }
+        switch editor.tool {
+        case .elements, .laser: return false
+        default: return true
         }
-        .frame(width: Self.boardSize.width, height: Self.boardSize.height)
+    }
+
+    private var assetsDirectory: URL {
+        model.rootURL.appendingPathComponent("Assets", isDirectory: true)
     }
     #endif
 
     #if os(macOS)
+    /// The Mac reader stays a static rendering of the board's ink.
     private var macCanvas: some View {
         GeometryReader { proxy in
-            let image = PageRenderer.image(
-                strokes: inkStrokes,
-                pageSize: Self.boardSize,
-                template: .blank,
-                scale: 1
-            )
-
             Group {
-                if let image {
+                if let image = macBoardImage {
                     Image(nsImage: image)
                         .resizable()
                         .interpolation(.high)
@@ -153,9 +222,9 @@ struct BoardEditorView: View {
                         .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
                 } else {
                     ContentUnavailableView {
-                        Label("Board unavailable", systemImage: "exclamationmark.triangle")
+                        Label("Empty Board", systemImage: "square.dashed")
                     } description: {
-                        Text("The board image could not be rendered.")
+                        Text("Draw on this board on an iPad.")
                     }
                 }
             }
@@ -163,326 +232,49 @@ struct BoardEditorView: View {
         }
         .background(AppColor.groupedBackground)
     }
+
+    private var macBoardImage: NSImage? {
+        guard let content = board.bounds(), content.width > 0, content.height > 0 else { return nil }
+        let strokes = Self.translatedStrokes(
+            inkStrokes,
+            by: CGPoint(x: -content.minX, y: -content.minY)
+        )
+        let size = CGSize(width: content.width, height: content.height)
+        let scale = min(2, max(0.01, 2_048 / max(size.width, size.height)))
+        return PageRenderer.image(
+            strokes: strokes,
+            pageSize: size,
+            template: .blank,
+            scale: scale
+        )
+    }
     #endif
 
-    // MARK: - Pencil bar
+    // MARK: - Menus
 
     #if os(iOS)
-    /// The drawing controls. Sized for a Pencil-and-finger session: 44 pt
-    /// targets, visible colour and width state, and one row that scrolls rather
-    /// than clips in a narrow Split View.
-    private var toolBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                group {
-                    drawingButton("pencil.tip", label: "Pen", isActive: isPenActive) {
-                        selectPen()
-                    }
-                    drawingButton("highlighter", label: "Highlighter", isActive: isHighlighterActive) {
-                        selectHighlighter()
-                    }
-                    drawingButton("eraser", label: "Eraser", isActive: isErasing) {
-                        canvasMode = .eraser(.stroke, width: 12)
-                    }
-                }
-
-                divider
-
-                group {
-                    ForEach(Array(Self.swatchColors.enumerated()), id: \.offset) { _, color in
-                        swatchButton(color)
-                    }
-                    ColorPicker("Ink colour", selection: inkColorBinding, supportsOpacity: false)
-                        .labelsHidden()
-                        .frame(width: 44, height: 44)
-                        .accessibilityLabel("Ink colour")
-                }
-
-                divider
-
-                group {
-                    ForEach(Array(widthChoices.enumerated()), id: \.offset) { index, _ in
-                        widthButton(index)
-                    }
-                }
-
-                divider
-
-                group {
-                    drawingButton("arrow.uturn.backward", label: "Undo", isActive: false) {
-                        controller.undo()
-                        undoRevision += 1
-                    }
-                    .disabled(!canUndo)
-                    .opacity(canUndo ? 1 : 0.35)
-
-                    drawingButton("arrow.uturn.forward", label: "Redo", isActive: false) {
-                        controller.redo()
-                        undoRevision += 1
-                    }
-                    .disabled(!canRedo)
-                    .opacity(canRedo ? 1 : 0.35)
-                }
-            }
-            .padding(.horizontal, 10)
+    @ViewBuilder
+    private var insertMenu: some View {
+        Section("Add") {
+            Button("Sticky Note", systemImage: "note.text") {}
+            Button("Text Box", systemImage: "character.textbox") {}
+            Button("Shape", systemImage: "square.on.circle") {}
+            Button("Image", systemImage: "photo") {}
         }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .frame(height: 52)
-        .background(.bar)
-        .overlay(alignment: .top) {
-            Divider()
+        .disabled(true)
+    }
+
+    @ViewBuilder
+    private var moreMenu: some View {
+        Button("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") {
+            zoomToFit(animated: true)
         }
-    }
-
-    private func group<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 2, content: content)
-    }
-
-    private var divider: some View {
-        Divider()
-            .frame(height: 26)
-            .padding(.horizontal, 4)
-    }
-
-    private func drawingButton(
-        _ symbol: String,
-        label: String,
-        isActive: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
-                .frame(width: 44, height: 44)
-                .background(
-                    isActive ? Color.accentColor.opacity(0.16) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                )
+        Button(
+            showsDotGrid ? "Hide Dot Grid" : "Show Dot Grid",
+            systemImage: "circle.grid.3x3"
+        ) {
+            showsDotGrid.toggle()
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(isActive ? .isSelected : [])
-        .help(label)
-    }
-
-    private func swatchButton(_ swatch: RGBAColor) -> some View {
-        let isSelected = colorMatches(tool.color, swatch)
-        return Button {
-            selectColor(Color(swatch))
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(Color(swatch))
-                    .frame(width: 24, height: 24)
-                Circle()
-                    .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1)
-                    .frame(width: 24, height: 24)
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .shadow(radius: 1)
-                }
-            }
-            .frame(width: 44, height: 44)
-            .background(
-                isSelected ? Color.primary.opacity(0.08) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Ink colour")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private func widthButton(_ index: Int) -> some View {
-        let sizes = widthChoices
-        let width = sizes.indices.contains(index) ? sizes[index] : tool.width
-        let isSelected = abs(tool.width - width) < 0.51
-        return Button {
-            setWidth(width)
-        } label: {
-            Circle()
-                .fill(Color(tool.color))
-                .frame(width: min(18, max(5, width * 1.05)), height: min(18, max(5, width * 1.05)))
-                .frame(width: 44, height: 44)
-                .background(
-                    isSelected ? Color.primary.opacity(0.08) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                )
-                .overlay {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1.5)
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Width \(Int(width))")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var widthChoices: [Double] {
-        tool.isHighlighter ? [12, 24, 36] : [3, 8, 16]
-    }
-
-    private func colorMatches(_ lhs: RGBAColor, _ rhs: RGBAColor) -> Bool {
-        abs(lhs.r - rhs.r) < 0.02 && abs(lhs.g - rhs.g) < 0.02 && abs(lhs.b - rhs.b) < 0.02
-    }
-
-    private static let swatchColors: [RGBAColor] = [
-        RGBAColor(r: 0.08, g: 0.08, b: 0.09),
-        RGBAColor(r: 0.10, g: 0.36, b: 0.86),
-        RGBAColor(r: 0.85, g: 0.16, b: 0.16),
-        RGBAColor(r: 0.13, g: 0.60, b: 0.36),
-        RGBAColor(r: 0.95, g: 0.56, b: 0.12),
-    ]
-
-    private var inkColorBinding: Binding<Color> {
-        Binding(
-            get: { Color(tool.color) },
-            set: { selectColor($0) }
-        )
-    }
-
-    private func selectColor(_ color: Color) {
-        var updated = tool
-        var rgba = RGBAColor(color)
-        if tool.isHighlighter {
-            // A highlighter stays translucent whatever the picker returns.
-            rgba.a = min(rgba.a, 0.4)
-        } else {
-            rgba.a = 1
-        }
-        updated.color = rgba
-        canvasMode = .ink
-        apply(updated)
-    }
-
-    private func setWidth(_ width: Double) {
-        var updated = tool
-        updated.width = width
-        canvasMode = .ink
-        apply(updated)
-    }
-
-    private func selectPen() {
-        canvasMode = .ink
-        tool = presets.tool(for: .pen)
-    }
-
-    private func selectHighlighter() {
-        canvasMode = .ink
-        tool = presets.highlighter
-    }
-
-    private func apply(_ updated: InkTool) {
-        tool = updated
-        presets.update(updated)
-        presets.save()
-    }
-
-    /// Keeps one width button selected when a stored preset uses an older
-    /// default width, so the control never looks unset.
-    private func normalizeWidth() {
-        guard !widthChoices.contains(where: { abs($0 - tool.width) < 0.51 }) else { return }
-        var updated = tool
-        updated.width = widthChoices[1]
-        apply(updated)
-    }
-
-    private var isPenActive: Bool {
-        canvasMode == .ink && !tool.isHighlighter
-    }
-
-    private var isHighlighterActive: Bool {
-        canvasMode == .ink && tool.isHighlighter
-    }
-
-    private var isErasing: Bool {
-        if case .eraser = canvasMode { return true }
-        return false
-    }
-
-    private var canUndo: Bool {
-        _ = undoRevision
-        return controller.canUndo
-    }
-
-    private var canRedo: Bool {
-        _ = undoRevision
-        return controller.canRedo
-    }
-
-    /// Uses the live scroll bounds rather than the controller's cached fit so
-    /// the button keeps working after an iPad rotation.
-    private func fittedScale(for scroll: UIScrollView) -> CGFloat {
-        guard scroll.bounds.width > 1, scroll.bounds.height > 1 else {
-            return zoomController.fitScale
-        }
-        return min(
-            scroll.bounds.width / Self.boardSize.width,
-            scroll.bounds.height / Self.boardSize.height
-        )
-    }
-
-    private func fitBoard() {
-        guard let scroll = zoomController.scrollView else { return }
-        scroll.setZoomScale(fittedScale(for: scroll), animated: true)
-    }
-
-    /// Resets the scroll view to the fitted scale and puts the page centre in
-    /// the middle of the viewport. A negative offset is correct when the page is
-    /// smaller than the viewport, because the scroll view's insets centre it.
-    private func centerCamera() {
-        guard let scroll = zoomController.scrollView else { return }
-        let scale = max(fittedScale(for: scroll), 0.0001)
-        scroll.setZoomScale(scale, animated: false)
-        scroll.layoutIfNeeded()
-        scroll.setContentOffset(
-            CGPoint(
-                x: (scroll.contentSize.width - scroll.bounds.width) / 2,
-                y: (scroll.contentSize.height - scroll.bounds.height) / 2
-            ),
-            animated: false
-        )
-    }
-
-    // MARK: Camera
-
-    /// Applies the saved viewport once the page host has a size. The page fits
-    /// itself on its first layout, so the camera is applied just after that.
-    private func restoreCameraIfNeeded() async {
-        guard !didRestoreCamera else { return }
-        defer { didRestoreCamera = true }
-
-        guard let camera = savedCamera else { return }
-        for _ in 0..<40 {
-            if let scroll = zoomController.scrollView,
-               scroll.bounds.width > 1,
-               scroll.bounds.height > 1 {
-                scroll.layoutIfNeeded()
-                apply(camera, to: scroll)
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-    }
-
-    private func apply(_ camera: BoardCamera, to scroll: UIScrollView) {
-        let scale = CGFloat(camera.zoom)
-        scroll.setZoomScale(scale, animated: false)
-        scroll.layoutIfNeeded()
-
-        let maxX = max(scroll.contentSize.width - scroll.bounds.width, 0)
-        let maxY = max(scroll.contentSize.height - scroll.bounds.height, 0)
-        let x = CGFloat(camera.centerX) * scale - scroll.bounds.width / 2
-        let y = CGFloat(camera.centerY) * scale - scroll.bounds.height / 2
-        scroll.setContentOffset(
-            CGPoint(x: min(max(x, 0), maxX), y: min(max(y, 0), maxY)),
-            animated: false
-        )
     }
     #endif
 
@@ -496,31 +288,133 @@ struct BoardEditorView: View {
             }
         }
 
-        ToolbarItemGroup(placement: .primaryAction) {
+        ToolbarItem(placement: .primaryAction) {
             if isSaving {
                 ProgressView()
                     .controlSize(.small)
             }
-
-            #if os(iOS)
-            Button {
-                fitBoard()
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-            }
-            .accessibilityLabel("Fit board")
-            .help("Fit board")
-
-            Button {
-                centerCamera()
-            } label: {
-                Image(systemName: "scope")
-            }
-            .accessibilityLabel("Center board")
-            .help("Center board")
-            #endif
         }
     }
+
+    // MARK: - Camera
+
+    #if os(iOS)
+    /// Applies the saved viewport once the canvas has a size. A board that was
+    /// never positioned fits its content, or opens at 100 % in the middle.
+    private func restoreCameraIfNeeded() async {
+        guard !didRestoreCamera else { return }
+        defer { didRestoreCamera = true }
+
+        for _ in 0..<40 {
+            if let canvas = controller.canvas,
+               canvas.bounds.width > 1,
+               canvas.bounds.height > 1 {
+                canvas.layoutIfNeeded()
+                if let camera = savedCamera, cameraShowsContent(camera, in: canvas) {
+                    apply(camera, to: canvas)
+                } else if board.bounds() != nil {
+                    zoomToFit(animated: false)
+                } else {
+                    centerAt100Percent(animated: false)
+                }
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// A camera saved before the world offset (or after the board was moved
+    /// far away) can point at empty space. Fitting the content is more useful.
+    private func cameraShowsContent(_ camera: BoardCamera, in canvas: InkCanvasView) -> Bool {
+        guard let content = board.bounds() else { return true }
+        return content.intersects(camera.visibleWorldRect(viewSize: canvas.bounds.size))
+    }
+
+    private func apply(_ camera: BoardCamera, to canvas: InkCanvasView) {
+        canvas.setZoomScale(CGFloat(camera.zoom), animated: false)
+        canvas.layoutIfNeeded()
+
+        let scale = canvas.zoomScale
+        let maxX = max(canvas.contentSize.width - canvas.bounds.width, 0)
+        let maxY = max(canvas.contentSize.height - canvas.bounds.height, 0)
+        let x = CGFloat(camera.centerX) * scale - canvas.bounds.width / 2
+        let y = CGFloat(camera.centerY) * scale - canvas.bounds.height / 2
+        canvas.setContentOffset(
+            CGPoint(x: min(max(x, 0), maxX), y: min(max(y, 0), maxY)),
+            animated: false
+        )
+    }
+
+    /// Frames all content with a little room around it.
+    private func zoomToFit(animated: Bool) {
+        guard let canvas = controller.canvas, canvas.bounds.width > 1 else { return }
+        guard let content = board.bounds(), content.width > 0, content.height > 0 else {
+            centerAt100Percent(animated: animated)
+            return
+        }
+        canvas.zoom(to: content.insetBy(dx: -Self.fitPadding, dy: -Self.fitPadding), animated: animated)
+    }
+
+    /// Sets a zoom level around whatever the board is showing now.
+    private func zoom(to zoom: CGFloat, animated: Bool) {
+        guard let canvas = controller.canvas, canvas.bounds.width > 1, zoom > 0 else { return }
+        let center = visibleCenter(of: canvas)
+        let size = CGSize(
+            width: canvas.bounds.width / zoom,
+            height: canvas.bounds.height / zoom
+        )
+        canvas.zoom(
+            to: CGRect(
+                x: center.x - size.width / 2,
+                y: center.y - size.height / 2,
+                width: size.width,
+                height: size.height
+            ),
+            animated: animated
+        )
+    }
+
+    private func centerAt100Percent(animated: Bool) {
+        guard let canvas = controller.canvas, canvas.bounds.width > 1 else { return }
+        let size = canvas.bounds.size
+        canvas.zoom(
+            to: CGRect(
+                x: Self.worldOffset.x - size.width / 2,
+                y: Self.worldOffset.y - size.height / 2,
+                width: size.width,
+                height: size.height
+            ),
+            animated: animated
+        )
+    }
+
+    private func visibleCenter(of canvas: InkCanvasView) -> CGPoint {
+        let scale = max(canvas.zoomScale, 0.0001)
+        return CGPoint(
+            x: (canvas.contentOffset.x + canvas.bounds.width / 2) / scale,
+            y: (canvas.contentOffset.y + canvas.bounds.height / 2) / scale
+        )
+    }
+
+    private var currentCamera: BoardCamera? {
+        guard let canvas = controller.canvas,
+              canvas.bounds.width > 1,
+              canvas.bounds.height > 1,
+              canvas.zoomScale > 0
+        else { return nil }
+
+        let scale = canvas.zoomScale
+        let visible = CGRect(
+            x: canvas.contentOffset.x / scale,
+            y: canvas.contentOffset.y / scale,
+            width: canvas.bounds.width / scale,
+            height: canvas.bounds.height / scale
+        )
+        return BoardCamera(visibleWorldRect: visible, viewSize: canvas.bounds.size)
+    }
+    #else
+    private var currentCamera: BoardCamera? { nil }
+    #endif
 
     // MARK: - Ink
 
@@ -531,6 +425,7 @@ struct BoardEditorView: View {
         }
     }
 
+    /// The board's ink, in the world coordinates the canvas draws in.
     private var inkStrokes: [StrokeRecord] {
         guard let item = inkItem, case let .ink(strokes) = item.content else { return [] }
         return strokes
@@ -557,11 +452,22 @@ struct BoardEditorView: View {
             board.add(item, at: now)
         }
 
-        undoRevision += 1
         scheduleSave()
     }
 
+    #if os(iOS)
+    private func clearBoard() {
+        strokesChanged([])
+    }
+    #endif
+
     // MARK: - Saving
+
+    /// The board as stored: world coordinates shifted back to board
+    /// coordinates, so the offset never reaches the file.
+    private var savedBoard: Board {
+        Self.translated(board, by: CGPoint(x: -Self.worldOffset.x, y: -Self.worldOffset.y))
+    }
 
     private func scheduleSave() {
         hasUnsavedChanges = true
@@ -569,7 +475,7 @@ struct BoardEditorView: View {
         let generation = saveGeneration
         saveTask?.cancel()
 
-        let snapshot = board
+        let snapshot = savedBoard
         let camera = currentCamera
         isSaving = true
 
@@ -613,7 +519,7 @@ struct BoardEditorView: View {
     private func saveNow() async -> Bool {
         saveGeneration += 1
         let generation = saveGeneration
-        let snapshot = board
+        let snapshot = savedBoard
         let camera = currentCamera
         isSaving = true
 
@@ -632,31 +538,12 @@ struct BoardEditorView: View {
     private func flush() {
         saveTask?.cancel()
         saveTask = nil
-        guard hasUnsavedChanges else { return }
-        let snapshot = board
         let camera = currentCamera
+        guard hasUnsavedChanges || (camera != nil && camera != savedCamera) else { return }
+        let snapshot = savedBoard
         Task {
             await model.save(snapshot, camera: camera)
         }
-    }
-
-    private var currentCamera: BoardCamera? {
-        #if os(iOS)
-        guard let scroll = zoomController.scrollView,
-              scroll.bounds.width > 1,
-              scroll.bounds.height > 1,
-              scroll.zoomScale > 0
-        else { return nil }
-
-        let scale = scroll.zoomScale
-        return BoardCamera(
-            centerX: Double((scroll.contentOffset.x + scroll.bounds.width / 2) / scale),
-            centerY: Double((scroll.contentOffset.y + scroll.bounds.height / 2) / scale),
-            zoom: Double(scale)
-        )
-        #else
-        return nil
-        #endif
     }
 
     private var errorBinding: Binding<Bool> {
@@ -665,66 +552,63 @@ struct BoardEditorView: View {
             set: { if !$0 { model.clearError() } }
         )
     }
-}
 
-// MARK: - Paper
+    // MARK: - Coordinate shift
 
-#if os(iOS)
-/// White paper with a faint dot grid, drawn from one tiled image instead of
-/// thousands of per-zoom `Canvas` dots.
-private struct BoardPaper: View {
-    let size: CGSize
-
-    var body: some View {
-        DotGridBackground()
-            .frame(width: size.width, height: size.height)
-            .overlay {
-                Rectangle()
-                    .strokeBorder(Color.black.opacity(0.10), lineWidth: 2)
-            }
-    }
-}
-
-/// A static, tiled dot pattern. The tile is rendered once at 3× so the dots
-/// stay crisp through the page's zoom range without redrawing.
-private struct DotGridBackground: UIViewRepresentable {
-    private static let spacing: CGFloat = 48
-    private static let tileScale: CGFloat = 3
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.isUserInteractionEnabled = false
-        view.backgroundColor = UIColor(patternImage: Self.tile)
-        return view
-    }
-
-    func updateUIView(_ view: UIView, context: Context) {}
-
-    static let tile: UIImage = {
-        let spacing = Self.spacing
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = Self.tileScale
-        format.opaque = true
-
-        let renderer = UIGraphicsImageRenderer(
-            size: CGSize(width: spacing, height: spacing),
-            format: format
-        )
-        return renderer.image { context in
-            UIColor.white.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: spacing, height: spacing))
-
-            let radius: CGFloat = 1.4
-            UIColor(white: 0, alpha: 0.16).setFill()
-            context.cgContext.fillEllipse(
-                in: CGRect(
-                    x: spacing - radius,
-                    y: spacing - radius,
-                    width: radius * 2,
-                    height: radius * 2
-                )
-            )
+    /// Moves every item between board coordinates and world coordinates.
+    /// Only the live editing state is shifted; the saved snapshot is shifted
+    /// back, so board files keep their old coordinates and no stroke is
+    /// rewritten during a pan.
+    private static func translated(_ board: Board, by offset: CGPoint) -> Board {
+        guard offset != .zero else { return board }
+        var result = board
+        result.items = board.items.map { item in
+            var copy = item
+            copy.content = translated(item.content, by: offset)
+            return copy
         }
-    }()
+        return result
+    }
+
+    private static func translated(_ content: BoardItemContent, by offset: CGPoint) -> BoardItemContent {
+        switch content {
+        case let .ink(strokes):
+            return .ink(strokes: translatedStrokes(strokes, by: offset))
+        case let .image(assetName, frame):
+            return .image(assetName: assetName, frame: frame.offsetBy(dx: offset.x, dy: offset.y))
+        case let .text(string, frame, fontSize, color):
+            return .text(
+                string,
+                frame: frame.offsetBy(dx: offset.x, dy: offset.y),
+                fontSize: fontSize,
+                color: color
+            )
+        case let .shape(kind, frame, strokeColor, fillColor, lineWidth):
+            return .shape(
+                kind: kind,
+                frame: frame.offsetBy(dx: offset.x, dy: offset.y),
+                strokeColor: strokeColor,
+                fillColor: fillColor,
+                lineWidth: lineWidth
+            )
+        case .connector:
+            return content
+        }
+    }
+
+    private static func translatedStrokes(
+        _ strokes: [StrokeRecord],
+        by offset: CGPoint
+    ) -> [StrokeRecord] {
+        guard offset != .zero else { return strokes }
+        return strokes.map { stroke in
+            guard stroke.transform.count == StrokeRecord.transformElementCount else { return stroke }
+            var copy = stroke
+            var transform = copy.transform
+            transform[4] += Double(offset.x)
+            transform[5] += Double(offset.y)
+            copy.transform = transform
+            return copy
+        }
+    }
 }
-#endif

@@ -36,6 +36,19 @@ public struct BoardCamera: Codable, Hashable, Sendable {
         self.zoom = Self.clampZoom(zoom)
     }
 
+    /// Creates the camera that shows exactly `rect` in a view of `viewSize`,
+    /// so a camera can be stored as the visible world rectangle instead of a
+    /// raw scroll-view zoom.
+    public init(visibleWorldRect rect: CGRect, viewSize: CGSize) {
+        let width = rect.width.isFinite ? rect.width : 0
+        let zoom = width > 0 && viewSize.width > 0 ? viewSize.width / width : 1
+        self.init(
+            centerX: rect.midX.isFinite ? rect.midX : 0,
+            centerY: rect.midY.isFinite ? rect.midY : 0,
+            zoom: zoom
+        )
+    }
+
     private enum CodingKeys: String, CodingKey {
         case centerX, centerY, zoom
     }

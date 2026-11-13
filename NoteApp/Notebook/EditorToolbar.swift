@@ -19,6 +19,13 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     let onStopRecording: () -> Void
     /// Opens the notebook's Clear Page confirmation.
     let onClearPage: () -> Void
+    /// Page-only controls: page thumbnails, Zoom View and PDF link following.
+    /// A board shares every other tool but has no pages, zoom panel or links.
+    var showsPageControls = true
+    /// The element selection tool; a board has no element editing yet.
+    var showsElementTool = true
+    /// VoiceOver and tooltip label of the leading back button.
+    var backLabel = "Library"
     @ViewBuilder let insertMenu: () -> InsertMenu
     @ViewBuilder let moreMenu: () -> MoreMenu
 
@@ -74,10 +81,12 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
             shortcut(.highlighter, "h")
             shortcut(.eraser, "e")
             shortcut(.laser, "l")
-            Button("Zoom View") {
-                editor.isZoomViewShown.toggle()
+            if showsPageControls {
+                Button("Zoom View") {
+                    editor.isZoomViewShown.toggle()
+                }
+                .keyboardShortcut("z", modifiers: [])
             }
-            .keyboardShortcut("z", modifiers: [])
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -96,12 +105,14 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
 
     private var leading: some View {
         HStack(spacing: 2) {
-            ToolbarIconButton("Library", systemImage: "chevron.backward", action: onBack)
-            ToolbarIconButton(
-                showsThumbnails ? "Hide Pages" : "Show Pages",
-                systemImage: showsThumbnails ? "rectangle.bottomthird.inset.filled" : "rectangle"
-            ) {
-                withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
+            ToolbarIconButton(backLabel, systemImage: "chevron.backward", action: onBack)
+            if showsPageControls {
+                ToolbarIconButton(
+                    showsThumbnails ? "Hide Pages" : "Show Pages",
+                    systemImage: showsThumbnails ? "rectangle.bottomthird.inset.filled" : "rectangle"
+                ) {
+                    withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
+                }
             }
             ToolbarIconButton("Undo", systemImage: "arrow.uturn.backward") {
                 controller.undo()
@@ -203,15 +214,19 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
                 editor.tool = .lasso
             }
             laserButton
-            zoomViewButton
-            ToolbarIconButton(
-                "Select Elements",
-                systemImage: "cursorarrow.rays",
-                isSelected: editor.tool == .elements
-            ) {
-                editor.tool = .elements
+            if showsPageControls {
+                zoomViewButton
             }
-            .help("Move, resize or delete text, images and shapes")
+            if showsElementTool {
+                ToolbarIconButton(
+                    "Select Elements",
+                    systemImage: "cursorarrow.rays",
+                    isSelected: editor.tool == .elements
+                ) {
+                    editor.tool = .elements
+                }
+                .help("Move, resize or delete text, images and shapes")
+            }
             Menu {
                 insertMenu()
             } label: {
@@ -221,14 +236,16 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Insert")
             .help("Insert text, image or shape")
-            ToolbarIconButton(
-                "Follow Links",
-                systemImage: "hand.point.up.left",
-                isSelected: editor.tool == .links
-            ) {
-                editor.tool = .links
+            if showsPageControls {
+                ToolbarIconButton(
+                    "Follow Links",
+                    systemImage: "hand.point.up.left",
+                    isSelected: editor.tool == .links
+                ) {
+                    editor.tool = .links
+                }
+                .help("Tap links in imported PDFs")
             }
-            .help("Tap links in imported PDFs")
         }
     }
 
