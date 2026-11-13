@@ -14,7 +14,7 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 |---|---|---|---|---|
 | A | Selection model + lasso actions | running | t3 worktree | PencilCanvasView, new `Selection*.swift`, lasso in `EditorToolState` |
 | B | Durability + backup | running | t3 worktree | NoteCore store, HistoryKit, new `NoteApp/Backup` |
-| C | AI + search correctness | running | t3 worktree | SearchKit, AIKit, citations, Spotlight |
+| C | AI + search correctness | merged `f288ec1` | `t3/52d9d85f` | SearchKit 46 tests, app build green. Follow-ups below. |
 | D | Audio replay | running | t3 worktree | AudioKit playback ↔ stroke time, transcripts |
 | E | Study engine | running | t3 worktree | FSRS, recall-first, one due queue |
 | F | Ink tools | running | t3 worktree | stabilisation, dashed, scratch-out, shapes |
@@ -27,6 +27,12 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 2. Merge into `feat/wave4` in the integration worktree, resolve shared-file conflicts by hand (toolbar, notebook view, session).
 3. Build the app and run the affected package tests on the integration branch after each merge.
 4. Only then merge `feat/wave4` into `integrate/foundation-base`.
+
+## Follow-ups from merged work
+
+- C: Spotlight results open the app but do not jump to the page (needs `RootView`/`NoteAppApp`).
+- C: OCR'd PDF pages navigate but draw no in-page mark (`PageMatchLocator.pdfMarks` reads the text layer only).
+- C: auto-title suggestion lives in the Page AI panel, not the library (G owns `NoteApp/Library`).
 
 ## Next waves
 
