@@ -69,14 +69,16 @@ public enum StrokeDash {
 
         let points = densified(path)
         guard points.count >= 2 else { return nil }
-        let width = path.map { $0.size.width }.max() ?? 0
-        let segments = segments(along: points, style: style, width: width)
-        guard !segments.isEmpty else { return nil }
-
+        // The cap length follows the ink actually drawn, not the nominal nib
+        // size: a pencil nib draws nearly twice its size.
+        let nominalWidth = path.map { $0.size.width }.max() ?? 0
         let drawnWidth = VectorPageRenderer.drawnWidth(
-            forNibSize: CGFloat(max(width, 0)),
+            forNibSize: CGFloat(max(nominalWidth, 0)),
             curve: VectorPageRenderer.nibCurve(for: stroke.ink.inkType)
         )
+        let segments = segments(along: points, style: style, width: drawnWidth)
+        guard !segments.isEmpty else { return nil }
+
         let halfWidth = max(1.5, drawnWidth / 2 + 1)
         let mask = maskPath(for: segments, halfWidth: halfWidth)
         guard !mask.isEmpty else { return nil }
