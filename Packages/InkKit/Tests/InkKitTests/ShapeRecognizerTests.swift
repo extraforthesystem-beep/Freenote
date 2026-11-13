@@ -299,8 +299,9 @@ struct ShapeStrokeBuilderTests {
         #expect(shape.path.count != freehand.path.count)
         let ys = Set(shape.path.map { ($0.location.y * 1000).rounded() })
         #expect(ys.count == 1, "a snapped horizontal line has one y")
-        let middle = freehand.path[freehand.path.count / 2]
-        #expect(shape.path.allSatisfy { $0.size == middle.size })
+        // The taper is sampled from the original stroke instead of flattened.
+        #expect(shape.path.first?.size == freehand.path.first?.size)
+        #expect(shape.path.last?.size == freehand.path.last?.size)
     }
 
     @Test func scribbleIsNotReplaced() {
