@@ -79,6 +79,11 @@ struct StudyReviewView: View {
                 }
             }
             .onAppear(perform: startPassIfNeeded)
+            .onDisappear {
+                // Leaving the pass writes the grades now instead of after the
+                // debounce, so a quick dismissal cannot lose the last one.
+                Task { await study.flushStateWrite() }
+            }
             .sheet(item: $leech) { target in
                 LeechRewriteSheet(
                     study: study,
