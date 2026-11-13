@@ -18,7 +18,7 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 | D | Audio replay | running | t3 worktree | AudioKit playback ↔ stroke time, transcripts |
 | E | Study engine | merged `6ced4a7` | `feat/w4-e` | FSRS + SM-2 migration, recall-first, one due queue, tape mode, leech. StudyKit 77 tests. |
 | F | Ink tools | running | t3 worktree | stabilisation, dashed, scratch-out, shapes |
-| G | Navigation + library | running | t3 worktree | page history, Continue rail, page grid, tags |
+| G | Navigation + library | merged `f8651d5` | `feat/w4-g` | page history, Continue rail, page grid, tags, Last Opened, named bookmarks + pinned pages. NoteCore 100, app bookmark tests pass. |
 | H | PDF reading + templates | merged `b9f4cbb` | `feat/w4-h` | writing margin, dark PDF paper, link history, custom templates, Reading Mode. NoteCore 97, InkKit 120. |
 
 ## Merge protocol
@@ -40,7 +40,8 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 - A: the floating selection bar can cover the bottom of the page while active.
 - H: Reading Mode hides toolbar, divider, counter and panels, but not the notebook tab bar or the system status bar.
 - H: custom templates cannot be renamed after import; PDF templates use page 1 only.
-- H: PDF link history is per-notebook and in memory, separate from G's page history — consider unifying.
+- G: page history is per open notebook and in memory, not persisted across relaunch; it now shares the bottom-leading corner with H's PDF link chip (stacked).
+- G: `bookmarks.json` is a new file inside each notebook folder — B's backup archive and wave 5 sync must include it.
 
 ## Next waves
 
