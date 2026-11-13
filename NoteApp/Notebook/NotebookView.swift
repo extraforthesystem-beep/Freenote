@@ -175,6 +175,7 @@ struct NotebookPane: View {
     /// The compact-width sheet, which only opens when the reader asks for it.
     @State private var showsCompactPages = false
     @State private var showsHistory = false
+    @State private var showsPageOverview = false
     @State private var showsLassoHint = false
     @State private var studyScope: NotebookStudyScope?
     @State private var showsTapeStudy = false
@@ -270,7 +271,14 @@ struct NotebookPane: View {
                                 }
                             }
                         }
-                        .overlay(alignment: .bottomLeading) { pdfLinkHistoryChip }
+                        .overlay(alignment: .bottomLeading) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                PageHistoryControls(session: session)
+                                pdfLinkHistoryChip
+                            }
+                            .padding(.leading, 12)
+                            .padding(.bottom, 12)
+                        }
                         .overlay(alignment: .topTrailing) { readingModeExit }
                     #if os(iOS)
                     if showsZoomView {
@@ -291,6 +299,7 @@ struct NotebookPane: View {
             }
         }
         .background(AppColor.groupedBackground)
+        .background(alignment: .topLeading) { pageHistoryShortcuts }
         #if os(iOS)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { editorHeight = $0 }
         #endif
@@ -526,6 +535,13 @@ struct NotebookPane: View {
         .sheet(isPresented: $showsHistory) {
             VersionHistoryView(session: session)
         }
+        .sheet(isPresented: $showsPageOverview) {
+            PageOverviewGrid(
+                session: session,
+                outline: model.outline,
+                bookmarks: model.bookmarks
+            )
+        }
         .sheet(isPresented: $showsToolbarEditor) {
             ToolbarEditorView()
         }
@@ -628,6 +644,28 @@ struct NotebookPane: View {
         )
         .frame(width: 220)
         .transition(.move(edge: pagesOnLeft ? .leading : .trailing).combined(with: .opacity))
+    }
+
+    // MARK: - Page history
+
+    /// ⌘[ and ⌘] step through the pages this notebook has shown, like a browser.
+    /// Hidden: the chevrons over the page are the visible pair.
+    private var pageHistoryShortcuts: some View {
+        Group {
+            Button("Back") {
+                Task { await session.goBack() }
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(!session.canGoBack)
+            Button("Forward") {
+                Task { await session.goForward() }
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(!session.canGoForward)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     // MARK: - Banners
@@ -862,6 +900,10 @@ struct NotebookPane: View {
             Button("Outline…", systemImage: "list.bullet.indent") {
                 showsOutline = true
             }
+            Button("Page Overview…", systemImage: "square.grid.2x2") {
+                showsPageOverview = true
+            }
+            .disabled(session.pageCount == 0)
             Button("Search in Notebook…", systemImage: "magnifyingglass") {
                 showsSearch = true
             }

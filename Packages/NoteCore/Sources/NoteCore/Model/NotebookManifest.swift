@@ -18,6 +18,12 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
     /// The notebook's own scroll direction. Absent (nil) means "use the app's
     /// default", and on files from builds that did not record it.
     public var pageScrollMode: PageScrollMode?
+    /// When the notebook was last opened in the editor. Kept apart from
+    /// `updatedAt` so opening a notebook does not reorder a grid sorted by date
+    /// modified. Absent (nil) on notebooks never opened and on files written by
+    /// builds that did not record it; an unknown key is ignored by older builds,
+    /// so the manifest schema version does not change.
+    public var lastOpenedAt: Date?
 
     public init(
         schemaVersion: Int = SchemaVersion.current,
@@ -28,7 +34,8 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
         createdAt: Date,
         updatedAt: Date,
         deletedAt: Date? = nil,
-        pageScrollMode: PageScrollMode? = nil
+        pageScrollMode: PageScrollMode? = nil,
+        lastOpenedAt: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -39,5 +46,6 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
         self.pageScrollMode = pageScrollMode
+        self.lastOpenedAt = lastOpenedAt
     }
 }

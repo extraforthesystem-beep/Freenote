@@ -76,6 +76,9 @@ final class NotebookSession: Identifiable {
 
     /// Called after a page file is deleted, so its search record can go too.
     var onPageDeleted: ((UUID) -> Void)?
+    /// Called after a page is written, with its id, so the library's Continue
+    /// rail can list the pages written on most recently.
+    var onPageSaved: ((UUID) -> Void)?
 
     init(
         store: LibraryStore,
@@ -261,6 +264,7 @@ final class NotebookSession: Identifiable {
             }
             loadError = nil
             rememberVisitedPage()
+            recordHistory(loaded.id)
         } catch {
             page = nil
             loadError = error.localizedDescription
@@ -285,6 +289,73 @@ final class NotebookSession: Identifiable {
     func goToPage(_ index: Int) async {
         guard index != pageIndex, manifest.pageOrder.indices.contains(index) else { return }
         await loadPage(at: index)
+    }
+
+    // MARK: - Page history
+
+    /// Page ids in the order they were shown, oldest first, for back/forward.
+    private(set) var visitedPageIDs: [UUID] = []
+    /// The page the history cursor is on. A page id rather than an index, so a
+    /// page deleted elsewhere cannot leave the cursor pointing at a neighbour.
+    private var historyCursorID: UUID?
+    private var isNavigatingHistory = false
+    private static let historyLimit = 100
+
+    var canGoBack: Bool { historyTarget(by: -1) != nil }
+    var canGoForward: Bool { historyTarget(by: 1) != nil }
+    /// True once more than one page has been shown, so the chevrons only appear
+    /// when there is somewhere to go back to.
+    var hasPageHistory: Bool { visitedPageIDs.count > 1 }
+
+    /// Back and forward through the pages visited in this notebook. Jumping back
+    /// keeps the forward steps until a new page is opened from there.
+    func goBack() async {
+        await goToHistoryTarget(by: -1)
+    }
+
+    func goForward() async {
+        await goToHistoryTarget(by: 1)
+    }
+
+    private func historyTarget(by offset: Int) -> UUID? {
+        guard let cursorStart = historyCursorIndex else { return nil }
+        if offset < 0 {
+            return visitedPageIDs[..<cursorStart].last { manifest.pageOrder.contains($0) }
+        }
+        guard cursorStart + 1 < visitedPageIDs.count else { return nil }
+        return visitedPageIDs[(cursorStart + 1)...].first { manifest.pageOrder.contains($0) }
+    }
+
+    private var historyCursorIndex: Int? {
+        guard let historyCursorID else { return nil }
+        return visitedPageIDs.firstIndex(of: historyCursorID)
+    }
+
+    private func goToHistoryTarget(by offset: Int) async {
+        guard let target = historyTarget(by: offset),
+              let index = manifest.pageOrder.firstIndex(of: target)
+        else { return }
+        isNavigatingHistory = true
+        await loadPage(at: index)
+        isNavigatingHistory = false
+        if page?.id == target { historyCursorID = target }
+    }
+
+    /// A newly shown page truncates the forward steps, like a browser.
+    private func recordHistory(_ pageID: UUID) {
+        guard !isNavigatingHistory, historyCursorID != pageID else { return }
+        if let cursor = historyCursorID,
+           let cursorIndex = visitedPageIDs.firstIndex(of: cursor) {
+            visitedPageIDs.removeSubrange((cursorIndex + 1)..<visitedPageIDs.count)
+        } else {
+            // The cursor's page was deleted; drop what can no longer be shown.
+            visitedPageIDs = visitedPageIDs.filter { manifest.pageOrder.contains($0) }
+        }
+        visitedPageIDs.append(pageID)
+        if visitedPageIDs.count > Self.historyLimit {
+            visitedPageIDs.removeFirst(visitedPageIDs.count - Self.historyLimit)
+        }
+        historyCursorID = pageID
     }
 
     func goToNextPage() async {
@@ -957,6 +1028,7 @@ final class NotebookSession: Identifiable {
     /// Records a snapshot at most once per page per `snapshotInterval`; the
     /// newest skipped state is kept for the next one or for leaving the page.
     private func noteSaved(_ saved: Page) {
+        onPageSaved?(saved.id)
         let now = Date()
         if let last = lastSnapshotAt[saved.id], now.timeIntervalSince(last) < Self.snapshotInterval {
             unsnapshotted[saved.id] = saved

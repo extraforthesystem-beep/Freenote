@@ -25,6 +25,14 @@ struct LibraryView: View {
     @State private var isSearchPresented = false
     @State private var showsEmptyTrashAlert = false
     @State private var showsSettings = false
+    /// The sidebar's Pinned Pages row: page bookmarks across the library.
+    @State private var showsPinnedPages = false
+    /// The tag shown by the sidebar, lowercased to match stored labels.
+    @State private var selectedTag: String?
+    /// The search field's text, including `tag:` filters. The model only sees
+    /// the words that actually search, so a bare tag filters instead of
+    /// searching for the word "tag".
+    @State private var queryText = ""
     /// Hits grouped once per search, instead of on every body pass.
     @State private var searchGroups: [NotebookSearchGroup] = []
 
@@ -65,17 +73,31 @@ struct LibraryView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .searchable(
-            text: $model.searchText,
+            text: $queryText,
             isPresented: $isSearchPresented,
             placement: .sidebar,
             prompt: "Search notebooks and handwriting"
         )
-        .onChange(of: model.searchText) { _, query in
-            model.updateHandwritingSearch(query)
+        .onChange(of: queryText) { _, raw in
+            handleQueryChange(raw)
+        }
+        .onChange(of: model.searchText) { _, text in
+            // Another surface (the Pencil pad) writes the model's query directly.
+            guard TagQuery(queryText).text != text else { return }
+            queryText = text
+            handleQueryChange(text)
+        }
+        .onAppear {
+            if queryText.isEmpty, !model.searchText.isEmpty {
+                queryText = model.searchText
+            }
         }
         .onChange(of: model.selectedLocation) { _, _ in
             // A query belongs to the screen it was typed on.
             model.clearSearch()
+            queryText = ""
+            selectedTag = nil
+            showsPinnedPages = false
         }
         .onChange(of: model.search.hits) { _, hits in
             searchGroups = groupedSearchHits(hits)
@@ -227,6 +249,7 @@ struct LibraryView: View {
                     .tag(AppModel.Location.recents)
                 Label("Favourites", systemImage: "star")
                     .tag(AppModel.Location.favourites)
+                pinnedPagesRow
             }
 
             Section("Folders") {
@@ -238,6 +261,19 @@ struct LibraryView: View {
                     OutlineGroup(folderNodes, children: \.children) { node in
                         folderRow(node.folder, depth: node.depth)
                     }
+                }
+            }
+
+            if !tagSummaries.isEmpty {
+                Section {
+                    ForEach(tagSummaries) { summary in
+                        tagRow(summary)
+                    }
+                } header: {
+                    Text("Tags")
+                } footer: {
+                    Text("Type tag:name in search to filter by tag.")
+                        .font(.caption2)
                 }
             }
 
@@ -332,6 +368,103 @@ struct LibraryView: View {
     /// True when a folder one level down would still be shown by the tree.
     private func canAddSubfolder(at depth: Int) -> Bool {
         depth + 1 < AppModel.maxFolderDepth
+    }
+
+    /// The library-wide pinned pages: bookmarks from every notebook, side by
+    /// side, instead of a dot buried in one notebook's outline.
+    private var pinnedPagesRow: some View {
+        Button {
+            showsPinnedPages.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Label(
+                    "Pinned Pages",
+                    systemImage: showsPinnedPages ? "bookmark.fill" : "bookmark"
+                )
+                Spacer(minLength: 4)
+                Text("\(pinnedCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(showsPinnedPages ? Color.accentColor : Color.primary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func tagRow(_ summary: TagSummary) -> some View {
+        let isSelected = selectedTag == summary.key
+        return Button {
+            toggleTag(summary.key)
+        } label: {
+            HStack(spacing: 8) {
+                Label(summary.name, systemImage: isSelected ? "tag.fill" : "tag")
+                Spacer(minLength: 4)
+                Text("\(summary.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggleTag(_ key: String) {
+        selectedTag = selectedTag == key ? nil : key
+        showsPinnedPages = false
+    }
+
+    private var tagSummaries: [TagSummary] {
+        TagSummary.summaries(notebooks: model.notebooks, tags: model.tags(for:))
+    }
+
+    /// Tags from the sidebar and from `tag:` tokens in the search field. All of
+    /// them must be on a notebook for it to show.
+    private var activeTagKeys: Set<String> {
+        var keys = TagQuery(queryText).tagKeys
+        if let selectedTag { keys.insert(selectedTag) }
+        return keys
+    }
+
+    private var activeTagNames: [String] {
+        let summaries = tagSummaries
+        return activeTagKeys.sorted().map { key in
+            summaries.first { $0.key == key }?.name ?? key
+        }
+    }
+
+    private func matchesActiveTags(_ notebookID: UUID) -> Bool {
+        let required = activeTagKeys
+        guard !required.isEmpty else { return true }
+        return required.isSubset(of: Set(model.tags(for: notebookID).map { $0.lowercased() }))
+    }
+
+    private var pinnedCount: Int {
+        model.bookmarks.allBookmarks.reduce(into: 0) { count, bookmark in
+            guard let notebook = model.notebook(withID: bookmark.notebookID),
+                  notebook.pageOrder.contains(bookmark.pageID)
+            else { return }
+            count += 1
+        }
+    }
+
+    /// Keeps the model's query (which the handwriting index searches) free of
+    /// `tag:` tokens, which only the library filters.
+    private func handleQueryChange(_ raw: String) {
+        let parsed = TagQuery(raw)
+        if model.searchText != parsed.text {
+            model.searchText = parsed.text
+        }
+        model.updateHandwritingSearch(parsed.text)
+    }
+
+    private func clearTagFilter() {
+        selectedTag = nil
+        let parsed = TagQuery(queryText)
+        guard !parsed.tags.isEmpty else { return }
+        queryText = parsed.text
+        handleQueryChange(parsed.text)
     }
 
     @ViewBuilder
@@ -457,20 +590,24 @@ struct LibraryView: View {
     @ViewBuilder
     private var detail: some View {
         Group {
-            switch model.selectedLocation {
-            case .trash:
-                trashList
-            case .textDocuments:
-                TextDocumentsView(model: model.textDocs, showsDoneButton: false)
-            case .whiteboards:
-                BoardsView(model: model.boards, showsDoneButton: false)
-            case .studySets:
-                StudyLibraryView(study: model.study, showsDoneButton: false) { notebookID, pageID in
-                    guard let notebook = model.notebook(withID: notebookID) else { return }
-                    Task { await model.open(notebook, pageID: pageID) }
+            if showsPinnedPages {
+                PinnedPagesList(model: model)
+            } else {
+                switch model.selectedLocation {
+                case .trash:
+                    trashList
+                case .textDocuments:
+                    TextDocumentsView(model: model.textDocs, showsDoneButton: false)
+                case .whiteboards:
+                    BoardsView(model: model.boards, showsDoneButton: false)
+                case .studySets:
+                    StudyLibraryView(study: model.study, showsDoneButton: false) { notebookID, pageID in
+                        guard let notebook = model.notebook(withID: notebookID) else { return }
+                        Task { await model.open(notebook, pageID: pageID) }
+                    }
+                case .all, .recents, .favourites, .folder:
+                    notebookLibrary
                 }
-            case .all, .recents, .favourites, .folder:
-                notebookLibrary
             }
         }
         .background(AppColor.groupedBackground)
@@ -480,6 +617,9 @@ struct LibraryView: View {
 
     /// A search runs over everything, and the title says so.
     private var detailTitle: String {
+        if showsPinnedPages {
+            return "Pinned Pages"
+        }
         if model.isSearching, model.showsNotebookLibrary, model.selectedLocation != .trash {
             return "All Notebooks"
         }
@@ -488,11 +628,13 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var notebookLibrary: some View {
-        let visibleNotebooks = model.visibleNotebooks
+        let visibleNotebooks = model.visibleNotebooks.filter { matchesActiveTags($0.id) }
         if let loadError = model.loadError {
             loadErrorView(loadError)
         } else if model.isSearching {
             searchResults(visibleNotebooks)
+        } else if visibleNotebooks.isEmpty && !activeTagKeys.isEmpty {
+            taggedEmptyState
         } else if visibleNotebooks.isEmpty {
             emptyState
         } else {
@@ -507,7 +649,7 @@ struct LibraryView: View {
                 openTabsMenu
             }
         }
-        if model.showsNotebookLibrary && model.selectedLocation != .trash {
+        if model.showsNotebookLibrary && model.selectedLocation != .trash && !showsPinnedPages {
             ToolbarItem(placement: .secondaryAction) {
                 Button {
                     isSearchPresented = true
@@ -534,6 +676,13 @@ struct LibraryView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 newMenu
+            }
+        }
+        if showsPinnedPages {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Done") {
+                    showsPinnedPages = false
+                }
             }
         }
         if model.selectedLocation == .trash && !model.trashedNotebooks.isEmpty {
@@ -683,8 +832,11 @@ struct LibraryView: View {
     /// A search runs over the whole library, so every notebook with a matching title
     /// is listed here regardless of the selected sidebar row.
     private func searchResults(_ visibleNotebooks: [NotebookManifest]) -> some View {
-        ScrollView {
+        let groups = visibleSearchGroups
+        return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                tagFilterBar
+
                 if let error = model.search.lastError {
                     searchErrorRow(error)
                 }
@@ -703,11 +855,11 @@ struct LibraryView: View {
                     }
                 }
 
-                ForEach(searchGroups) { group in
+                ForEach(groups) { group in
                     notebookSearchGroupView(group)
                 }
 
-                if visibleNotebooks.isEmpty && searchGroups.isEmpty {
+                if visibleNotebooks.isEmpty && groups.isEmpty {
                     if model.search.isIndexing {
                         HStack(spacing: 10) {
                             ProgressView()
@@ -722,6 +874,13 @@ struct LibraryView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Search hits are grouped per notebook, so the tag filter applies to the
+    /// group's notebook rather than to each hit.
+    private var visibleSearchGroups: [NotebookSearchGroup] {
+        guard !activeTagKeys.isEmpty else { return searchGroups }
+        return searchGroups.filter { matchesActiveTags($0.notebook.id) }
     }
 
     @ViewBuilder
@@ -835,25 +994,59 @@ struct LibraryView: View {
 
     private func notebookGrid(_ visibleNotebooks: [NotebookManifest]) -> some View {
         ScrollView {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: 20)],
-                spacing: 24
-            ) {
-                ForEach(visibleNotebooks, id: \.id) { notebook in
-                    NotebookCard(
-                        notebook: notebook,
-                        store: model.store,
-                        isFavourite: model.isFavourite(notebook.id),
-                        isOpen: model.isOpen(notebook.id),
-                        tags: model.tags(for: notebook.id)
-                    ) {
-                        Task { await model.open(notebook) }
+            VStack(alignment: .leading, spacing: 22) {
+                tagFilterBar
+                // The Continue rail is library-wide, so it sits under All only.
+                if model.selectedLocation == .all, activeTagKeys.isEmpty {
+                    ContinueRail(model: model)
+                }
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: 20)],
+                    spacing: 24
+                ) {
+                    ForEach(visibleNotebooks, id: \.id) { notebook in
+                        NotebookCard(
+                            notebook: notebook,
+                            store: model.store,
+                            isFavourite: model.isFavourite(notebook.id),
+                            isOpen: model.isOpen(notebook.id),
+                            tags: model.tags(for: notebook.id)
+                        ) {
+                            Task { await model.open(notebook) }
+                        }
+                        .contextMenu { cardMenu(notebook) }
+                        .draggable(notebook.id.uuidString)
                     }
-                    .contextMenu { cardMenu(notebook) }
-                    .draggable(notebook.id.uuidString)
                 }
             }
             .padding(20)
+        }
+    }
+
+    /// The tags narrowing the grid, with one way to clear them. Empty when no
+    /// tag filter is active.
+    @ViewBuilder
+    private var tagFilterBar: some View {
+        let names = activeTagNames
+        if !names.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "tag.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(names, id: \.self) { name in
+                    Text(name)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                }
+                Spacer(minLength: 4)
+                Button("Clear") {
+                    clearTagFilter()
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+            }
         }
     }
 
@@ -922,6 +1115,19 @@ struct LibraryView: View {
     }
 
     // MARK: - Empty states
+
+    private var taggedEmptyState: some View {
+        ContentUnavailableView {
+            Label("No Notebooks Tagged", systemImage: "tag")
+        } description: {
+            Text("None of the notebooks here carry \(activeTagNames.joined(separator: ", ")).")
+        } actions: {
+            Button("Clear Tag Filter") {
+                clearTagFilter()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
 
     @ViewBuilder
     private var emptyState: some View {

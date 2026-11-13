@@ -160,6 +160,14 @@ public actor LibraryStore {
         try writeDocument(manifest, to: layout.manifestFile(notebookID))
     }
 
+    /// Records that the notebook was opened. Kept apart from `updatedAt`, so
+    /// opening a notebook does not reorder a grid sorted by date modified.
+    public func markOpened(_ notebookID: UUID, at date: Date = Date()) throws {
+        var manifest = try loadManifest(notebookID)
+        manifest.lastOpenedAt = date
+        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+    }
+
     /// Moves the notebook's folder, unchanged, to `trash/`, stamping the manifest
     /// with the deletion date used by the 30-day purge.
     ///
