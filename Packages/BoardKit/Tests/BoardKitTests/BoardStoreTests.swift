@@ -311,4 +311,82 @@ final class BoardStoreTests: XCTestCase {
         XCTAssertNotEqual(other, name)
         XCTAssertTrue(other.hasSuffix(".png"))
     }
+
+    func testDeleteRemovesOnlyTheImageAssetsTheBoardAloneReferenced() async throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BoardStore(rootURL: directory)
+
+        let shared = try await store.addAsset(Data([1]), fileExtension: "png")
+        let exclusive = try await store.addAsset(Data([2]), fileExtension: "png")
+        let kept = try await store.addAsset(Data([3]), fileExtension: "png")
+
+        let doomed = makeImageBoard(assets: [shared, exclusive])
+        let survivor = makeImageBoard(assets: [shared, kept])
+        try await store.save(BoardDocument(board: doomed))
+        try await store.save(BoardDocument(board: survivor))
+
+        let removed = try await store.delete(doomed)
+
+        XCTAssertEqual(removed, [exclusive])
+        XCTAssertFalse(assetExists(exclusive, in: store))
+        XCTAssertTrue(assetExists(shared, in: store))
+        XCTAssertTrue(assetExists(kept, in: store))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: store.fileURL(for: doomed.id).path)
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: store.fileURL(for: survivor.id).path)
+        )
+    }
+
+    func testDeleteKeepsAssetsThatAnotherBoardSharesAndItsOwnWhenThereAreNone() async throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BoardStore(rootURL: directory)
+
+        let shared = try await store.addAsset(Data([1]), fileExtension: "png")
+        let first = makeImageBoard(assets: [shared])
+        let second = makeImageBoard(assets: [shared])
+        try await store.save(BoardDocument(board: first))
+        try await store.save(BoardDocument(board: second))
+
+        let removedFromFirst = try await store.delete(first)
+        XCTAssertEqual(removedFromFirst, [])
+        XCTAssertTrue(assetExists(shared, in: store))
+
+        let textDocument = makeDocument()
+        try await store.save(textDocument)
+        let removedFromText = try await store.delete(textDocument.board)
+        XCTAssertEqual(removedFromText, [])
+
+        let removedFromSecond = try await store.delete(second)
+        XCTAssertEqual(removedFromSecond, [shared])
+        XCTAssertFalse(assetExists(shared, in: store))
+    }
+
+    private func makeImageBoard(assets: [String]) -> Board {
+        let date = Date(timeIntervalSince1970: 1_700_000_000.123_456)
+        return Board(
+            items: assets.map { name in
+                BoardItem(
+                    createdAt: date,
+                    updatedAt: date,
+                    content: .image(
+                        assetName: name,
+                        frame: CGRect(x: 0, y: 0, width: 40, height: 30)
+                    )
+                )
+            },
+            createdAt: date,
+            updatedAt: date,
+            schemaVersion: Board.currentSchemaVersion
+        )
+    }
+
+    private func assetExists(_ name: String, in store: BoardStore) -> Bool {
+        FileManager.default.fileExists(
+            atPath: store.assetsDirectoryURL.appendingPathComponent(name).path
+        )
+    }
 }

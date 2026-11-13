@@ -143,10 +143,11 @@ final class BoardModel {
         boards.first { $0.id == id }
     }
 
-    /// Deletes a board file and removes it from the list.
+    /// Deletes a board file and the image assets only it referenced, then
+    /// removes it from the list.
     func delete(_ board: Board) async {
         do {
-            try await store.delete(board.id)
+            try await store.delete(board)
             boards.removeAll { $0.id == board.id }
             cameras.removeValue(forKey: board.id)
         } catch {
