@@ -95,8 +95,9 @@ struct SmartLearnSessionTests {
 
         #expect(state.cardID == card.id)
         #expect(state.repetitions == 1)
-        #expect(state.intervalDays == 1)
-        #expect(state.dueDate == testNow.addingTimeInterval(86_400))
+        #expect(abs((state.stability ?? 0) - FSRSScheduler.defaultWeights[3]) < 1e-12)
+        #expect(state.intervalDays == 16)
+        #expect(state.dueDate == testNow.addingTimeInterval(16 * 86_400))
         #expect(session.states[card.id] == state)
         #expect(session.reviewedCardIDs == [card.id])
         #expect(session.currentCard == nil)
