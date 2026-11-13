@@ -16,7 +16,7 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 | B | Durability + backup | running | t3 worktree | NoteCore store, HistoryKit, new `NoteApp/Backup` |
 | C | AI + search correctness | merged `f288ec1` | `t3/52d9d85f` | SearchKit 46 tests, app build green. Follow-ups below. |
 | D | Audio replay | running | t3 worktree | AudioKit playback ↔ stroke time, transcripts |
-| E | Study engine | running | t3 worktree | FSRS, recall-first, one due queue |
+| E | Study engine | merged `6ced4a7` | `feat/w4-e` | FSRS + SM-2 migration, recall-first, one due queue, tape mode, leech. StudyKit 77 tests. |
 | F | Ink tools | running | t3 worktree | stabilisation, dashed, scratch-out, shapes |
 | G | Navigation + library | running | t3 worktree | page history, Continue rail, page grid, tags |
 | H | PDF reading + templates | running | t3 worktree | writing margin, dark PDF paper, templates |
@@ -33,6 +33,9 @@ Plan: `BUILD-PLAN.md` (rows A–H). This file tracks who is building what and wh
 - C: Spotlight results open the app but do not jump to the page (needs `RootView`/`NoteAppApp`).
 - C: OCR'd PDF pages navigate but draw no in-page mark (`PageMatchLocator.pdfMarks` reads the text layer only).
 - C: auto-title suggestion lives in the Page AI panel, not the library (G owns `NoteApp/Library`).
+- E: cards made by the AI panel still have no `sourceNotebookID`/`sourcePageID` (that file is C's).
+- E: leech handling is text rewrite/split only; ink-crop attachment needs the lasso model from A.
+- E: desired retention is a global 0.9, not per card.
 
 ## Next waves
 
