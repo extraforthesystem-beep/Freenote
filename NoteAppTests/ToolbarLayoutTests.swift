@@ -2,9 +2,14 @@ import XCTest
 @testable import NoteApp
 
 final class ToolbarLayoutTests: XCTestCase {
-    func testEmptyStorageFallsBackToDefaults() {
-        XCTAssertEqual(ToolbarLayout(storage: "").items, ToolbarLayout.defaultItems)
+    func testUnusableStorageFallsBackToDefaults() {
         XCTAssertEqual(ToolbarLayout(storage: " , ").items, ToolbarLayout.defaultItems)
+        XCTAssertEqual(ToolbarLayout(storage: "notAnItem").items, ToolbarLayout.defaultItems)
+    }
+
+    func testEmptyStorageIsPenOnlyAndRoundTrips() {
+        XCTAssertTrue(ToolbarLayout(storage: "").items.isEmpty)
+        XCTAssertEqual(ToolbarLayout(storage: ToolbarLayout(items: []).storage).items, [])
     }
 
     func testUnknownAndDuplicateIDsAreDropped() {

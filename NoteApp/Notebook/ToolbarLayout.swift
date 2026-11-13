@@ -72,9 +72,14 @@ nonisolated struct ToolbarLayout: Equatable, Sendable {
         self.items = items
     }
 
-    /// Reads the stored string. Unknown and duplicate ids are dropped; an
-    /// empty or unusable string falls back to the default items.
+    /// Reads the stored string. Unknown and duplicate ids are dropped. An
+    /// empty string is a toolbar with only the pen (the user removed every
+    /// item); a non-empty string with no usable ids falls back to the defaults.
     init(storage: String) {
+        guard !storage.isEmpty else {
+            items = []
+            return
+        }
         var seen = Set<ToolbarItemID>()
         let parsed = storage
             .split(separator: ",")
