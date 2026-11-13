@@ -242,6 +242,7 @@ struct NotebookPane: View {
                 VStack(spacing: 0) {
                     pageArea
                         .overlay(alignment: .top) { banners }
+                        .overlay(alignment: .top) { searchOverlay }
                         #if os(iOS)
                         .overlay(alignment: .topTrailing) {
                             if showsTapeStudy {
@@ -503,26 +504,6 @@ struct NotebookPane: View {
                 bookmarks: model.bookmarks
             )
         }
-        .inspector(isPresented: $showsSearch) {
-            NotebookSearchPanel(
-                notebookID: session.notebookID,
-                search: model.search,
-                activeHighlight: session.searchHighlight,
-                initialPageID: session.currentPageID,
-                onHighlight: { session.searchHighlight = $0 }
-            ) { pageID in
-                guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
-                Task { await session.goToPage(index) }
-            }
-            // A new panel per notebook, so one notebook's results never list in another.
-            .id(session.notebookID)
-            .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
-        }
-        // Search takes the right edge, so a right-side panel cannot stay open.
-        .onChange(of: showsSearch) { _, isShowing in
-            guard isShowing, showsPagesPanelInline, !pagesOnLeft else { return }
-            withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
-        }
         #if os(iOS)
         // Too narrow for a column: the same panel arrives as a sheet.
         .sheet(isPresented: compactPagesSheetBinding) {
@@ -626,12 +607,11 @@ struct NotebookPane: View {
         showsThumbnails && pagesPanelIsInline
     }
 
-    /// Opening the panel closes Search when the panel would share its edge.
+    /// Regular width toggles the inline panel; compact shows the sheet.
     private var pagesPanelBinding: Binding<Bool> {
         Binding(
             get: { pagesPanelIsInline ? showsThumbnails : showsCompactPages },
             set: { isShown in
-                if isShown && !pagesOnLeft { showsSearch = false }
                 if pagesPanelIsInline {
                     showsThumbnails = isShown
                 } else {
@@ -687,6 +667,45 @@ struct NotebookPane: View {
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
+    }
+
+    // MARK: - Search
+
+    /// The find bar floats over the top of the page: the page keeps its size and
+    /// scrolls underneath it.
+    @ViewBuilder
+    private var searchOverlay: some View {
+        if showsSearch {
+            NotebookFindBar(
+                notebookID: session.notebookID,
+                search: model.search,
+                pageCount: session.pageCount,
+                activeHighlight: session.searchHighlight,
+                initialPageID: session.currentPageID,
+                onHighlight: { session.searchHighlight = $0 },
+                onSelectPage: { pageID in
+                    guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
+                    Task { await session.goToPage(index) }
+                },
+                onGoToPage: { index in
+                    Task { await session.goToPage(index) }
+                },
+                onClose: closeSearch
+            )
+            // A new bar per notebook, so one notebook's results never list in another.
+            .id(session.notebookID)
+            .padding(.top, 10)
+            .padding(.horizontal, 16)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    private func openSearch() {
+        withAnimation(.easeInOut(duration: 0.2)) { showsSearch = true }
+    }
+
+    private func closeSearch() {
+        withAnimation(.easeInOut(duration: 0.2)) { showsSearch = false }
     }
 
     // MARK: - Banners
@@ -873,7 +892,7 @@ struct NotebookPane: View {
         case .addPage:
             Task { await session.addPage() }
         case .search:
-            showsSearch = true
+            openSearch()
         default:
             break
         }
@@ -935,7 +954,7 @@ struct NotebookPane: View {
             }
             .disabled(session.pageCount == 0)
             Button("Search in Notebook…", systemImage: "magnifyingglass") {
-                showsSearch = true
+                openSearch()
             }
             .keyboardShortcut("f", modifiers: .command)
             bookmarksMenu

@@ -14,11 +14,9 @@ struct GoToPageField: View {
         pageCount > 0 ? "(1 – \(pageCount))" : "(no pages)"
     }
 
+    /// The same page-number grammar as the find bar.
     private var parsedPage: Int? {
-        guard pageCount > 0,
-              let value = Int(text.trimmingCharacters(in: .whitespaces))
-        else { return nil }
-        return min(max(value, 1), pageCount)
+        PageNumberQuery.page(in: text, pageCount: pageCount)
     }
 
     var body: some View {
