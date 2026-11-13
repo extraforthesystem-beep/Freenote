@@ -549,7 +549,10 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
         return HStack(spacing: 0) {
             ForEach(presets.indices, id: \.self) { index in
                 let width = presets[index]
+                // Only when the current width is this preset: a width set with
+                // the slider away from every preset selects none of them.
                 let isSelected = isApplicable && nearestWidth.map { abs(width - $0) < 0.0001 } == true
+                    && abs(width - current) < max(0.15, current * 0.05)
                 Button {
                     editor.setWidth(width)
                 } label: {
