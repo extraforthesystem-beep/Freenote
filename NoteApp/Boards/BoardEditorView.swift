@@ -125,16 +125,19 @@ struct BoardEditorView: View {
                 editor: editor,
                 controller: controller,
                 showsThumbnails: .constant(false),
-                isRecording: false,
-                recordingLabel: "",
+                audio: nil,
                 onBack: { Task { await finishEditing() } },
                 onStopRecording: {},
                 onClearPage: { showsClearConfirmation = true },
+                isRulerActive: .constant(false),
+                onItemAction: { _ in },
+                onCustomizeToolbar: {},
                 showsPageControls: false,
                 showsElementTool: false,
                 backLabel: "Boards",
                 insertMenu: { insertMenu },
-                moreMenu: { moreMenu }
+                moreMenu: { moreMenu },
+                itemMenu: { _ in EmptyView() }
             )
             Divider()
             #endif
