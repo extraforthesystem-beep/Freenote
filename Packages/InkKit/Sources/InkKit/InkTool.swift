@@ -69,6 +69,24 @@ public enum PenStyle: String, CaseIterable, Codable, Hashable, Sendable {
     }
 }
 
+// MARK: - PenLineStyle
+
+/// How a pen's stroke is broken up along its length. The dash is stored as the
+/// stroke's mask (see `StrokeDash`), so it stays one stroke on disk.
+public enum PenLineStyle: String, CaseIterable, Codable, Hashable, Sendable {
+    case solid
+    case dashed
+    case dotted
+
+    public var displayName: String {
+        switch self {
+        case .solid: "Solid"
+        case .dashed: "Dashed"
+        case .dotted: "Dotted"
+        }
+    }
+}
+
 // MARK: - InkTool
 
 /// A pen choice: ink style, sRGB colour and nominal width.
@@ -80,17 +98,22 @@ public struct InkTool: Codable, Hashable, Sendable {
     /// highlighter ink type, so this flag is the app's own vocabulary and is
     /// stored on every stroke.
     public var isHighlighter: Bool
+    /// Solid, dashed or dotted. Highlighters are always solid: a translucent
+    /// marker is already broken up by what shows through it.
+    public var lineStyle: PenLineStyle
 
     public init(
         _ style: PenStyle,
         color: RGBAColor = .black,
         width: Double? = nil,
-        isHighlighter: Bool = false
+        isHighlighter: Bool = false,
+        lineStyle: PenLineStyle = .solid
     ) {
         self.style = style
         self.color = color
         self.width = width ?? style.defaultWidth
         self.isHighlighter = isHighlighter
+        self.lineStyle = isHighlighter ? .solid : lineStyle
     }
 
     public static let pen = InkTool(.pen)
@@ -117,7 +140,7 @@ public struct InkTool: Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case style, color, width, isHighlighter
+        case style, color, width, isHighlighter, lineStyle
     }
 
     public init(from decoder: any Decoder) throws {
@@ -127,6 +150,18 @@ public struct InkTool: Codable, Hashable, Sendable {
         width = try container.decode(Double.self, forKey: .width)
         // Presets saved before the highlighter existed have no key.
         isHighlighter = try container.decodeIfPresent(Bool.self, forKey: .isHighlighter) ?? false
+        // Presets saved before dashed ink existed have no key.
+        lineStyle = try container.decodeIfPresent(PenLineStyle.self, forKey: .lineStyle) ?? .solid
+        if isHighlighter { lineStyle = .solid }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(style, forKey: .style)
+        try container.encode(color, forKey: .color)
+        try container.encode(width, forKey: .width)
+        try container.encode(isHighlighter, forKey: .isHighlighter)
+        try container.encode(lineStyle, forKey: .lineStyle)
     }
 }
 

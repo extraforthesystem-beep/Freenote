@@ -206,14 +206,15 @@ enum NotebookExporter {
                 } catch {
                     throw NotebookExportError.couldNotRenderPage(indices[index] + 1)
                 }
-                // An editable export writes only opaque ink as annotations;
-                // translucent ink (highlighters) is drawn into the page, since
-                // PDFKit cannot store an annotation's opacity and would export
-                // it solid. See `VectorPDFAnnotations.isTranslucent`.
+                // An editable export writes only opaque, unclipped ink as
+                // annotations; translucent ink (highlighters) and clipped ink
+                // (dashed or partly erased strokes) is drawn into the page,
+                // since PDFKit cannot store an annotation's opacity or clip.
+                // See `VectorPDFAnnotations.isFlattened`.
                 var drawnPage = page
                 var includeInk = options.ink == .flattened
                 if options.ink == .editable {
-                    drawnPage.strokes = page.renderStrokes.filter(VectorPDFAnnotations.isTranslucent)
+                    drawnPage.strokes = page.renderStrokes.filter(VectorPDFAnnotations.isFlattened)
                     includeInk = !drawnPage.strokes.isEmpty
                 }
                 writer.addPage(
@@ -245,9 +246,9 @@ enum NotebookExporter {
                     throw NotebookExportError.couldNotRenderPage(indices[index] + 1)
                 }
                 if let pdfPage = document.page(at: index) {
-                    // Opaque ink only: translucent ink was drawn into the page
-                    // above, because PDFKit cannot store an ink annotation's
-                    // opacity (see `VectorPDFAnnotations.isTranslucent`).
+                    // Opaque, unclipped ink only: the rest was drawn into the
+                    // page above, because PDFKit cannot store an ink
+                    // annotation's opacity or clip (see `isFlattened`).
                     VectorPDFAnnotations.addInkAnnotations(
                         for: page.renderStrokes,
                         to: pdfPage,

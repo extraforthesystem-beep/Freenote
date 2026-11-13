@@ -9,24 +9,53 @@ public enum ShapeStrokeBuilder {
 
     /// A stroke with the same id, ink and transform as `stroke` whose path is
     /// the recognised shape, or nil when the stroke is not a shape.
+    ///
+    /// The shape follows the original stroke's width, opacity, pressure and
+    /// tilt at each point, so it keeps the pen's taper at the start and end.
     public static func shapeStroke(replacing stroke: PKStroke, recognizer: ShapeRecognizer = ShapeRecognizer()) -> PKStroke? {
+        guard let shape = recognizedShape(of: stroke, recognizer: recognizer) else { return nil }
+        let inverse = stroke.transform.inverted()
+        let locations = ShapeRecognizer.points(for: shape, spacing: spacing).map { $0.applying(inverse) }
+        return replacement(of: stroke, along: locations)
+    }
+
+    /// A stroke with the same id, ink and transform as `stroke` whose path is
+    /// the straight line from where the stroke started to where it ended. Used
+    /// by the highlighter's straight-line mode; nil for a stroke too short to
+    /// be a line.
+    public static func straightened(_ stroke: PKStroke) -> PKStroke? {
+        let path = stroke.path
+        guard path.count >= 2,
+              let start = path.first?.location,
+              let end = path.last?.location,
+              ShapeRecognizer.distance(start, end) >= 12
+        else { return nil }
+        return replacement(of: stroke, along: ShapeRecognizer.resample(polyline: [start, end], spacing: spacing))
+    }
+
+    /// The shape `stroke` was drawn as, recognised where the user sees it.
+    static func recognizedShape(of stroke: PKStroke, recognizer: ShapeRecognizer) -> RecognizedShape? {
         let path = stroke.path
         guard path.count >= 2 else { return nil }
-        let transform = stroke.transform
-        // Recognise where the user sees the stroke, so snapping is to the page's axes.
-        let drawn = path.map { $0.location.applying(transform) }
-        guard let shape = recognizer.recognize(drawn) else { return nil }
+        let drawn = (0..<path.count).map { path[$0].location.applying(stroke.transform) }
+        return recognizer.recognize(drawn)
+    }
 
-        let inverse = transform.inverted()
-        let locations = ShapeRecognizer.points(for: shape, spacing: spacing).map { $0.applying(inverse) }
+    /// The replacement stroke for `locations` (in the stroke's own space).
+    ///
+    /// Every point samples the original stroke at the same fraction of its
+    /// length, so the pen's width, force, opacity and angle carry over instead
+    /// of one flat model point.
+    private static func replacement(of stroke: PKStroke, along locations: [CGPoint]) -> PKStroke? {
         guard locations.count >= 2 else { return nil }
-
-        // Every point looks like the middle of the original stroke, so the
-        // shape keeps the pen's width, opacity and angle without the taper.
-        let model = path[path.count / 2]
+        let path = stroke.path
+        guard path.count >= 2 else { return nil }
+        let profile = TaperProfile(path: path)
         let step = 1.0 / 120
         var points = locations.enumerated().map { index, location in
-            PKStrokePoint(
+            let fraction = Double(index) / Double(locations.count - 1)
+            let model = profile.point(at: fraction)
+            return PKStrokePoint(
                 location: location,
                 timeOffset: Double(index) * step,
                 size: model.size,
@@ -53,13 +82,50 @@ public enum ShapeStrokeBuilder {
         return PKStroke(
             ink: stroke.ink,
             path: newPath,
-            transform: transform,
+            transform: stroke.transform,
             mask: nil,
             randomSeed: stroke.randomSeed,
             id: stroke.id,
             renderGroupID: stroke.renderGroupID,
             renderState: stroke.renderState
         )
+    }
+}
+
+/// The original stroke's point attributes at a fraction of its arc length, so
+/// a snapped shape keeps the pen's taper where the user actually drew it.
+private struct TaperProfile {
+    private let points: [PKStrokePoint]
+    /// Each point's position along the stroke as a fraction of its length.
+    private let positions: [Double]
+
+    init(path: PKStrokePath) {
+        let points = (0..<path.count).map { path[$0] }
+        self.points = points
+        var walked: [Double] = [0]
+        walked.reserveCapacity(points.count)
+        for index in 1..<max(points.count, 1) {
+            walked.append(
+                walked[index - 1]
+                    + ShapeRecognizer.distance(points[index].location, points[index - 1].location)
+            )
+        }
+        let total = walked.last ?? 0
+        positions = total > 0 ? walked.map { $0 / total } : walked
+    }
+
+    func point(at fraction: Double) -> PKStrokePoint {
+        guard !points.isEmpty else {
+            return PKStrokePoint(
+                location: .zero, timeOffset: 0, size: .zero, opacity: 1, force: 0,
+                azimuth: 0, altitude: 0, secondaryScale: 1, threshold: 0, lateralJitter: 0
+            )
+        }
+        let clamped = min(max(fraction, 0), 1)
+        guard let index = positions.firstIndex(where: { $0 >= clamped }) else {
+            return points[points.count - 1]
+        }
+        return points[index]
     }
 }
 
@@ -209,7 +275,13 @@ extension PencilCanvasView.Coordinator {
               let stroke = strokes.last,
               strokes.count == strokesAtTouchBegan.count + 1,
               !strokesAtTouchBegan.contains(where: { $0.id == stroke.id }),
-              let shape = ShapeStrokeBuilder.shapeStroke(replacing: stroke)
+              let shape = ShapeStrokeBuilder.shapeStroke(replacing: stroke).map({ shape in
+                  // A dashed pen draws a dashed shape, so the snapped outline
+                  // keeps the pen's style.
+                  parent.lineStyle == .solid
+                      ? shape
+                      : StrokeDash.masked(shape, style: parent.lineStyle) ?? shape
+              })
         else { return false }
         pendingShape = PendingShapeReplacement(freehand: stroke, shape: shape)
         schedulePendingShape(on: canvas)
