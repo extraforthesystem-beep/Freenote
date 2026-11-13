@@ -40,7 +40,7 @@ struct BoardEditorView: View {
     @State private var isSaving = false
     @State private var hasUnsavedChanges = false
     @State private var saveGeneration = 0
-    @State private var saveTask: Task<Void, Never>?
+    @State private var saveTask: Task<Bool, Never>?
     /// The camera on disk when the board opened, so Done can skip writes that
     /// would only bump the modified date.
     @State private var savedCamera: BoardCamera?
@@ -107,10 +107,14 @@ struct BoardEditorView: View {
                 Text(model.lastError ?? "")
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { flush() }
+                guard phase != .active else { return }
+                // `.inactive` keeps foreground time for a quick write;
+                // `.background` can be suspended at any moment, so it needs
+                // the background assertion to finish.
+                flush(holdingBackgroundTime: phase == .background)
             }
             .onDisappear {
-                flush()
+                flush(holdingBackgroundTime: true)
                 #if os(iOS)
                 editor.saveNow()
                 #endif
@@ -603,31 +607,26 @@ struct BoardEditorView: View {
         Self.translated(board, by: CGPoint(x: -Self.worldOffset.x, y: -Self.worldOffset.y))
     }
 
+    /// Debounces an edit into one write. The write waits for any save already
+    /// in flight, so an older snapshot can never land after a newer one.
     private func scheduleSave() {
         hasUnsavedChanges = true
         saveGeneration += 1
         let generation = saveGeneration
-        saveTask?.cancel()
-
         let snapshot = savedBoard
         let camera = currentCamera
+        let previous = saveTask
+        previous?.cancel()
         isSaving = true
 
         saveTask = Task {
             do {
                 try await Task.sleep(for: .milliseconds(700))
             } catch {
-                return
+                return false
             }
-            guard !Task.isCancelled, generation == saveGeneration else { return }
-
-            let saved = await model.save(snapshot, camera: camera)
-            guard generation == saveGeneration else { return }
-            isSaving = false
-            if saved {
-                hasUnsavedChanges = false
-                savedCamera = camera
-            }
+            guard !Task.isCancelled else { return false }
+            return await write(snapshot, camera: camera, generation: generation, after: previous)
         }
     }
 
@@ -638,8 +637,6 @@ struct BoardEditorView: View {
         commitEditing()
         #endif
         saveTask?.cancel()
-        saveTask = nil
-        defer { isSaving = false }
 
         let cameraChanged = savedCamera != currentCamera
         guard hasUnsavedChanges || cameraChanged else {
@@ -652,34 +649,74 @@ struct BoardEditorView: View {
         }
     }
 
+    /// Writes the current board and waits for the result.
     @discardableResult
     private func saveNow() async -> Bool {
         saveGeneration += 1
         let generation = saveGeneration
         let snapshot = savedBoard
         let camera = currentCamera
+        let previous = saveTask
+        previous?.cancel()
         isSaving = true
 
+        let task = Task {
+            await write(snapshot, camera: camera, generation: generation, after: previous)
+        }
+        saveTask = task
+        return await task.value
+    }
+
+    /// One board write, serialised behind `previous`. A save that has already
+    /// reached the store is awaited, never abandoned half-written. Flags change
+    /// only for the newest generation: an edit made during a save keeps
+    /// `hasUnsavedChanges` set, and a failed save never marks the board clean,
+    /// so the in-memory snapshot stays pending for the retry.
+    private func write(
+        _ snapshot: Board,
+        camera: BoardCamera?,
+        generation: Int,
+        after previous: Task<Bool, Never>?
+    ) async -> Bool {
+        _ = await previous?.value
+        guard !Task.isCancelled, generation == saveGeneration else { return false }
+
         let saved = await model.save(snapshot, camera: camera)
-        if generation == saveGeneration {
-            isSaving = false
-            if saved {
-                hasUnsavedChanges = false
-                savedCamera = camera
-            }
+        guard generation == saveGeneration else { return saved }
+        isSaving = false
+        if saved {
+            hasUnsavedChanges = false
+            savedCamera = camera
         }
         return saved
     }
 
-    /// Fire-and-forget flush for leaving the screen or backgrounding the app.
-    private func flush() {
+    /// Saves the board if anything changed, after the write already in flight.
+    /// Callers hold background time across this call, so it is not cut off when
+    /// the app is suspended.
+    private func flushIfNeeded() async {
         saveTask?.cancel()
-        saveTask = nil
         let camera = currentCamera
         guard hasUnsavedChanges || (camera != nil && camera != savedCamera) else { return }
-        let snapshot = savedBoard
+        _ = await saveNow()
+    }
+
+    /// Flushes when the screen or the app goes away. The write is awaited
+    /// inside a background assertion, as `RootView` does for notebooks: a
+    /// detached `Task` alone gets no execution time once iOS suspends.
+    private func flush(holdingBackgroundTime: Bool) {
+        #if os(iOS)
+        let assertion = holdingBackgroundTime
+            ? UIApplication.shared.beginBackgroundTask(withName: "Save board")
+            : .invalid
+        #endif
         Task {
-            await model.save(snapshot, camera: camera)
+            await flushIfNeeded()
+            #if os(iOS)
+            if assertion != .invalid {
+                UIApplication.shared.endBackgroundTask(assertion)
+            }
+            #endif
         }
     }
 

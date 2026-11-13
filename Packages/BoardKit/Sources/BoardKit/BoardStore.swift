@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Errors thrown by `BoardStore`.
 public enum BoardStoreError: Error, Hashable, Sendable {
@@ -56,15 +59,10 @@ public actor BoardStore {
     /// name an item stores. The folder is created on first use.
     public func addAsset(_ data: Data, fileExtension: String) throws -> String {
         let name = UUID().uuidString.lowercased() + Self.normalizedExtension(fileExtension)
-        let directory = assetsDirectoryURL
-        let file = directory.appendingPathComponent(name, isDirectory: false)
+        let file = assetsDirectoryURL.appendingPathComponent(name, isDirectory: false)
 
         do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
-            try data.write(to: file, options: [.atomic])
+            try Self.writeDurably(data, to: file)
         } catch {
             throw BoardStoreError.ioFailure(
                 "could not write \(file.path): \(error.localizedDescription)"
@@ -159,15 +157,64 @@ public actor BoardStore {
         }
 
         do {
-            try FileManager.default.createDirectory(
-                at: rootURL,
-                withIntermediateDirectories: true
-            )
-            try data.write(to: url, options: [.atomic])
+            try Self.writeDurably(data, to: url)
         } catch {
             throw BoardStoreError.ioFailure(
                 "could not write \(url.path): \(error.localizedDescription)"
             )
+        }
+    }
+
+    /// Writes bytes so a crash leaves either the old file or the new one,
+    /// never a half-written file: a hidden temporary sibling is written,
+    /// flushed to disk, renamed over the target, and then the directory itself
+    /// is flushed so the rename survives a power loss.
+    ///
+    /// `Data.write(options: .atomic)` renames but does not flush, so a crash
+    /// just after a save can leave an empty or truncated board file.
+    private static func writeDurably(_ data: Data, to url: URL) throws {
+        let fileManager = FileManager.default
+        let directory = url.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let temporary = directory.appendingPathComponent(
+            ".tmp-\(UUID().uuidString)",
+            isDirectory: false
+        )
+        do {
+            try data.write(to: temporary, options: [])
+
+            let handle = try FileHandle(forWritingTo: temporary)
+            do {
+                try handle.synchronize()
+                try handle.close()
+            } catch {
+                try? handle.close()
+                throw error
+            }
+
+            // POSIX rename replaces an existing file in one step and cannot
+            // leave a copy behind, as `replaceItemAt` can.
+            guard rename(temporary.path, url.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            throw error
+        }
+
+        try syncDirectory(directory)
+    }
+
+    /// Flushes a directory entry, so a rename into it is on disk.
+    private static func syncDirectory(_ url: URL) throws {
+        let descriptor = open(url.path, O_RDONLY)
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { close(descriptor) }
+        guard fsync(descriptor) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }
 
