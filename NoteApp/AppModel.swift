@@ -68,6 +68,9 @@ final class AppModel {
     let search: HandwritingSearch
     let bookmarks = PageBookmarks()
     let outline = PageOutline()
+    /// Imported page templates, kept beside the library and copied into a
+    /// notebook's assets when one is applied.
+    let templates: CustomTemplateStore
     let study: StudyModel
     let textDocs: TextDocModel
     let boards: BoardModel
@@ -119,6 +122,7 @@ final class AppModel {
     init(root: URL = AppModel.defaultLibraryRoot()) {
         store = LibraryStore(root: root)
         search = HandwritingSearch(root: root)
+        templates = CustomTemplateStore(root: root.appendingPathComponent("templates", isDirectory: true))
         study = StudyModel(root: root.appendingPathComponent("StudySets", isDirectory: true))
         textDocs = TextDocModel(root: root.appendingPathComponent("TextDocs", isDirectory: true))
         boards = BoardModel(rootURL: root.appendingPathComponent("Boards", isDirectory: true))
@@ -152,6 +156,7 @@ final class AppModel {
         do {
             info = try await store.open()
             await reload()
+            templates.load()
             await purgeExpiredTrash()
             await study.load()
             await textDocs.load()
@@ -503,6 +508,7 @@ final class AppModel {
     func importPDF(
         from url: URL,
         selection: PDFPageSelection,
+        margin: PDFPageMargin = .none,
         password: String?,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> NotebookManifest {
@@ -510,6 +516,7 @@ final class AppModel {
             at: url,
             into: store,
             selection: selection,
+            margin: margin,
             password: password,
             onProgress: onProgress
         )

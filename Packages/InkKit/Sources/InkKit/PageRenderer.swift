@@ -69,7 +69,7 @@ public enum PageRenderer {
         context.translateBy(x: 0, y: CGFloat(pixelHeight))
         context.scaleBy(x: scale, y: -scale)
 
-        TemplateRenderer.draw(template, in: context, pageSize: pageSize)
+        TemplateRenderer.draw(template, in: context, pageSize: pageSize, assetsDirectory: assetsDirectory)
         PageElementRenderer.draw(elements, in: context, assetsDirectory: assetsDirectory)
         drawInk(in: context, strokes: strokes, pageSize: pageSize, scale: scale)
 

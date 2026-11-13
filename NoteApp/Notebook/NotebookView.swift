@@ -182,6 +182,8 @@ struct NotebookPane: View {
     @State private var selection = InkSelection()
     @State private var isRulerActive = false
     @State private var editor = EditorToolState()
+    /// Where PDF links were followed from, so a jump can be undone.
+    @State private var linkHistory = PDFLinkHistory()
     #if os(iOS)
     @State private var controller = PencilCanvasController()
     @State private var zoomController = PageZoomController()
@@ -206,25 +208,29 @@ struct NotebookPane: View {
     var body: some View {
         VStack(spacing: 0) {
             #if os(iOS)
-            EditorToolbar(
-                editor: editor,
-                controller: controller,
-                showsThumbnails: pagesPanelBinding,
-                audio: session.audio,
-                onBack: { model.showLibrary() },
-                onStopRecording: { Task { await session.audio.stopRecording() } },
-                onClearPage: { showsClearPageConfirmation = true },
-                isRulerActive: $isRulerActive,
-                onItemAction: { item in handleToolbarItem(item) },
-                onCustomizeToolbar: { showsToolbarEditor = true },
-                insertMenu: { insertMenuItems },
-                moreMenu: { moreMenuItems },
-                itemMenu: { item in toolbarItemMenu(for: item) }
-            )
+            if !editor.isReadingMode {
+                EditorToolbar(
+                    editor: editor,
+                    controller: controller,
+                    showsThumbnails: pagesPanelBinding,
+                    audio: session.audio,
+                    onBack: { model.showLibrary() },
+                    onStopRecording: { Task { await session.audio.stopRecording() } },
+                    onClearPage: { showsClearPageConfirmation = true },
+                    isRulerActive: $isRulerActive,
+                    onItemAction: { item in handleToolbarItem(item) },
+                    onCustomizeToolbar: { showsToolbarEditor = true },
+                    insertMenu: { insertMenuItems },
+                    moreMenu: { moreMenuItems },
+                    itemMenu: { item in toolbarItemMenu(for: item) }
+                )
+            }
             #else
             macHeader
             #endif
-            Divider()
+            if !editor.isReadingMode {
+                Divider()
+            }
             HStack(spacing: 0) {
                 if showsPagesPanelInline, pagesOnLeft {
                     pagesPanel
@@ -255,12 +261,17 @@ struct NotebookPane: View {
                                     .transition(.move(edge: .bottom).combined(with: .opacity))
                                 }
                                 #endif
-                                PageCounterPill(session: session) { index in
-                                    Task { await session.goToPage(index) }
+                                // Reading Mode is one clean page: no page chrome.
+                                if !editor.isReadingMode {
+                                    PageCounterPill(session: session) { index in
+                                        Task { await session.goToPage(index) }
+                                    }
+                                    .padding(.bottom, 12)
                                 }
                             }
-                            .padding(.bottom, 12)
                         }
+                        .overlay(alignment: .bottomLeading) { pdfLinkHistoryChip }
+                        .overlay(alignment: .topTrailing) { readingModeExit }
                     #if os(iOS)
                     if showsZoomView {
                         // `session.page` changes with every stroke, so the
@@ -317,6 +328,8 @@ struct NotebookPane: View {
                 #if os(iOS)
                 controller.clearSelection()
                 #endif
+            } else {
+                editor.isReadingMode = false
             }
         }
         .onChange(of: session.currentPageID) {
@@ -419,6 +432,8 @@ struct NotebookPane: View {
                 isApplying: session.isApplyingTemplate,
                 currentWidth: session.page?.width,
                 currentHeight: session.page?.height,
+                customTemplates: model.templates,
+                assetsDirectory: session.assetsDirectory,
                 onApplySize: { size, orientation, applyToAll in
                     let points = size.size(orientation)
                     Task {
@@ -821,6 +836,10 @@ struct NotebookPane: View {
                 get: { editor.isReadOnly },
                 set: { editor.isReadOnly = $0 }
             ))
+            Button("Reading Mode", systemImage: "book") {
+                startReadingMode()
+            }
+            .disabled(session.currentPageID == nil)
             Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
                 showsToolbarEditor = true
             }
@@ -1112,24 +1131,110 @@ struct NotebookPane: View {
 
     #if os(iOS)
     private func openPDFLink(at point: CGPoint) async {
-        guard let page = session.page,
-              let target = PDFLinkHandler.target(
-                  at: point,
-                  page: page,
-                  assetsDirectory: session.assetsDirectory
-              )
-        else { return }
+        guard let page = session.page else { return }
+
+        guard let target = PDFLinkHandler.target(
+            at: point,
+            page: page,
+            assetsDirectory: session.assetsDirectory
+        ) else {
+            // Nothing under the tap: in Reading Mode the page edges turn it.
+            guard editor.isReadingMode else { return }
+            await turnReadingPage(at: point, pageWidth: page.width)
+            return
+        }
 
         switch target {
         case .url(let url):
             await UIApplication.shared.open(url)
         case .page(let pdfPageIndex):
             if let index = session.notebookPageIndex(forPDFPage: pdfPageIndex, from: page) {
+                linkHistory.recordJump(from: session.pageIndex, notebookID: session.notebookID)
                 await session.goToPage(index)
             }
         }
     }
+
+    /// A tap in the outer strip of the page turns it: left goes back, right goes
+    /// on. The strip is a 44 pt target at its narrowest.
+    private func turnReadingPage(at point: CGPoint, pageWidth: Double) async {
+        let edge = max(44, pageWidth * 0.18)
+        if point.x <= edge {
+            await session.goToPreviousPage()
+        } else if point.x >= pageWidth - edge {
+            await session.goToNextPage()
+        }
+    }
     #endif
+
+    // MARK: - Reading Mode
+
+    /// Read Only with the chrome gone: one page, a tap on either edge turns it,
+    /// and PDF links still work. Leaving it brings the tools back.
+    private func startReadingMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pagesPanelBinding.wrappedValue = false
+            showsSearch = false
+            editor.isReadingMode = true
+            editor.isReadOnly = true
+        }
+    }
+
+    /// The only chrome Reading Mode keeps, so there is always a way back.
+    @ViewBuilder
+    private var readingModeExit: some View {
+        if editor.isReadingMode {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    editor.isReadingMode = false
+                    editor.isReadOnly = false
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "book")
+                        .font(.caption.weight(.semibold))
+                    Text("Done")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 36)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Leave Reading Mode")
+            .padding(12)
+        }
+    }
+
+    /// Back and Forward for the pages a PDF link led to.
+    @ViewBuilder
+    private var pdfLinkHistoryChip: some View {
+        let notebookID = session.notebookID
+        let back = linkHistory.backPageIndex(notebookID: notebookID)
+        let forward = linkHistory.forwardPageIndex(notebookID: notebookID)
+        if back != nil || forward != nil {
+            PDFLinkHistoryChip(
+                backPageNumber: back.map { $0 + 1 },
+                forwardPageNumber: forward.map { $0 + 1 },
+                onBack: { goInLinkHistory(backward: true) },
+                onForward: { goInLinkHistory(backward: false) }
+            )
+        }
+    }
+
+    private func goInLinkHistory(backward: Bool) {
+        let notebookID = session.notebookID
+        let current = session.pageIndex
+        let target = backward
+            ? linkHistory.goBack(notebookID: notebookID, pageIndex: current)
+            : linkHistory.goForward(notebookID: notebookID, pageIndex: current)
+        guard let target else { return }
+        Task { await session.goToPage(target) }
+    }
 
     private var bookmarkedPageIndices: [Int] {
         let ids = model.bookmarks.bookmarkedPageIDs(notebookID: session.notebookID)

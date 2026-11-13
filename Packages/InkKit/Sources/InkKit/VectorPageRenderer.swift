@@ -53,7 +53,7 @@ public enum VectorPageRenderer {
 
         if includeTemplate {
             context.saveGState()
-            TemplateRenderer.draw(page.template, in: context, pageSize: size)
+            TemplateRenderer.draw(page.template, in: context, pageSize: size, assetsDirectory: assetsDirectory)
             context.restoreGState()
         } else {
             context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
