@@ -11,12 +11,62 @@ enum PageDefaults {
     nonisolated static let blank = PageTemplate.blank
 }
 
+/// Pages waiting for the write queue: the newest version of each page, in the
+/// order the pages were first queued.
+///
+/// One page's failed save stays queued while another page is edited, and a
+/// newer version of a page replaces the older one without writing it twice.
+struct PendingPageQueue {
+    private var pages: [UUID: Page] = [:]
+    private var order: [UUID] = []
+
+    var isEmpty: Bool { order.isEmpty }
+
+    /// Queues `page`. A page already waiting keeps its place and takes the
+    /// newer version; editing another page never removes it.
+    mutating func enqueue(_ page: Page) {
+        if pages.updateValue(page, forKey: page.id) == nil {
+            order.append(page.id)
+        }
+    }
+
+    /// Takes the page queued longest ago out of the queue for writing.
+    mutating func takeFirst() -> Page? {
+        while !order.isEmpty {
+            let pageID = order.removeFirst()
+            if let page = pages.removeValue(forKey: pageID) {
+                return page
+            }
+        }
+        return nil
+    }
+
+    /// Puts a page whose write failed back at the front, unless a newer version
+    /// of it is already waiting — that one supersedes the failed copy.
+    mutating func retry(_ page: Page) {
+        guard pages[page.id] == nil else { return }
+        pages[page.id] = page
+        order.insert(page.id, at: 0)
+    }
+
+    /// True when this page still has changes that are not on disk.
+    func contains(_ pageID: UUID) -> Bool { pages[pageID] != nil }
+
+    /// Drops a page, for a deletion. Returns the copy it held, if any.
+    @discardableResult
+    mutating func remove(_ pageID: UUID) -> Page? {
+        order.removeAll { $0 == pageID }
+        return pages.removeValue(forKey: pageID)
+    }
+}
+
 /// One open notebook: the current page, its save state and page operations.
 ///
 /// The in-memory `page` is the truth. Every edit replaces it and queues the
 /// whole page for saving; saves run one at a time in the order they were
 /// queued, so an older snapshot of the page can never land on disk after a
-/// newer one.
+/// newer one. Each page has its own slot in the queue, so a failed save of one
+/// page is never erased by an edit on another.
 @MainActor
 @Observable
 final class NotebookSession: Identifiable {
@@ -63,11 +113,25 @@ final class NotebookSession: Identifiable {
 
     /// The debounce timer for ink.
     @ObservationIgnored private var saveTask: Task<Void, Never>?
-    /// The newest page not yet handed to the write queue.
-    @ObservationIgnored private var pendingPage: Page?
+    /// Pages not yet on disk, newest version per page, in the order they were
+    /// first queued. An edit on one page never removes another page's entry.
+    @ObservationIgnored private var pendingPages = PendingPageQueue()
+    /// The drain that hands queued pages to the write queue. A second commit
+    /// joins it instead of starting a competing drain, so a caller never sees
+    /// "nothing pending" while a failed page is still being put back.
+    @ObservationIgnored private var drainTask: Task<Void, Never>?
     /// The last queued write; each write waits for the one before it.
     @ObservationIgnored private var writeChain: Task<Void, Never>?
     @ObservationIgnored private var writesInFlight = 0
+    /// Pages deleted in this session. `savePage` appends an unknown id to
+    /// `pageOrder`, so a save queued before the delete must not run after it.
+    @ObservationIgnored private var deletedPageIDs: Set<UUID> = []
+    /// The number of the newest `loadPage`. A load that finishes after a newer
+    /// one must not touch the page on screen.
+    @ObservationIgnored private var loadGeneration = 0
+    /// True while the error banner is about pages that are not on disk. Only a
+    /// save that gets every page down clears it.
+    @ObservationIgnored private var hasUnsavedPagesProblem = false
 
     /// When each page last got a history snapshot.
     @ObservationIgnored private var lastSnapshotAt: [UUID: Date] = [:]
@@ -236,20 +300,36 @@ final class NotebookSession: Identifiable {
     // MARK: - Pages
 
     func loadPage(at index: Int) async {
-        // Whatever is queued for the page on screen goes to disk first, so the
-        // page read below (possibly the same one) is current.
+        // A newer turn supersedes this one; the token is checked after every
+        // await below so a slow read cannot put an older page on screen.
+        loadGeneration &+= 1
+        let generation = loadGeneration
         let leaving = page?.id
+
+        // Whatever is queued goes to disk first. A page that cannot be saved
+        // must not be navigated away from: the ink exists only in memory.
         await commitPendingSave()
+        guard generation == loadGeneration else { return }
+        guard pendingPages.isEmpty else {
+            hasUnsavedPagesProblem = true
+            errorMessage = Self.navigationBlockedMessage
+            // The refusal is not a load in progress.
+            isLoadingPage = false
+            return
+        }
+
         guard !manifest.pageOrder.isEmpty else {
             if let leaving { snapshotUnsaved(pageID: leaving, reason: "closed page") }
             page = nil
             pageIndex = 0
+            isLoadingPage = false
             return
         }
         let clamped = min(max(0, index), manifest.pageOrder.count - 1)
         isLoadingPage = true
         do {
             var loaded = try await store.loadPage(manifest.pageOrder[clamped], in: manifest.id)
+            guard generation == loadGeneration else { return }
             if let leaving, leaving != loaded.id {
                 snapshotUnsaved(pageID: leaving, reason: "closed page")
                 // Which tape is held up belongs to the page on screen, not the
@@ -269,13 +349,16 @@ final class NotebookSession: Identifiable {
             rememberVisitedPage()
             recordHistory(loaded.id)
         } catch {
+            guard generation == loadGeneration else { return }
             if let leaving {
                 snapshotUnsaved(pageID: leaving, reason: "closed page")
             }
-            if let recovered = await recoverQuarantinedPage(
+            let recovered = await recoverQuarantinedPage(
                 pageID: manifest.pageOrder[clamped],
                 error: error
-            ) {
+            )
+            guard generation == loadGeneration else { return }
+            if let recovered {
                 revealedTapeIDs.removeAll()
                 page = recovered
                 pageIndex = clamped
@@ -289,7 +372,11 @@ final class NotebookSession: Identifiable {
                 loadError = error.localizedDescription
             }
         }
-        isLoadingPage = false
+        // Reached only by the newest load (no await since the last check), but
+        // never let a superseded load clear the newer one's progress state.
+        if generation == loadGeneration {
+            isLoadingPage = false
+        }
     }
 
     /// A page file that does not decode is moved out of the notebook and replaced
@@ -522,24 +609,31 @@ final class NotebookSession: Identifiable {
 
     func deleteCurrentPage() async {
         guard let page else { return }
-        // Drop what is queued for this page: saving it after the delete would
-        // put the page file back as an orphan.
+        let pageID = page.id
+        // Get the page's newest ink on disk first, so the history and search
+        // bookkeeping for it is complete. A failed save stays queued and is
+        // dropped below: the page is going away.
         saveTask?.cancel()
         saveTask = nil
-        let dropped = pendingPage?.id == page.id ? pendingPage : nil
-        if dropped != nil { pendingPage = nil }
-        await commitPendingSave()  // waits for writes already queued
+        await commitPendingSave()
+        // No save may run for this page from here on: `savePage` appends an id
+        // the manifest does not know, which would resurrect the deleted page.
+        let dropped = pendingPages.remove(pageID)
+        deletedPageIDs.insert(pageID)
         do {
-            try await store.deletePage(page.id, in: manifest.id)
-            unsnapshotted[page.id] = nil
-            lastSnapshotAt[page.id] = nil
-            onPageDeleted?(page.id)
+            try await store.deletePage(pageID, in: manifest.id)
+            unsnapshotted[pageID] = nil
+            lastSnapshotAt[pageID] = nil
+            onPageDeleted?(pageID)
             await reloadManifest()
             self.page = nil
+            // The unsaved page was the one just deleted on purpose.
+            clearUnsavedPagesProblemIfResolved()
             await loadPage(at: min(pageIndex, max(0, pageCount - 1)))
         } catch {
             // Keep the page and its unsaved ink.
-            if let dropped, pendingPage == nil { scheduleSave(dropped) }
+            deletedPageIDs.remove(pageID)
+            if let dropped { pendingPages.enqueue(dropped) }
             errorMessage = "The page could not be deleted."
         }
     }
@@ -992,22 +1086,33 @@ final class NotebookSession: Identifiable {
 
     // MARK: - Saving
 
+    private static let saveFailureMessage =
+        "Your latest changes could not be saved. They are kept and will be retried."
+    private static let navigationBlockedMessage =
+        "This page could not be saved, so it stays on screen. Try turning the page again to retry."
+
     /// Replaces the page and writes it now, through the ordered queue.
     @discardableResult
     private func saveEditedPage(_ updated: Page, failure: String) async -> Bool {
         page = updated
         revision &+= 1
         ThumbnailCache.invalidate(notebookID: manifest.id, pageID: updated.id)
-        pendingPage = updated
-        let saved = await commitSucceeded()
-        if !saved {
-            errorMessage = failure
+        enqueuePendingPage(updated)
+        await commitPendingSave()
+        // Another page may still be waiting on a failure of its own; this edit
+        // only reports on the page it changed. Keep the "not saved" warning —
+        // it is the reason the edit is not on disk.
+        guard !pendingPages.contains(updated.id) else {
+            if !hasUnsavedPagesProblem {
+                errorMessage = failure
+            }
+            return false
         }
-        return saved
+        return true
     }
 
     private func scheduleSave(_ page: Page) {
-        pendingPage = page
+        enqueuePendingPage(page)
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -1016,57 +1121,98 @@ final class NotebookSession: Identifiable {
         }
     }
 
+    /// Queues a page for the write queue. A deleted page is never queued again,
+    /// or it would be re-appended to `pageOrder` by `savePage`.
+    private func enqueuePendingPage(_ page: Page) {
+        guard !deletedPageIDs.contains(page.id) else { return }
+        pendingPages.enqueue(page)
+    }
+
     /// Commits and reports whether nothing is left unsaved afterwards.
     private func commitSucceeded() async -> Bool {
         await commitPendingSave()
-        return pendingPage == nil
+        return pendingPages.isEmpty
     }
 
-    /// Writes the newest queued page and waits until it, and every write
-    /// queued before it, is on disk. With nothing queued it still waits for
-    /// writes in flight.
+    /// Writes every queued page in the order the pages were queued and waits
+    /// until they are on disk. A page that fails stays queued for the next
+    /// flush; a page whose save succeeded is dropped unless a newer version of
+    /// it was queued while the write ran.
     func commitPendingSave() async {
         saveTask?.cancel()
         saveTask = nil
-        guard let toSave = pendingPage else {
-            await writeChain?.value
+        // One drain at a time. A second caller waits for the running one, so it
+        // cannot report "all saved" while a failed page is being put back.
+        if let drainTask {
+            await drainTask.value
             return
         }
-        pendingPage = nil
-
-        let previous = writeChain
-        let store = store
-        let notebookID = manifest.id
-        let write = Task<(any Error)?, Never> {
-            await previous?.value
-            do {
-                try await store.savePage(toSave, in: notebookID)
-                return nil
-            } catch {
-                return error
-            }
-        }
-        writeChain = Task { _ = await write.value }
-
-        writesInFlight += 1
-        isSaving = true
-        let error = await write.value
-        writesInFlight -= 1
-        isSaving = writesInFlight > 0
-
-        if error != nil {
-            // Put the page back unless something newer replaced it, and retry
-            // with the next save.
-            if pendingPage == nil { pendingPage = toSave }
-            errorMessage = "Your latest changes could not be saved. They are kept and will be retried."
-            return
-        }
-        noteSaved(toSave)
-        await reloadManifest()
+        guard !pendingPages.isEmpty else { return }
+        let drain = Task { await self.drainPendingPages() }
+        drainTask = drain
+        await drain.value
     }
 
-    /// Writes any pending page and waits until it is on disk, then records a
-    /// history snapshot of unsnapshotted changes. Call before the app leaves
+    private func drainPendingPages() async {
+        defer { drainTask = nil }
+        // Pages that failed this drain. They go back at the front afterwards,
+        // unless a newer version of the page got through later in the drain.
+        var failed: [Page] = []
+        while let toSave = pendingPages.takeFirst() {
+            guard !deletedPageIDs.contains(toSave.id) else { continue }
+
+            let previous = writeChain
+            let store = store
+            let notebookID = manifest.id
+            let write = Task<(any Error)?, Never> {
+                await previous?.value
+                do {
+                    try await store.savePage(toSave, in: notebookID)
+                    return nil
+                } catch {
+                    return error
+                }
+            }
+            writeChain = Task { _ = await write.value }
+
+            writesInFlight += 1
+            isSaving = true
+            let error = await write.value
+            writesInFlight -= 1
+            isSaving = writesInFlight > 0
+
+            if error != nil {
+                // Keep the page for the next flush; the other queued pages are
+                // still written, so one bad file cannot hold their ink hostage.
+                failed.append(toSave)
+                hasUnsavedPagesProblem = true
+                errorMessage = Self.saveFailureMessage
+                continue
+            }
+            // A newer version that got through supersedes an older failed copy.
+            failed.removeAll { $0.id == toSave.id }
+            noteSaved(toSave)
+            await reloadManifest()
+        }
+        for page in failed.reversed() {
+            pendingPages.retry(page)
+        }
+        // Every page is on disk, so the "not saved" banner has been resolved.
+        clearUnsavedPagesProblemIfResolved()
+    }
+
+    /// Clears the "not saved" banner once nothing is left unsaved. Any other
+    /// message is left alone.
+    private func clearUnsavedPagesProblemIfResolved() {
+        guard pendingPages.isEmpty, hasUnsavedPagesProblem else { return }
+        hasUnsavedPagesProblem = false
+        if errorMessage == Self.saveFailureMessage || errorMessage == Self.navigationBlockedMessage {
+            errorMessage = nil
+        }
+    }
+
+    /// Writes every pending page and waits until they are on disk, then records
+    /// history snapshots of unsnapshotted changes. Call before the app leaves
     /// the foreground or a notebook closes.
     func flushPendingSave() async {
         await commitPendingSave()

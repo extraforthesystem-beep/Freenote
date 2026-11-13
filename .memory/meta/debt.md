@@ -5,7 +5,7 @@ description: "Harvested `ponytail:` shortcuts — ceiling and upgrade path"
 tags:
   - ponytail
   - debt
-timestamp: "2026-11-13T10:54:07Z"
+timestamp: "2026-11-13T12:19:20Z"
 ---
 
 # Ponytail Debt

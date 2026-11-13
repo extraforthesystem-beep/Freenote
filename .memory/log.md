@@ -33,3 +33,5 @@
 - 2026-11-13T10:52:51Z | harness-sync | regenerated index (20 concepts)
 - 2026-11-13T10:53:36Z | harness-sync | regenerated index (20 concepts)
 - 2026-11-13T10:54:07Z | harness-sync | regenerated index (20 concepts)
+- 2026-11-13T12:18:04Z | harness-sync | regenerated index (23 concepts)
+- 2026-11-13T12:19:20Z | harness-sync | regenerated index (23 concepts)

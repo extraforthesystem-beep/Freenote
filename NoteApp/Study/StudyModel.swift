@@ -22,7 +22,13 @@ final class StudyModel {
     /// not be read. Cleared by a successful `load()`.
     var lastError: String?
 
-    private var stateWriteTask: Task<Void, Never>?
+    /// The latest queued write; each write waits for the one before it.
+    private var stateWriteTask: Task<Bool, Never>?
+    /// Bumped whenever the review states change.
+    private var stateRevision = 0
+    /// The newest revision known to be on disk. Equal to `stateRevision` when
+    /// there is nothing to write.
+    private var savedRevision = 0
     private var hasReportedStateWriteFailure = false
 
     init(root: URL) {
@@ -95,6 +101,7 @@ final class StudyModel {
             try await store.delete(set.id)
             sets.removeAll { $0.id == set.id }
             reviewStates.removeValue(forKey: set.id.uuidString)
+            stateRevision &+= 1
             scheduleStateWrite(delay: .zero)
         } catch {
             lastError = error.localizedDescription
@@ -147,6 +154,7 @@ final class StudyModel {
         var raw = reviewStates[setID.uuidString] ?? [:]
         raw[state.cardID.uuidString] = state
         reviewStates[setID.uuidString] = raw
+        stateRevision &+= 1
         scheduleStateWrite()
     }
 
@@ -316,32 +324,92 @@ final class StudyModel {
         reviewStates = decoded.sets
     }
 
-    /// Writes the review-state cache after `delay`, cancelling any pending write.
+    /// The message kept in `lastError` while grades cannot reach disk.
+    private static let stateWriteFailureMessage =
+        "Review progress could not be saved. Your grades still apply for this session."
+
+    /// Writes the review states now, cancelling any pending debounce, and waits
+    /// for the file. Returns false when the states could not be saved.
+    ///
+    /// Safe to call beside a scheduled write: writes are serialized and a
+    /// snapshot already on disk is not written again.
+    @discardableResult
+    func flushStateWrite() async -> Bool {
+        let revision = stateRevision
+        let task = enqueueStateWrite(delay: .zero)
+        if await task.value { return true }
+        // Another write replaced this one (a second flush, or a grade that
+        // arrived first). Wait for the latest one and report that snapshot.
+        if let latest = stateWriteTask {
+            _ = await latest.value
+        }
+        return savedRevision >= revision
+    }
+
+    /// Writes the review-state cache after `delay`, replacing any pending write.
     private func scheduleStateWrite(delay: Duration = .milliseconds(750)) {
+        enqueueStateWrite(delay: delay)
+    }
+
+    /// Queues one write of the current snapshot.
+    ///
+    /// Each write waits for the one before it, so an older snapshot can never
+    /// land after a newer one, and a canceled debounce still lets the write it
+    /// already started finish before the next one begins.
+    @discardableResult
+    private func enqueueStateWrite(delay: Duration) -> Task<Bool, Never> {
+        let previous = stateWriteTask
+        previous?.cancel()
+        let revision = stateRevision
         let snapshot = StateFile(sets: reviewStates)
         let url = statesURL
-        stateWriteTask?.cancel()
-        stateWriteTask = Task { [weak self] in
+        let task: Task<Bool, Never> = Task { [weak self] in
             if delay > .zero {
                 try? await Task.sleep(for: delay)
             }
-            guard !Task.isCancelled else { return }
-            let written = await Task.detached(priority: .utility) { () -> Bool in
-                guard let data = try? JSONEncoder().encode(snapshot) else { return false }
-                do {
-                    try data.write(to: url, options: .atomic)
-                    return true
-                } catch {
-                    return false
-                }
-            }.value
-            guard let self, !Task.isCancelled else { return }
-            if written {
-                self.hasReportedStateWriteFailure = false
-            } else if !self.hasReportedStateWriteFailure {
-                self.hasReportedStateWriteFailure = true
-                self.lastError = "Review progress could not be saved. Your grades still apply for this session."
+            // One writer at a time: a newer snapshot never overtakes the one
+            // it replaces. This runs before the cancellation check because a
+            // replaced debounce must still keep the chain intact.
+            _ = await previous?.value
+            guard !Task.isCancelled else { return false }
+            guard let self else { return false }
+            // An earlier write already covered this snapshot.
+            guard self.savedRevision < revision else { return true }
+            let written = await Self.write(snapshot, to: url)
+            self.noteStateWrite(revision: revision, written: written)
+            return written
+        }
+        stateWriteTask = task
+        return task
+    }
+
+    /// Encodes and writes one snapshot off the main actor.
+    private nonisolated static func write(_ snapshot: StateFile, to url: URL) async -> Bool {
+        await Task.detached(priority: .utility) { () -> Bool in
+            guard let data = try? JSONEncoder().encode(snapshot) else { return false }
+            do {
+                try data.write(to: url, options: .atomic)
+                return true
+            } catch {
+                return false
             }
+        }.value
+    }
+
+    /// Records one write's outcome. The failure message stays in `lastError`
+    /// until a later write succeeds; a cancelled write was replaced by a newer
+    /// snapshot, so it does not report.
+    private func noteStateWrite(revision: Int, written: Bool) {
+        if written {
+            savedRevision = max(savedRevision, revision)
+            guard !Task.isCancelled else { return }
+            hasReportedStateWriteFailure = false
+            if lastError == Self.stateWriteFailureMessage {
+                lastError = nil
+            }
+        } else if !Task.isCancelled, !hasReportedStateWriteFailure {
+            hasReportedStateWriteFailure = true
+            lastError = Self.stateWriteFailureMessage
         }
     }
 

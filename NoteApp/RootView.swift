@@ -37,15 +37,20 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
             // Leaving the foreground: the app may be suspended or killed with
-            // no further notice, so put every open notebook on disk now.
+            // no further notice, so put every open notebook and pending grade
+            // on disk now.
             // Recording stops only in the background: `.inactive` also covers
             // Control Center and the app switcher, which should not end it.
             let sessions = model.tabs
+            let study = model.study
             let stopsRecording = phase == .background
             #if os(iOS)
             let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save notebooks")
             #endif
             Task {
+                // Grades are a small file; write them first so the last one
+                // lands inside the background-task window.
+                await study.flushStateWrite()
                 for session in sessions {
                     if stopsRecording {
                         await session.audio.stopRecording()

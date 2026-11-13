@@ -51,7 +51,7 @@ struct TextDocumentStoreTests {
         }
     }
 
-    @Test("A future schema is refused on load and list")
+    @Test("A future schema is refused on load and reported by the listing")
     func futureSchemaIsRefusedOnLoad() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -77,9 +77,37 @@ struct TextDocumentStoreTests {
         await #expect(throws: expected) {
             _ = try await store.load(id: id)
         }
-        await #expect(throws: expected) {
-            _ = try await store.list()
-        }
+
+        let listing = try await store.listReportingIssues()
+        #expect(listing.documents.isEmpty)
+        #expect(listing.issues.count == 1)
+        #expect(listing.issues.first?.url.lastPathComponent == file.lastPathComponent)
+        #expect(listing.issues.first?.message.contains("Unsupported schema version") == true)
+        #expect(try await store.list().isEmpty)
+    }
+
+    @Test("A corrupt file never hides the readable documents")
+    func corruptFileIsSkippedByListing() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TextDocumentStore(root: root)
+        let readable = TextDocument(title: "Readable")
+        _ = try await store.save(readable)
+
+        let corruptID = UUID()
+        let corruptFile = store.fileURL(for: corruptID)
+        let bytes = Data("this is not a document".utf8)
+        try bytes.write(to: corruptFile)
+
+        let listing = try await store.listReportingIssues()
+        #expect(listing.documents.map(\.id) == [readable.id])
+        #expect(listing.issues.count == 1)
+        #expect(listing.issues.first?.url.lastPathComponent == corruptFile.lastPathComponent)
+        #expect(listing.issues.first?.message.contains("Corrupt text document") == true)
+
+        // The damaged file is reported, not deleted or rewritten.
+        #expect(try Data(contentsOf: corruptFile) == bytes)
+        #expect(try await store.list().map(\.id) == [readable.id])
     }
 
     @Test("A future schema is refused on save and writes nothing")

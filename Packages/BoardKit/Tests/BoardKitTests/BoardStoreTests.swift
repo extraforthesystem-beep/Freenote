@@ -71,6 +71,43 @@ final class BoardStoreTests: XCTestCase {
         try await store.delete(document.board.id)
     }
 
+    func testSaveLoadRoundTripsADocumentAndLeavesNoTemporaryFiles() async throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BoardStore(rootURL: directory)
+        let document = makeDocument()
+        let file = store.fileURL(for: document.board.id)
+
+        try await store.save(document)
+        let firstLoad = try await store.load(document.board.id)
+        XCTAssertEqual(firstLoad, document)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            [file.lastPathComponent]
+        )
+
+        // Overwriting an existing file goes through the same rename path.
+        try await store.save(document)
+        let secondLoad = try await store.load(document.board.id)
+        XCTAssertEqual(secondLoad, document)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            [file.lastPathComponent]
+        )
+    }
+
+    func testAddAssetLeavesNoTemporaryFile() async throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BoardStore(rootURL: directory)
+
+        let name = try await store.addAsset(Data([1, 2, 3]), fileExtension: "png")
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: store.assetsDirectoryURL.path),
+            [name]
+        )
+    }
+
     func testOneFilePerBoardAndSortedListing() async throws {
         let directory = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -75,7 +75,7 @@ public actor AudioClipStore {
         try ensureRoot()
         let data: Data
         do {
-            data = try Self.makeEncoder().encode(clip)
+            data = try AudioJSON.makeEncoder().encode(clip)
         } catch {
             throw AudioKitError.storeFailure(
                 "could not encode clip \(clip.id.uuidString): \(error.localizedDescription)"
@@ -137,7 +137,7 @@ public actor AudioClipStore {
         }
         let clip: AudioClip
         do {
-            clip = try Self.makeDecoder().decode(AudioClip.self, from: data)
+            clip = try AudioJSON.makeDecoder().decode(AudioClip.self, from: data)
         } catch {
             throw AudioKitError.corruptMetadata(url.lastPathComponent)
         }
@@ -165,50 +165,5 @@ public actor AudioClipStore {
         guard clip.createdAt.timeIntervalSinceReferenceDate.isFinite else {
             throw AudioKitError.invalidClip("createdAt is not a finite date")
         }
-    }
-
-    /// `2026-11-12T10:22:33.123Z`. A formatter is created per call because
-    /// `ISO8601DateFormatter` is not `Sendable`; metadata files are tiny, so the
-    /// cost does not matter.
-    private static func isoString(from date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter.string(from: date)
-    }
-
-    private static func date(fromISOString text: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter.date(from: text)
-    }
-
-    private static func makeEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        encoder.dateEncodingStrategy = .custom { date, encoder in
-            var container = encoder.singleValueContainer()
-            try container.encode(Self.isoString(from: date))
-        }
-        return encoder
-    }
-
-    private static func makeDecoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let text = try container.decode(String.self)
-            guard let date = Self.date(fromISOString: text) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: decoder.codingPath,
-                        debugDescription: "not an ISO-8601 timestamp: \(text)"
-                    )
-                )
-            }
-            return date
-        }
-        return decoder
     }
 }

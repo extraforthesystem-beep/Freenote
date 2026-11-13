@@ -1,5 +1,34 @@
 import Foundation
 
+/// One document file that could not be read, and why.
+public struct TextDocumentLoadIssue: Hashable, Sendable {
+    /// The file that was skipped.
+    public let url: URL
+    /// A human-readable reason, safe to show in the library.
+    public let message: String
+
+    /// Creates an issue for `url` with `message`.
+    public init(url: URL, message: String) {
+        self.url = url
+        self.message = message
+    }
+}
+
+/// The result of listing a text-document directory: what could be read, plus
+/// what could not. A listing never fails because of a single bad file.
+public struct TextDocumentListing: Sendable {
+    /// Every document that decoded, in the same order as ``TextDocumentStore/list()``.
+    public let documents: [TextDocument]
+    /// Files that were skipped because they could not be read.
+    public let issues: [TextDocumentLoadIssue]
+
+    /// Creates a listing.
+    public init(documents: [TextDocument], issues: [TextDocumentLoadIssue] = []) {
+        self.documents = documents
+        self.issues = issues
+    }
+}
+
 /// Persists one JSON file per text document under a caller-owned root directory.
 ///
 /// Files are named `<lowercased-uuid>.json`. Writes are atomic, so a crash leaves
@@ -69,10 +98,21 @@ public actor TextDocumentStore {
     /// All documents in the store, most recently updated first.
     ///
     /// Files whose names are not document UUIDs are ignored. A corrupt or
-    /// future-schema document makes the call throw rather than disappear from
-    /// the library silently.
+    /// future-schema document is skipped, so one bad file never hides the rest
+    /// of the library; use ``listReportingIssues()`` to see what was skipped.
     public func list() throws -> [TextDocument] {
-        guard fileManager.fileExists(atPath: root.path) else { return [] }
+        try listReportingIssues().documents
+    }
+
+    /// Lists every readable document and reports the files that had to be skipped.
+    ///
+    /// Only a failure to read the directory itself throws. Unreadable files and
+    /// files from a newer schema are returned in ``TextDocumentListing/issues``;
+    /// they are left on disk untouched.
+    public func listReportingIssues() throws -> TextDocumentListing {
+        guard fileManager.fileExists(atPath: root.path) else {
+            return TextDocumentListing(documents: [])
+        }
         let urls: [URL]
         do {
             urls = try fileManager.contentsOfDirectory(
@@ -85,18 +125,26 @@ public actor TextDocumentStore {
         }
 
         var documents: [TextDocument] = []
+        var issues: [TextDocumentLoadIssue] = []
         for url in urls where url.pathExtension.lowercased() == "json" {
             guard UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil else {
                 continue
             }
-            documents.append(try load(fileURL: url))
+            do {
+                documents.append(try load(fileURL: url))
+            } catch {
+                let message = (error as? TextDocError)?.description
+                    ?? error.localizedDescription
+                issues.append(TextDocumentLoadIssue(url: url, message: message))
+            }
         }
-        return documents.sorted {
+        documents.sort {
             if $0.updatedAt != $1.updatedAt {
                 return $0.updatedAt > $1.updatedAt
             }
             return $0.id.uuidString < $1.id.uuidString
         }
+        return TextDocumentListing(documents: documents, issues: issues)
     }
 
     /// Deletes the document with `id`, or throws ``TextDocError/notFound(path:)``.
