@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// The editor's single toolbar row.
 ///
-/// Left (pinned): back, pages, undo, redo. Centre: the pen chip and the
+/// Left (pinned): back and the Pages toggle. Centre: the pen chip and the
 /// customisable tool items, the colour favourites and the width presets.
 /// Right: recording and the More menu. Only the colour favourites scroll; when
 /// the row is too narrow for every tool the extra ones move into an overflow
@@ -15,8 +15,6 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     @Bindable var editor: EditorToolState
     let controller: PencilCanvasController
     @Binding var showsThumbnails: Bool
-    /// Which edge the Pages panel sits on.
-    let pagesOnLeft: Bool
     let isRecording: Bool
     let recordingLabel: String
     let onBack: () -> Void
@@ -33,6 +31,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     @ViewBuilder let itemMenu: (ToolbarItemID) -> ItemMenu
 
     @AppStorage(ToolbarLayout.storageKey) private var layoutStorage = ToolbarLayout.defaultStorage
+    @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesOnLeft = false
     @State private var popover: ToolPopover?
     @State private var showsPalette = false
     @State private var showsFavoritePens = false
@@ -95,6 +94,14 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 editor.isZoomViewShown.toggle()
             }
             .keyboardShortcut("z", modifiers: [])
+            Button("Undo") {
+                controller.undo()
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            Button("Redo") {
+                controller.redo()
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -121,16 +128,6 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             ) {
                 withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
             }
-            ToolbarIconButton("Undo", systemImage: "arrow.uturn.backward") {
-                controller.undo()
-            }
-            .disabled(!controller.canUndo || editor.isReadOnly)
-            .keyboardShortcut("z", modifiers: .command)
-            ToolbarIconButton("Redo", systemImage: "arrow.uturn.forward") {
-                controller.redo()
-            }
-            .disabled(!controller.canRedo || editor.isReadOnly)
-            .keyboardShortcut("z", modifiers: [.command, .shift])
         }
     }
 
@@ -293,6 +290,11 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             Menu(item.title, systemImage: item.systemImage) { favoritePensMenuItems }
         case .ruler:
             Toggle(item.title, systemImage: item.systemImage, isOn: $isRulerActive)
+        case .undo, .redo:
+            Button(item.title, systemImage: item.systemImage) {
+                activate(item)
+            }
+            .disabled(editor.isReadOnly || !isHistoryStepAvailable(item))
         default:
             Button(item.title, systemImage: item.systemImage) {
                 activate(item)
@@ -348,7 +350,25 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             stickyNoteButton
         case .favoritePens:
             favoritePensButton
+        case .undo, .redo:
+            historyButton(item)
         }
+    }
+
+    /// Undo and Redo are opt-in toolbar items: plain buttons, not tool choices.
+    private func historyButton(_ item: ToolbarItemID) -> some View {
+        ToolbarIconButton(item.title, systemImage: item.systemImage, help: item.title) {
+            if item == .undo {
+                controller.undo()
+            } else {
+                controller.redo()
+            }
+        }
+        .disabled(editor.isReadOnly || !isHistoryStepAvailable(item))
+    }
+
+    private func isHistoryStepAvailable(_ item: ToolbarItemID) -> Bool {
+        item == .undo ? controller.canUndo : controller.canRedo
     }
 
     /// Runs the item's existing action; used by the overflow menu too.
@@ -372,6 +392,10 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             isRulerActive.toggle()
         case .textBox, .image, .addPage, .search:
             onItemAction(item)
+        case .undo:
+            controller.undo()
+        case .redo:
+            controller.redo()
         case .insert, .shapes, .stickyNote, .favoritePens:
             break
         }

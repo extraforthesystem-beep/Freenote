@@ -171,6 +171,8 @@ struct NotebookPane: View {
     @State private var showsAudio = false
     @State private var showsAI = false
     @State private var showsToolbarEditor = false
+    /// The compact-width sheet, which only opens when the reader asks for it.
+    @State private var showsCompactPages = false
     @State private var showsHistory = false
     @State private var showsLassoHint = false
     @State private var selectedElementID: UUID?
@@ -204,7 +206,6 @@ struct NotebookPane: View {
                 editor: editor,
                 controller: controller,
                 showsThumbnails: pagesPanelBinding,
-                pagesOnLeft: pagesOnLeft,
                 isRecording: session.audio.isRecording,
                 recordingLabel: elapsedLabel,
                 onBack: { model.showLibrary() },
@@ -434,7 +435,7 @@ struct NotebookPane: View {
                 session: session,
                 isOnLeft: pagesOnLeft,
                 onSelect: { index in Task { await session.goToPage(index) } },
-                onClose: { showsThumbnails = false }
+                onClose: { pagesPanelBinding.wrappedValue = false }
             )
             .presentationDetents([.medium, .large])
         }
@@ -519,19 +520,26 @@ struct NotebookPane: View {
     /// Opening the panel closes Search when the panel would share its edge.
     private var pagesPanelBinding: Binding<Bool> {
         Binding(
-            get: { showsThumbnails },
+            get: { pagesPanelIsInline ? showsThumbnails : showsCompactPages },
             set: { isShown in
                 if isShown && !pagesOnLeft { showsSearch = false }
-                showsThumbnails = isShown
+                if pagesPanelIsInline {
+                    showsThumbnails = isShown
+                } else {
+                    showsCompactPages = isShown
+                    // The stored flag remembers the panel closed too.
+                    showsThumbnails = isShown
+                }
             }
         )
     }
 
-    /// Compact width presents the same grid as a sheet, with the flag as state.
+    /// Compact width presents the same grid as a sheet. The sheet waits for a
+    /// tap, so a remembered open panel never covers a page at launch.
     private var compactPagesSheetBinding: Binding<Bool> {
         Binding(
-            get: { showsThumbnails && !pagesPanelIsInline },
-            set: { if !$0 { showsThumbnails = false } }
+            get: { showsCompactPages && !pagesPanelIsInline },
+            set: { if !$0 { showsCompactPages = false } }
         )
     }
 

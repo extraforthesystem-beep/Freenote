@@ -78,6 +78,13 @@ final class ToolbarLayoutTests: XCTestCase {
         XCTAssertEqual(available, ToolbarItemID.allCases)
     }
 
+    func testUndoAndRedoAreOptIn() {
+        XCTAssertFalse(ToolbarLayout.defaultItems.contains(.undo))
+        XCTAssertFalse(ToolbarLayout.defaultItems.contains(.redo))
+        XCTAssertTrue(ToolbarLayout().available.contains(.undo))
+        XCTAssertTrue(ToolbarLayout().available.contains(.redo))
+    }
+
     func testEveryItemHasATitleAndSymbol() {
         for item in ToolbarItemID.allCases {
             XCTAssertFalse(item.title.isEmpty)
