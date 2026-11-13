@@ -30,6 +30,7 @@ final class AppModel {
     /// How the library grid is ordered. Persisted so it survives a relaunch.
     enum SortOrder: String, CaseIterable, Identifiable {
         case dateModified
+        case dateOpened
         case dateCreated
         case name
 
@@ -38,6 +39,7 @@ final class AppModel {
         var title: String {
             switch self {
             case .dateModified: "Date Modified"
+            case .dateOpened: "Last Opened"
             case .dateCreated: "Date Created"
             case .name: "Name"
             }
@@ -46,6 +48,7 @@ final class AppModel {
         var symbol: String {
             switch self {
             case .dateModified: "clock.arrow.circlepath"
+            case .dateOpened: "clock"
             case .dateCreated: "calendar"
             case .name: "textformat.abc"
             }
@@ -66,8 +69,13 @@ final class AppModel {
 
     let store: LibraryStore
     let search: HandwritingSearch
-    let bookmarks = PageBookmarks()
+    let bookmarks: PageBookmarks
     let outline = PageOutline()
+    /// Imported page templates, kept beside the library and copied into a
+    /// notebook's assets when one is applied.
+    let templates: CustomTemplateStore
+    /// The pages written on most recently, for the library's Continue rail.
+    let pageRecents = PageRecents()
     let study: StudyModel
     let textDocs: TextDocModel
     let boards: BoardModel
@@ -119,6 +127,8 @@ final class AppModel {
     init(root: URL = AppModel.defaultLibraryRoot()) {
         store = LibraryStore(root: root)
         search = HandwritingSearch(root: root)
+        templates = CustomTemplateStore(root: root.appendingPathComponent("templates", isDirectory: true))
+        bookmarks = PageBookmarks(root: root)
         study = StudyModel(root: root.appendingPathComponent("StudySets", isDirectory: true))
         textDocs = TextDocModel(root: root.appendingPathComponent("TextDocs", isDirectory: true))
         boards = BoardModel(rootURL: root.appendingPathComponent("Boards", isDirectory: true))
@@ -152,6 +162,7 @@ final class AppModel {
         do {
             info = try await store.open()
             await reload()
+            templates.load()
             await purgeExpiredTrash()
             await study.load()
             await textDocs.load()
@@ -164,6 +175,9 @@ final class AppModel {
             }
             Task {
                 await search.indexAll(notebooks: notebooks, store: store)
+                if let message = search.takeRecognitionNotice() {
+                    notice = Notice(title: "Handwriting re-read", message: message)
+                }
                 await search.search(searchText)
             }
         } catch {
@@ -189,6 +203,8 @@ final class AppModel {
             let trash = try await store.scanTrash()
             notebooks = listing.manifests
             trashedNotebooks = trash.manifests
+            pageRecents.prune(keepingNotebookIDs: Set((notebooks + trashedNotebooks).map(\.id)))
+            bookmarks.prepare(notebookIDs: notebooks.map(\.id))
             unreadableNotebookCount = listing.unreadableCount + trash.unreadableCount
             announceUnreadableIfNeeded()
         } catch {
@@ -271,6 +287,12 @@ final class AppModel {
         switch sortOrder {
         case .dateModified:
             return list.sorted { $0.updatedAt > $1.updatedAt }
+        case .dateOpened:
+            // A notebook that has never been opened was last active when it was
+            // last edited, so it sorts by that rather than dropping to the end.
+            return list.sorted {
+                ($0.lastOpenedAt ?? $0.updatedAt) > ($1.lastOpenedAt ?? $1.updatedAt)
+            }
         case .dateCreated:
             return list.sorted { $0.createdAt > $1.createdAt }
         case .name:
@@ -500,6 +522,7 @@ final class AppModel {
     func importPDF(
         from url: URL,
         selection: PDFPageSelection,
+        margin: PDFPageMargin = .none,
         password: String?,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> NotebookManifest {
@@ -507,6 +530,7 @@ final class AppModel {
             at: url,
             into: store,
             selection: selection,
+            margin: margin,
             password: password,
             onProgress: onProgress
         )
@@ -707,6 +731,14 @@ final class AppModel {
 
     /// Opens `notebook`; with `highlighting`, the page marks that search's matches.
     func open(_ notebook: NotebookManifest, pageID: UUID? = nil, highlighting query: SearchHighlight? = nil) async {
+        // Last Opened is kept apart from Date Modified: opening a notebook is
+        // re-finding it, not editing it.
+        let openedAt = Date()
+        try? await store.markOpened(notebook.id, at: openedAt)
+        if let index = notebooks.firstIndex(where: { $0.id == notebook.id }) {
+            notebooks[index].lastOpenedAt = openedAt
+        }
+
         if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
             existing.searchHighlight = query
             activeNotebookID = existing.notebookID
@@ -732,7 +764,11 @@ final class AppModel {
             let newSession = NotebookSession(store: store, snapshot: snapshot, history: history)
             newSession.onPageDeleted = { [weak self] pageID in
                 guard let self else { return }
+                self.bookmarks.removePage(pageID, notebookID: notebook.id)
                 Task { await self.search.removePage(pageID, notebookID: notebook.id) }
+            }
+            newSession.onPageSaved = { [weak self] pageID in
+                self?.pageRecents.record(notebookID: notebook.id, pageID: pageID)
             }
             newSession.searchHighlight = query
             tabs.append(newSession)

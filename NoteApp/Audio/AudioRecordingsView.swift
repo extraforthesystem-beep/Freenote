@@ -4,8 +4,13 @@ import SwiftUI
 /// Record, play and delete the audio clips attached to one notebook.
 struct AudioRecordingsView: View {
     let session: NotebookSession
+    /// Runs after a clip is transcribed, so the notebook's search index can pick
+    /// the new words up without waiting for the notebook to close.
+    var onTranscriptStored: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
+    /// The clip whose transcript is open.
+    @State private var transcriptClip: AudioClip?
 
     var body: some View {
         NavigationStack {
@@ -40,7 +45,8 @@ struct AudioRecordingsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
-                        session.audio.stopPlayback()
+                        // Playback keeps going: the editor shows the now-playing
+                        // bar, and tapping the page seeks the recording.
                         dismiss()
                     }
                 }
@@ -67,6 +73,13 @@ struct AudioRecordingsView: View {
                 Button("OK", role: .cancel) { session.audio.errorText = nil }
             } message: {
                 Text(session.audio.errorText ?? "")
+            }
+            .sheet(item: $transcriptClip) { clip in
+                ClipTranscriptView(
+                    session: session,
+                    clip: clip,
+                    onTranscriptStored: onTranscriptStored
+                )
             }
         }
     }
@@ -129,22 +142,23 @@ struct AudioRecordingsView: View {
     }
 
     private func row(_ clip: AudioClip) -> some View {
-        let isPlaying = session.audio.playingClipID == clip.id
+        let isPlaying = session.audio.playingClipID == clip.id && session.audio.isPlaying
+        let isLoaded = session.audio.playingClipID == clip.id
         return HStack(spacing: 14) {
             Button {
                 session.audio.togglePlayback(clip)
             } label: {
-                Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 44, height: 44)
                     .background(
-                        (isPlaying ? Color.accentColor : Color.secondary).opacity(0.14),
+                        (isLoaded ? Color.accentColor : Color.secondary).opacity(0.14),
                         in: Circle()
                     )
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isPlaying ? "Stop playback" : "Play recording")
+            .accessibilityLabel(isPlaying ? "Pause playback" : "Play recording")
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(clip.title.isEmpty ? "Recording" : clip.title)
@@ -157,12 +171,35 @@ struct AudioRecordingsView: View {
 
             Spacer(minLength: 8)
 
-            if isPlaying {
+            if session.audio.isTranscribing(clip) {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Transcribing")
+            } else if isPlaying {
                 Image(systemName: "waveform")
                     .symbolEffect(.variableColor.iterative)
                     .foregroundStyle(Color.accentColor)
                     .accessibilityHidden(true)
             }
+
+            Button {
+                transcriptClip = clip
+            } label: {
+                Image(systemName: "text.quote")
+                    .foregroundStyle(
+                        session.audio.transcript(for: clip) == nil
+                            ? Color.secondary
+                            : Color.accentColor
+                    )
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(
+                session.audio.transcript(for: clip) == nil
+                    ? "Transcribe recording"
+                    : "Show transcript"
+            )
 
             Button(role: .destructive) {
                 Task { await session.audio.delete(clip) }

@@ -51,6 +51,9 @@ final class NotebookSession: Identifiable {
     /// A short sentence about the last page operation that failed. The editor
     /// shows it and sets it back to nil.
     var errorMessage: String?
+    /// Pages whose file did not decode and was moved aside. A blank page with the
+    /// same id stands in until version history restores the last good one.
+    private(set) var quarantinedPageIDs: Set<UUID> = []
     /// Bumped after an edit so the current page's thumbnail re-renders.
     private(set) var revision = 0
     /// Changes whenever pages other than the one on screen are rewritten in
@@ -76,6 +79,9 @@ final class NotebookSession: Identifiable {
 
     /// Called after a page file is deleted, so its search record can go too.
     var onPageDeleted: ((UUID) -> Void)?
+    /// Called after a page is written, with its id, so the library's Continue
+    /// rail can list the pages written on most recently.
+    var onPageSaved: ((UUID) -> Void)?
 
     init(
         store: LibraryStore,
@@ -261,11 +267,62 @@ final class NotebookSession: Identifiable {
             }
             loadError = nil
             rememberVisitedPage()
+            recordHistory(loaded.id)
         } catch {
-            page = nil
-            loadError = error.localizedDescription
+            if let leaving {
+                snapshotUnsaved(pageID: leaving, reason: "closed page")
+            }
+            if let recovered = await recoverQuarantinedPage(
+                pageID: manifest.pageOrder[clamped],
+                error: error
+            ) {
+                revealedTapeIDs.removeAll()
+                page = recovered
+                pageIndex = clamped
+                if activeLayerID == nil || !recovered.layers.contains(where: { $0.id == activeLayerID }) {
+                    activeLayerID = recovered.layers.first?.id
+                }
+                loadError = nil
+                rememberVisitedPage()
+            } else {
+                page = nil
+                loadError = error.localizedDescription
+            }
         }
         isLoadingPage = false
+    }
+
+    /// A page file that does not decode is moved out of the notebook and replaced
+    /// with a blank page of the same id, so one damaged file cannot stop the
+    /// notebook opening. The bytes are kept in the library cache and the banner
+    /// offers version history, never a silent deletion.
+    private func recoverQuarantinedPage(pageID: UUID, error: any Error) async -> Page? {
+        guard let noteCoreError = error as? NoteCoreError,
+              case .corruptFile = noteCoreError
+        else { return nil }
+        guard (try? await store.quarantinePage(pageID, in: manifest.id)) != nil else {
+            return nil
+        }
+        let placeholder = Page(
+            id: pageID,
+            width: page?.width ?? PageDefaults.width,
+            height: page?.height ?? PageDefaults.height,
+            template: page?.template ?? PageDefaults.blank
+        )
+        do {
+            try await store.savePage(placeholder, in: manifest.id)
+        } catch {
+            errorMessage = "A damaged page could not be replaced."
+        }
+        quarantinedPageIDs.insert(pageID)
+        return placeholder
+    }
+
+    /// True while the page on screen is the blank stand-in for a file that did
+    /// not decode, so the editor can offer history.
+    var currentPageWasQuarantined: Bool {
+        guard let currentPageID else { return false }
+        return quarantinedPageIDs.contains(currentPageID)
     }
 
     /// Maps a PDF-page destination to the notebook page holding that PDF page.
@@ -285,6 +342,73 @@ final class NotebookSession: Identifiable {
     func goToPage(_ index: Int) async {
         guard index != pageIndex, manifest.pageOrder.indices.contains(index) else { return }
         await loadPage(at: index)
+    }
+
+    // MARK: - Page history
+
+    /// Page ids in the order they were shown, oldest first, for back/forward.
+    private(set) var visitedPageIDs: [UUID] = []
+    /// The page the history cursor is on. A page id rather than an index, so a
+    /// page deleted elsewhere cannot leave the cursor pointing at a neighbour.
+    private var historyCursorID: UUID?
+    private var isNavigatingHistory = false
+    private static let historyLimit = 100
+
+    var canGoBack: Bool { historyTarget(by: -1) != nil }
+    var canGoForward: Bool { historyTarget(by: 1) != nil }
+    /// True once more than one page has been shown, so the chevrons only appear
+    /// when there is somewhere to go back to.
+    var hasPageHistory: Bool { visitedPageIDs.count > 1 }
+
+    /// Back and forward through the pages visited in this notebook. Jumping back
+    /// keeps the forward steps until a new page is opened from there.
+    func goBack() async {
+        await goToHistoryTarget(by: -1)
+    }
+
+    func goForward() async {
+        await goToHistoryTarget(by: 1)
+    }
+
+    private func historyTarget(by offset: Int) -> UUID? {
+        guard let cursorStart = historyCursorIndex else { return nil }
+        if offset < 0 {
+            return visitedPageIDs[..<cursorStart].last { manifest.pageOrder.contains($0) }
+        }
+        guard cursorStart + 1 < visitedPageIDs.count else { return nil }
+        return visitedPageIDs[(cursorStart + 1)...].first { manifest.pageOrder.contains($0) }
+    }
+
+    private var historyCursorIndex: Int? {
+        guard let historyCursorID else { return nil }
+        return visitedPageIDs.firstIndex(of: historyCursorID)
+    }
+
+    private func goToHistoryTarget(by offset: Int) async {
+        guard let target = historyTarget(by: offset),
+              let index = manifest.pageOrder.firstIndex(of: target)
+        else { return }
+        isNavigatingHistory = true
+        await loadPage(at: index)
+        isNavigatingHistory = false
+        if page?.id == target { historyCursorID = target }
+    }
+
+    /// A newly shown page truncates the forward steps, like a browser.
+    private func recordHistory(_ pageID: UUID) {
+        guard !isNavigatingHistory, historyCursorID != pageID else { return }
+        if let cursor = historyCursorID,
+           let cursorIndex = visitedPageIDs.firstIndex(of: cursor) {
+            visitedPageIDs.removeSubrange((cursorIndex + 1)..<visitedPageIDs.count)
+        } else {
+            // The cursor's page was deleted; drop what can no longer be shown.
+            visitedPageIDs = visitedPageIDs.filter { manifest.pageOrder.contains($0) }
+        }
+        visitedPageIDs.append(pageID)
+        if visitedPageIDs.count > Self.historyLimit {
+            visitedPageIDs.removeFirst(visitedPageIDs.count - Self.historyLimit)
+        }
+        historyCursorID = pageID
     }
 
     func goToNextPage() async {
@@ -843,6 +967,29 @@ final class NotebookSession: Identifiable {
         await commitPendingSave()
     }
 
+    /// Replaces the page's ink and items as one edit, for a lasso action and
+    /// its undo. Ids that leave get tombstones; ids that come back lose theirs,
+    /// the same rule `strokesChanged` follows. A report for a page that is no
+    /// longer open is dropped.
+    func applySelectionEdit(
+        pageID: UUID,
+        strokes: [StrokeRecord],
+        elements: [PageElement],
+        failure: String
+    ) async {
+        guard var updated = page, updated.id == pageID else { return }
+        let newStrokeIDs = Set(strokes.map(\.id))
+        let newElementIDs = Set(elements.map(\.id))
+        updated.deletedStrokeIDs.formUnion(Set(updated.strokes.map(\.id)).subtracting(newStrokeIDs))
+        updated.deletedStrokeIDs.subtract(newStrokeIDs)
+        updated.deletedElementIDs.formUnion(Set(updated.elements.map(\.id)).subtracting(newElementIDs))
+        updated.deletedElementIDs.subtract(newElementIDs)
+        updated.strokes = StrokeOrder.renderOrder(strokes, layerOrder: updated.layers.map(\.id))
+        updated.elements = elements
+        revealedTapeIDs.formIntersection(newElementIDs)
+        await saveEditedPage(updated, failure: failure)
+    }
+
     // MARK: - Saving
 
     /// Replaces the page and writes it now, through the ordered queue.
@@ -934,6 +1081,7 @@ final class NotebookSession: Identifiable {
     /// Records a snapshot at most once per page per `snapshotInterval`; the
     /// newest skipped state is kept for the next one or for leaving the page.
     private func noteSaved(_ saved: Page) {
+        onPageSaved?(saved.id)
         let now = Date()
         if let last = lastSnapshotAt[saved.id], now.timeIntervalSince(last) < Self.snapshotInterval {
             unsnapshotted[saved.id] = saved
@@ -1000,7 +1148,10 @@ final class NotebookSession: Identifiable {
             errorMessage = "The page could not be saved before restoring."
             return false
         }
-        await recordSnapshot(latest, reason: "before restore").value
+        if !quarantinedPageIDs.contains(latest.id) {
+            // A blank stand-in is not worth keeping; it is not what the user had.
+            await recordSnapshot(latest, reason: "before restore").value
+        }
 
         // Ink and items added since the version are tombstoned, and anything
         // the version brings back is no longer deleted, so a merge agrees.
@@ -1021,7 +1172,13 @@ final class NotebookSession: Identifiable {
         }
 
         let saved = await saveEditedPage(restored, failure: "The version could not be restored.")
-        if !saved { loadError = "The version could not be restored." }
+        if saved {
+            // The page file is valid again, so the stand-in notice has served its
+            // purpose.
+            quarantinedPageIDs.remove(restored.id)
+        } else {
+            loadError = "The version could not be restored."
+        }
         return saved
     }
 

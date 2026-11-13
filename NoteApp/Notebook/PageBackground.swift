@@ -22,8 +22,11 @@ import CoreImage
 /// Page images (inactive pages in the seamless scroll, thumbnails, the Mac
 /// reader) are rendered here too, so they match the live page: the paper and
 /// template are recoloured and the ink layer is inverted, while images and
-/// other elements keep their true colours. Exports render through
-/// `PageRenderer` with the page's own template, so they are always light paper.
+/// other elements keep their true colours. An imported PDF page, and a custom
+/// template, are paper: they are multiplied down to a dim sheet so they never
+/// glow white on the dark page, and their text stays dark rather than
+/// inverting. Exports render through `PageRenderer` with the page's own
+/// template, so they are always light paper.
 ///
 /// `nonisolated` because page images are rendered off the main actor.
 nonisolated enum PaperAppearance {
@@ -31,6 +34,9 @@ nonisolated enum PaperAppearance {
     static let darkPaper = RGBAColor(r: 0.118, g: 0.118, b: 0.118)
     /// Template lines on dark paper: readable under the ink, never bright.
     static let darkLine = RGBAColor(r: 0.46, g: 0.49, b: 0.54)
+    /// What an imported PDF page or custom template is multiplied by on dark
+    /// paper: a dim warm grey sheet. Text and ink stay dark, never inverted.
+    static let darkPicture = RGBAColor(r: 0.42, g: 0.41, b: 0.38)
     /// Paper with no fill, for rendering the ink on its own.
     private static let clearPaper = RGBAColor(r: 0, g: 0, b: 0, a: 0)
 
@@ -87,6 +93,15 @@ nonisolated enum PaperAppearance {
             scale: scale
         ) else { return nil }
 
+        // The PDF page or custom template is the paper of an imported page, so
+        // it is dimmed with it; a photo or a sticky note keeps its colours.
+        let dimmedPaper = dimmed(
+            paper,
+            rects: pictureRects(template: template, elements: elements, pageSize: pageSize),
+            pageSize: pageSize,
+            scale: scale
+        )
+
         guard !strokes.isEmpty,
               let ink = PageRenderer.image(
                   strokes: strokes,
@@ -100,8 +115,8 @@ nonisolated enum PaperAppearance {
                   scale: scale
               ),
               let invertedInk = inverted(ink, pageSize: pageSize, scale: scale),
-              let combined = composite(paper: paper, ink: invertedInk, pageSize: pageSize, scale: scale)
-        else { return paper }
+              let combined = composite(paper: dimmedPaper, ink: invertedInk, pageSize: pageSize, scale: scale)
+        else { return dimmedPaper }
         return combined
     }
 
@@ -122,6 +137,77 @@ nonisolated enum PaperAppearance {
 
     /// Core Image is thread safe and the context is reused across renders.
     private static let ciContext = CIContext()
+
+    /// The parts of a dark page that are a picture rather than blank paper: the
+    /// imported PDF pages, and a custom template's whole sheet.
+    private static func pictureRects(
+        template: PageTemplate,
+        elements: [PageElement],
+        pageSize: CGSize
+    ) -> [CGRect] {
+        var rects = elements.compactMap { element -> CGRect? in
+            guard case .pdfPage = element.content else { return nil }
+            return CGRect(
+                x: element.frame.x,
+                y: element.frame.y,
+                width: element.frame.width,
+                height: element.frame.height
+            )
+        }
+        if template.customAssetName != nil {
+            rects.append(CGRect(origin: .zero, size: pageSize))
+        }
+        return rects
+    }
+
+    /// Multiplies the picture area down to a dim sheet. Multiply keeps dark
+    /// text dark — nothing is inverted — while a white page becomes grey.
+    private static func dimmed(
+        _ image: InkImage,
+        rects: [CGRect],
+        pageSize: CGSize,
+        scale: CGFloat
+    ) -> InkImage {
+        guard !rects.isEmpty, let source = cgImage(of: image) else { return image }
+        let width = source.width
+        let height = source.height
+        guard width > 0, height > 0,
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil,
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return image }
+
+        context.draw(source, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+        context.setBlendMode(.multiply)
+        context.setFillColor(
+            CGColor(
+                srgbRed: darkPicture.r,
+                green: darkPicture.g,
+                blue: darkPicture.b,
+                alpha: 1
+            )
+        )
+        for rect in rects {
+            // A bitmap context counts y from the bottom; page space from the top.
+            context.fill(
+                CGRect(
+                    x: rect.minX * scale,
+                    y: (pageSize.height - rect.maxY) * scale,
+                    width: rect.width * scale,
+                    height: rect.height * scale
+                )
+            )
+        }
+        guard let dimmed = context.makeImage() else { return image }
+        return platformImage(dimmed, pageSize: pageSize, scale: scale)
+    }
 
     /// The ink layer with its colours inverted, so stored black ink shows as
     /// light ink on dark paper. Transparency is preserved.

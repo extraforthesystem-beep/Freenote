@@ -195,6 +195,7 @@ struct BoardSelectionOverlay: View {
     let onBringToFront: () -> Void
     let onSendToBack: () -> Void
     let onColor: (RGBAColor) -> Void
+    let onFillColor: (RGBAColor?) -> Void
     let onEditText: () -> Void
 
     private static let handleSize: CGFloat = 11
@@ -245,12 +246,14 @@ struct BoardSelectionOverlay: View {
                 if !isEditing {
                     BoardSelectionBar(
                         color: selectedColor,
+                        supportsFill: supportsFill,
                         canEditText: isTextLike,
                         onDuplicate: onDuplicate,
                         onDelete: onDelete,
                         onBringToFront: onBringToFront,
                         onSendToBack: onSendToBack,
                         onColor: onColor,
+                        onFillColor: onFillColor,
                         onEditText: onEditText
                     )
                     .position(
@@ -286,6 +289,14 @@ struct BoardSelectionOverlay: View {
         }
     }
 
+    /// Whether a fill would show: lines and arrows are open paths.
+    private var supportsFill: Bool {
+        if case let .shape(kind, _, _, _, _) = item.content {
+            return kind != .line && kind != .arrow
+        }
+        return false
+    }
+
     private func viewRect(_ frame: CGRect, in size: CGSize) -> CGRect {
         let visible = viewport.visibleRect
         let zoom = viewport.zoom
@@ -301,12 +312,15 @@ struct BoardSelectionOverlay: View {
 /// The capsule that hugs the selection.
 private struct BoardSelectionBar: View {
     let color: RGBAColor?
+    /// Whether the item can be filled at all (not a line or an arrow).
+    let supportsFill: Bool
     let canEditText: Bool
     let onDuplicate: () -> Void
     let onDelete: () -> Void
     let onBringToFront: () -> Void
     let onSendToBack: () -> Void
     let onColor: (RGBAColor) -> Void
+    let onFillColor: (RGBAColor?) -> Void
     let onEditText: () -> Void
 
     var body: some View {
@@ -323,19 +337,7 @@ private struct BoardSelectionBar: View {
                 button("Edit Text", "character.cursor.ibeam", action: onEditText)
             }
             if color != nil {
-                Menu {
-                    ForEach(Array(BoardStickyPalette.colors.enumerated()), id: \.offset) { index, swatch in
-                        Button(BoardStickyPalette.names[index]) { onColor(swatch) }
-                    }
-                } label: {
-                    Image(systemName: "paintpalette")
-                        .font(.system(size: 15, weight: .medium))
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .accessibilityLabel("Colour")
+                colorMenu
             }
         }
         .padding(.horizontal, 8)
@@ -357,6 +359,42 @@ private struct BoardSelectionBar: View {
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .help(label)
+    }
+
+    /// A shape gets a line colour and a fill; a sticky note has one colour.
+    private var colorMenu: some View {
+        Menu {
+            if supportsFill {
+                Menu("Line") { swatches { onColor($0) } }
+                Menu("Fill") {
+                    Button("None") { onFillColor(nil) }
+                    Divider()
+                    swatches { onFillColor(Self.fill($0)) }
+                }
+            } else {
+                swatches { onColor($0) }
+            }
+        } label: {
+            Image(systemName: "paintpalette")
+                .font(.system(size: 15, weight: .medium))
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Colour")
+    }
+
+    private func swatches(_ select: @escaping (RGBAColor) -> Void) -> some View {
+        ForEach(Array(BoardStickyPalette.colors.enumerated()), id: \.offset) { index, swatch in
+            Button(BoardStickyPalette.names[index]) { select(swatch) }
+        }
+    }
+
+    /// A fill tint: the palette colour, light enough to keep the shape's line
+    /// and any ink over it readable.
+    private static func fill(_ color: RGBAColor) -> RGBAColor {
+        RGBAColor(r: color.r, g: color.g, b: color.b, a: 0.35)
     }
 }
 

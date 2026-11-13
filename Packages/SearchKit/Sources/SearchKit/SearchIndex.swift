@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import NoteCore
 import PDFKit
+import Vision
 
 /// Where the text a page was indexed from came from. Search results are grouped
 /// by this, the way Goodnotes separates "Written Notes", "Text" and "PDFs".
@@ -9,6 +10,8 @@ public enum PageTextSource: String, Codable, Hashable, Sendable, CaseIterable {
     case handwriting
     case typedText
     case pdf
+    /// Spoken words from a recording, attached to the pages written during it.
+    case transcript
 
     /// Section heading a search UI shows for this source.
     public var sectionTitle: String {
@@ -16,15 +19,17 @@ public enum PageTextSource: String, Codable, Hashable, Sendable, CaseIterable {
         case .handwriting: "Written Notes"
         case .typedText: "Text"
         case .pdf: "PDFs"
+        case .transcript: "Transcript"
         }
     }
 
-    /// Stable display order: handwriting, typed text, then PDF text.
+    /// Stable display order: handwriting, typed text, PDF text, then audio.
     var displayOrder: Int {
         switch self {
         case .handwriting: 0
         case .typedText: 1
         case .pdf: 2
+        case .transcript: 3
         }
     }
 }
@@ -323,11 +328,15 @@ public actor SearchIndex {
     ///
     /// `pageIndex` is the page's 1-based position in the notebook, carried into
     /// every hit so search UIs can label it without looking the order up again.
+    /// `transcriptText` is the audio transcript of the recordings made while this
+    /// page was written; it is searchable as its own source and re-indexes the
+    /// page only when the words changed.
     @discardableResult
     public func update(
         page: Page,
         in notebookID: UUID,
         pageIndex: Int = 0,
+        transcriptText: String = "",
         using recognizer: any HandwritingRecognizing,
         assetsDirectory: URL? = nil
     ) async throws -> PageSearchRecord? {
@@ -335,9 +344,11 @@ public actor SearchIndex {
 
         let contentHash = Self.contentHash(of: page)
         let key = PageKey(notebookID: notebookID, pageID: page.id)
+        let transcript = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let existing = records[key],
            existing.contentHash == contentHash,
-           existing.recognitionVersion == recognizer.recognitionVersion {
+           existing.recognitionVersion == recognizer.recognitionVersion,
+           Self.transcriptText(of: existing) == transcript {
             // The text is unchanged but the page moved: refresh the number only,
             // without paying for recognition again.
             // Records from before edit dates were stored get theirs the same way.
@@ -369,6 +380,9 @@ public actor SearchIndex {
                     )
                 )
             }
+        }
+        if !transcript.isEmpty {
+            segments.append(PageTextSegment(source: .transcript, text: transcript))
         }
         let text = segments.map(\.text).joined(separator: "\n")
 
@@ -615,6 +629,11 @@ public actor SearchIndex {
         return (strokeDates + elementDates).max()
     }
 
+    /// The text a record kept for its transcript source, if any.
+    private static func transcriptText(of record: PageSearchRecord) -> String {
+        record.segments.first { $0.source == .transcript }?.text ?? ""
+    }
+
     private static func typedText(in page: Page) -> String {
         page.elements.compactMap { element -> String? in
             let text: String
@@ -629,6 +648,8 @@ public actor SearchIndex {
         .joined(separator: "\n")
     }
 
+    /// The text of every PDF page on the page. A scanned page has no text layer,
+    /// so its words are read from an on-device image render instead.
     private static func pdfText(in page: Page, assetsDirectory: URL?) -> String {
         guard let assetsDirectory else { return "" }
         var parts: [String] = []
@@ -638,13 +659,65 @@ public actor SearchIndex {
             else { continue }
             let url = assetsDirectory.appendingPathComponent(assetName)
             guard let document = PDFDocument(url: url),
-                  let pdfPage = document.page(at: pageIndex),
-                  let text = pdfPage.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty
+                  let pdfPage = document.page(at: pageIndex)
             else { continue }
+            let stored = pdfPage.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let text = stored.isEmpty ? ocrText(from: pdfPage) : stored
+            guard !text.isEmpty else { continue }
             parts.append(text)
         }
         return parts.joined(separator: "\n")
+    }
+
+    /// Reads the words in a scanned PDF page with Vision. Runs once per page,
+    /// because the index keeps the result until the page or PDF reference
+    /// changes; it is deliberately not run on every search.
+    private static func ocrText(from pdfPage: PDFPage) -> String {
+        let bounds = pdfPage.bounds(for: .mediaBox)
+        guard bounds.width > 0, bounds.height > 0 else { return "" }
+        // A4 at about 2.5× is enough for the recogniser without a huge bitmap.
+        let scale = min(3, 2_000 / max(bounds.width, bounds.height))
+        let width = Int(bounds.width * scale)
+        let height = Int(bounds.height * scale)
+        guard width > 0, height > 0,
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil,
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return "" }
+
+        // A white page, like paper, reads better than a transparent one.
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.scaleBy(x: scale, y: scale)
+        context.translateBy(x: -bounds.minX, y: -bounds.minY)
+        pdfPage.draw(with: .mediaBox, to: context)
+        guard let image = context.makeImage() else { return "" }
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        guard (try? handler.perform([request])) != nil else { return "" }
+
+        return (request.results ?? [])
+            .sorted { left, right in
+                // Vision's boxes start at the bottom-left; group into lines
+                // from the top and read each line left to right.
+                let leftLine = Int((1 - left.boundingBox.midY) * 50)
+                let rightLine = Int((1 - right.boundingBox.midY) * 50)
+                if leftLine != rightLine { return leftLine < rightLine }
+                return left.boundingBox.minX < right.boundingBox.minX
+            }
+            .compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func pdfRefs(in page: Page) -> [String] {

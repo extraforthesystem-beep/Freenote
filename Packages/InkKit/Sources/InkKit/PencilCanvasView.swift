@@ -46,6 +46,24 @@ public final class PencilCanvasController: ObservableObject {
         return true
     }
 
+    /// Adds one undo step to the canvas's own stack, so a change the app made
+    /// to the page's records undoes with the ink. `undo` runs on the main actor.
+    public func registerUndo(name: String, _ undo: @escaping @MainActor () -> Void) {
+        guard let canvas = target, let undoManager = canvas.undoManager else { return }
+        undoManager.registerUndo(withTarget: canvas) { _ in
+            MainActor.assumeIsolated { undo() }
+        }
+        undoManager.setActionName(name)
+    }
+
+    /// Drops the lasso selection on every view of the page, e.g. when the tool
+    /// changes away from the lasso.
+    public func clearSelection() {
+        for view in [canvas, lastUsedCanvas] where view?.selection.isEmpty == false {
+            view?.selection = []
+        }
+    }
+
     private static func setDrawing(_ drawing: PKDrawing, replacing previous: PKDrawing, on canvas: InkCanvasView) {
         canvas.undoManager?.registerUndo(withTarget: canvas) { canvas in
             MainActor.assumeIsolated {
@@ -249,6 +267,11 @@ public enum CanvasMode: Hashable, Sendable {
 public struct CanvasFingerInteraction {
     /// A one-finger tap, in page points.
     public var onTap: ((CGPoint) -> Void)?
+    /// Whether a one-finger drag from this page point would be taken by the
+    /// app. Asked when the finger comes down, before it has moved, so a
+    /// drawing finger can wait for the answer. It must not start anything;
+    /// `onDragBegan` does that once the drag is real.
+    public var onDragPossible: ((CGPoint) -> Bool)?
     /// A one-finger drag is about to begin at this page point. Return true to
     /// take the drag, and the canvas does not pan; `onDragChanged` then
     /// reports how far the finger has moved, in page points.
@@ -258,14 +281,83 @@ public struct CanvasFingerInteraction {
 
     public init(
         onTap: ((CGPoint) -> Void)? = nil,
+        onDragPossible: ((CGPoint) -> Bool)? = nil,
         onDragBegan: ((CGPoint) -> Bool)? = nil,
         onDragChanged: ((CGPoint) -> Void)? = nil,
         onDragEnded: (() -> Void)? = nil
     ) {
         self.onTap = onTap
+        self.onDragPossible = onDragPossible
         self.onDragBegan = onDragBegan
         self.onDragChanged = onDragChanged
         self.onDragEnded = onDragEnded
+    }
+}
+
+/// A one-finger drag that decides at touch-down whether the app wants it.
+///
+/// It begins as soon as the finger lands on something the app owns, and fails
+/// at once anywhere else or for the Pencil. A drawing gesture that waits for
+/// it therefore never loses the start of an ordinary stroke.
+final class FingerDragGestureRecognizer: UIGestureRecognizer {
+    /// Whether a drag from this point in the recognizer's view is the app's.
+    var shouldTrack: ((CGPoint) -> Bool)?
+    /// The finger landed on an app object, at this point in the view.
+    var onBegan: ((CGPoint) -> Void)?
+    /// How far the finger has moved since it landed, in view points.
+    var onChanged: ((CGPoint) -> Void)?
+    var onEnded: (() -> Void)?
+
+    private var startLocation: CGPoint?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .possible else { return }
+        // The Pencil never drags app objects; failing at once lets it ink.
+        guard !touches.contains(where: { $0.type == .pencil }),
+              let view, let touch = touches.first,
+              let shouldTrack, shouldTrack(touch.location(in: view))
+        else {
+            state = .failed
+            return
+        }
+        let start = touch.location(in: view)
+        startLocation = start
+        state = .began
+        onBegan?(start)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed,
+              let view, let touch = touches.first, let start = startLocation
+        else { return }
+        let location = touch.location(in: view)
+        let translation = CGPoint(x: location.x - start.x, y: location.y - start.y)
+        // A few points of slop keep a tap on the selection from nudging it.
+        if state == .began, hypot(translation.x, translation.y) < 4 {
+            return
+        }
+        state = .changed
+        onChanged?(translation)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else { return }
+        state = .ended
+        onEnded?()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else {
+            state = .failed
+            return
+        }
+        state = .cancelled
+        onEnded?()
+    }
+
+    override func reset() {
+        super.reset()
+        startLocation = nil
     }
 }
 
@@ -287,7 +379,9 @@ public struct PencilCanvasView: UIViewRepresentable {
     public var controller: PencilCanvasController?
     /// When on, a finger draws as well as the Pencil; when off, one finger
     /// scrolls and only the Pencil inks. The simulator always draws with any
-    /// input, because a mouse cannot produce Pencil touches.
+    /// input, because a mouse cannot produce Pencil touches. With a
+    /// `fingerInteraction`, a finger drag that starts on an app object still
+    /// moves it instead of drawing.
     public var drawsWithFinger: Bool
     /// Two-finger double-tap undoes, three-finger double-tap redoes.
     public var undoOnTwoFingerDoubleTap: Bool
@@ -308,6 +402,19 @@ public struct PencilCanvasView: UIViewRepresentable {
     /// Only stroke erasing uses this: highlighter strokes disappear, pen ink
     /// stays where it is.
     public var eraseHighlighterOnly: Bool
+    /// Smooths a new stroke's centre line before it is stored. 0 is off, 100
+    /// the strongest; per ink tool in the editor.
+    public var smoothing: Double
+    /// Dashed or dotted new pen strokes.
+    public var lineStyle: PenLineStyle
+    /// A highlighter strokes straight from where the Pencil landed to where it
+    /// lifted, instead of following the hand.
+    public var highlighterStraightLines: Bool
+    /// A pen scribble drawn over ink deletes the ink it covers.
+    public var scratchOutToErase: Bool
+    /// Which ink the whole-stroke eraser may remove. `eraseHighlighterOnly`
+    /// still wins when it is on, for callers that predate this filter.
+    public var eraserFilter: EraserFilter
     /// When set, the canvas shows only this rectangle of the page (page
     /// points), scaled to fill its width: a second, magnified view of the
     /// page such as Zoom View. Its strokes are still in page points. A
@@ -321,6 +428,10 @@ public struct PencilCanvasView: UIViewRepresentable {
     /// Called after a pan, zoom or layout of a free canvas with the visible
     /// part of the page (page points) and the zoom scale.
     public var onViewportChange: ((CGRect, CGFloat) -> Void)?
+    /// The ids of the strokes the lasso has selected, whenever the selection
+    /// changes. The ids match `StrokeRecord.id`, so the app can inspect and act
+    /// on the selected ink.
+    public var onSelectionChanged: (([UUID]) -> Void)?
     /// Finger taps and drags over the canvas, for selecting and moving objects
     /// drawn under the ink. The Pencil keeps drawing.
     public var fingerInteraction: CanvasFingerInteraction?
@@ -350,12 +461,18 @@ public struct PencilCanvasView: UIViewRepresentable {
         holdToDrawShapes: Bool = true,
         onPencilDoubleTap: ((PencilDoubleTapAction) -> Void)? = nil,
         eraseHighlighterOnly: Bool = false,
+        smoothing: Double = 0,
+        lineStyle: PenLineStyle = .solid,
+        highlighterStraightLines: Bool = false,
+        scratchOutToErase: Bool = false,
+        eraserFilter: EraserFilter = .all,
         viewport: CGRect? = nil,
         usesDarkPaper: Bool = false,
         onToolGestureBegan: (() -> Void)? = nil,
         freeZoom: ClosedRange<CGFloat>? = nil,
         onViewportChange: ((CGRect, CGFloat) -> Void)? = nil,
         fingerInteraction: CanvasFingerInteraction? = nil,
+        onSelectionChanged: (([UUID]) -> Void)? = nil,
         onStrokesChanged: @escaping ([StrokeRecord]) -> Void
     ) {
         self.strokes = strokes
@@ -375,12 +492,18 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.holdToDrawShapes = holdToDrawShapes
         self.onPencilDoubleTap = onPencilDoubleTap
         self.eraseHighlighterOnly = eraseHighlighterOnly
+        self.smoothing = smoothing
+        self.lineStyle = lineStyle
+        self.highlighterStraightLines = highlighterStraightLines
+        self.scratchOutToErase = scratchOutToErase
+        self.eraserFilter = eraserFilter
         self.viewport = viewport
         self.usesDarkPaper = usesDarkPaper
         self.onToolGestureBegan = onToolGestureBegan
         self.freeZoom = freeZoom
         self.onViewportChange = onViewportChange
         self.fingerInteraction = fingerInteraction
+        self.onSelectionChanged = onSelectionChanged
         self.onStrokesChanged = onStrokesChanged
     }
 
@@ -417,6 +540,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         configureFreeScroll(canvas)
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
+        context.coordinator.appliedTool = Coordinator.CanvasToolState(mode: mode, tool: tool)
         canvas.isRulerActive = isRulerActive
         // Black ink stays black on white paper; on dark paper PencilKit
         // lightens ink for display without touching the stored colours.
@@ -528,15 +652,22 @@ public struct PencilCanvasView: UIViewRepresentable {
 
         canvas.isUserInteractionEnabled = isEditable
         applyDrawingPolicy(to: canvas)
-        canvas.tool = canvasTool(for: mode)
+        let toolState = Coordinator.CanvasToolState(mode: mode, tool: tool)
+        // Assigning the tool re-creates the PencilKit tool, which drops the
+        // lasso selection; only a real change needs to.
+        if coordinator.appliedTool != toolState {
+            canvas.tool = canvasTool(for: mode)
+            coordinator.appliedTool = toolState
+        }
         canvas.isRulerActive = isRulerActive
         canvas.overrideUserInterfaceStyle = usesDarkPaper ? .dark : .light
         canvas.drawingGestureRecognizer.isEnabled = mode.allowsDrawing
         coordinator.tapRecognizer?.isEnabled = mode == .links && onFingerTap != nil
         coordinator.fingerTap?.isEnabled = fingerInteraction?.onTap != nil
-        // With finger drawing on, the finger belongs to the ink.
-        coordinator.fingerPan?.isEnabled =
-            fingerInteraction?.onDragBegan != nil && !drawsWithFinger
+        // A finger drag is always offered to the app first. When a finger also
+        // draws, the ink waits for a drag that starts on an app object to be
+        // declined; see `installFingerInteraction`.
+        coordinator.fingerPan?.isEnabled = fingerInteraction?.onDragBegan != nil
         coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap
         coordinator.redoDoubleTap?.isEnabled = redoOnThreeFingerDoubleTap
         if viewport == nil, freeZoom != nil, canvas.pageSize != pageSize {
@@ -569,7 +700,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         weak var host: InkCanvasHost?
         weak var tapRecognizer: UITapGestureRecognizer?
         weak var fingerTap: UITapGestureRecognizer?
-        weak var fingerPan: UIPanGestureRecognizer?
+        weak var fingerPan: FingerDragGestureRecognizer?
         weak var undoDoubleTap: UITapGestureRecognizer?
         weak var redoDoubleTap: UITapGestureRecognizer?
         /// Set while the app owns a finger drag, so its end is reported once.
@@ -598,6 +729,12 @@ public struct PencilCanvasView: UIViewRepresentable {
         // Hold to straighten (see HoldToShape.swift).
         weak var holdObserver: UIGestureRecognizer?
         var canvasFeedback: UICanvasFeedbackGenerator?
+        /// The mode and ink tool last given to the canvas.
+        struct CanvasToolState: Equatable {
+            var mode: CanvasMode
+            var tool: InkTool
+        }
+        var appliedTool: CanvasToolState?
         /// The current touch paused before lifting.
         var holdDetected = false
         /// Strokes on the canvas when the current touch began (as last seen,
@@ -645,8 +782,22 @@ public struct PencilCanvasView: UIViewRepresentable {
             }
 
             isApplyingInput = true
+            let selection = canvas.selection
             canvas.drawing = PKDrawing(strokes: next)
             isApplyingInput = false
+            // Rebuilding the drawing drops the lasso selection. Keep the strokes
+            // that still exist selected, so a recolour or a width change can be
+            // followed by another action on the same selection. Applied after
+            // this update, so its selection callback is not a state change
+            // during a view update.
+            let live = Set(next.map(\.id))
+            let kept = selection.intersection(live)
+            if !kept.isEmpty, canvas.selection != kept {
+                Task { @MainActor [weak canvas] in
+                    guard let canvas, canvas.selection.isEmpty else { return }
+                    canvas.selection = kept
+                }
+            }
             baselineStrokes = next
             converter.seed(strokes: next, records: strokes)
             syncedRecords = Dictionary(
@@ -680,9 +831,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         }
 
         /// Installs the app's finger gestures, once, when the canvas is made.
-        /// They never see Pencil touches, so the Pencil keeps drawing.
+        /// The Pencil is never taken by them: the drag fails at once on a
+        /// Pencil touch, so the Pencil keeps drawing.
         func installFingerInteraction(on canvas: InkCanvasView) {
-            guard parent.fingerInteraction != nil else { return }
+            guard let interaction = parent.fingerInteraction else { return }
 
             let tap = UITapGestureRecognizer(
                 target: self,
@@ -694,18 +846,57 @@ public struct PencilCanvasView: UIViewRepresentable {
             canvas.addGestureRecognizer(tap)
             fingerTap = tap
 
-            let pan = UIPanGestureRecognizer(
-                target: self,
-                action: #selector(handleFingerPan(_:))
-            )
-            pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-            pan.maximumNumberOfTouches = 1
+            let pan = FingerDragGestureRecognizer()
+            // The Pencil is included so a drag that would wait for a finger to
+            // decline it fails at once instead of holding the ink back.
+            pan.allowedTouchTypes = [
+                NSNumber(value: UITouch.TouchType.direct.rawValue),
+                NSNumber(value: UITouch.TouchType.pencil.rawValue),
+            ]
             pan.cancelsTouchesInView = false
             pan.delegate = self
+            if interaction.onDragPossible != nil {
+                // Read the app's current interaction, not the one at install:
+                // the selection it tests against changes as the user works.
+                pan.shouldTrack = { [weak self, weak canvas] point in
+                    guard let self, let canvas,
+                          let possible = self.parent.fingerInteraction?.onDragPossible
+                    else { return false }
+                    return possible(self.pagePoint(for: point, on: canvas))
+                }
+            }
+            pan.onBegan = { [weak self, weak canvas] point in
+                guard let self, let canvas else { return }
+                let pagePoint = self.pagePoint(for: point, on: canvas)
+                self.isFingerDragging =
+                    self.parent.fingerInteraction?.onDragBegan?(pagePoint) ?? false
+                if self.isFingerDragging {
+                    canvas.panGestureRecognizer.isEnabled = false
+                }
+            }
+            pan.onChanged = { [weak self, weak canvas] translation in
+                guard let self, let canvas, self.isFingerDragging else { return }
+                let scale = max(canvas.zoomScale, 0.0001)
+                self.parent.fingerInteraction?.onDragChanged?(
+                    CGPoint(x: translation.x / scale, y: translation.y / scale)
+                )
+            }
+            pan.onEnded = { [weak self, weak canvas] in
+                guard let self, self.isFingerDragging else { return }
+                self.isFingerDragging = false
+                canvas?.panGestureRecognizer.isEnabled = true
+                self.parent.fingerInteraction?.onDragEnded?()
+            }
             canvas.addGestureRecognizer(pan)
             // A captured drag wins over the canvas pan. Elsewhere the drag
             // recognizer fails before the pan needs it, so panning is unchanged.
             canvas.panGestureRecognizer.require(toFail: pan)
+            // When a finger draws too, the ink waits for a drag that starts on
+            // an app object to be declined. The drag fails at touch-down
+            // everywhere else, so drawing there starts without a delay.
+            if pan.shouldTrack != nil, canvas.drawingPolicy == .anyInput {
+                canvas.drawingGestureRecognizer.require(toFail: pan)
+            }
             fingerPan = pan
         }
 
@@ -721,26 +912,6 @@ public struct PencilCanvasView: UIViewRepresentable {
             onTap(pagePoint(for: gesture.location(in: canvas), on: canvas))
         }
 
-        @objc func handleFingerPan(_ gesture: UIPanGestureRecognizer) {
-            guard let canvas, let interaction = parent.fingerInteraction else { return }
-            switch gesture.state {
-            case .changed:
-                guard isFingerDragging else { return }
-                let translation = gesture.translation(in: canvas)
-                let scale = max(canvas.zoomScale, 0.0001)
-                interaction.onDragChanged?(
-                    CGPoint(x: translation.x / scale, y: translation.y / scale)
-                )
-            case .ended, .cancelled, .failed:
-                guard isFingerDragging else { return }
-                isFingerDragging = false
-                canvas.panGestureRecognizer.isEnabled = true
-                interaction.onDragEnded?()
-            default:
-                break
-            }
-        }
-
         public func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
             if parent.viewport != nil, let canvas {
                 parent.controller?.lastUsedCanvas = canvas
@@ -754,6 +925,10 @@ public struct PencilCanvasView: UIViewRepresentable {
         public func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             host?.isToolActive = false
             parent.onToolGestureEnded?()
+        }
+
+        public func canvasViewSelectionDidChange(_ canvasView: PKCanvasView) {
+            parent.onSelectionChanged?(Array(canvasView.selection))
         }
 
         // MARK: - Free canvas viewport
@@ -789,26 +964,6 @@ public struct PencilCanvasView: UIViewRepresentable {
             return !(isFingerDrag && isCanvasPan)
         }
 
-        /// Asks the app whether a finger drag starts on something it owns, such
-        /// as a selected object. If it does, the canvas pan is held back for
-        /// the drag; if not, the drag recognizer fails and the pan runs.
-        public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard gestureRecognizer === fingerPan else { return true }
-            guard let canvas, let began = parent.fingerInteraction?.onDragBegan else {
-                return false
-            }
-            // The finger has already moved past the pan slop: hit-test the
-            // point where it first touched down.
-            let location = gestureRecognizer.location(in: canvas)
-            let translation = (gestureRecognizer as? UIPanGestureRecognizer)?
-                .translation(in: canvas) ?? .zero
-            let start = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
-            guard began(pagePoint(for: start, on: canvas)) else { return false }
-            isFingerDragging = true
-            canvas.panGestureRecognizer.isEnabled = false
-            return true
-        }
-
         // MARK: - Apple Pencil
 
         public func pencilInteraction(
@@ -838,14 +993,76 @@ public struct PencilCanvasView: UIViewRepresentable {
 
         public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingInput, !isApplyingShape else { return }
-            if parent.eraseHighlighterOnly {
-                keepNonHighlighterStrokes(in: canvasView)
+            // An undo or redo is not an eraser pass: never put back a stroke
+            // that undo itself just removed.
+            let undo = canvasView.undoManager
+            let isUndoOrRedo = undo?.isUndoing == true || undo?.isRedoing == true
+            if effectiveEraserFilter != .all, !isUndoOrRedo {
+                keepStrokesOutsideFilter(in: canvasView)
             }
             if captureHeldStroke(in: canvasView) {
                 baselineStrokes = canvasView.drawing.strokes
                 return
             }
+            if applyScratchOut(in: canvasView) {
+                baselineStrokes = canvasView.drawing.strokes
+                reportDrawingChange(canvasView)
+                return
+            }
+            decorateNewStrokes(in: canvasView)
             reportDrawingChange(canvasView)
+        }
+
+        /// The filter the stroke eraser actually uses. `eraseHighlighterOnly`
+        /// predates it and still means "highlighters only".
+        var effectiveEraserFilter: EraserFilter {
+            parent.eraseHighlighterOnly ? .highlighter : parent.eraserFilter
+        }
+
+        /// Smooths every stroke that landed in this change and applies the
+        /// pen's dash pattern, so what is on screen is what will be stored.
+        ///
+        /// The rewrite registers no undo of its own: PencilKit's "add stroke"
+        /// step still removes the stroke by id, so one undo still removes it.
+        private func decorateNewStrokes(in canvas: PKCanvasView) {
+            guard case .ink = parent.mode else { return }
+            let current = canvas.drawing.strokes
+            let known = Set(baselineStrokes.map(\.id))
+            var changed = false
+            var result: [PKStroke] = []
+            result.reserveCapacity(current.count)
+            for stroke in current {
+                guard !known.contains(stroke.id) else {
+                    result.append(stroke)
+                    continue
+                }
+                if let replacement = decorated(stroke) {
+                    changed = true
+                    result.append(replacement)
+                } else {
+                    result.append(stroke)
+                }
+            }
+            guard changed else { return }
+            canvas.undoManager?.disableUndoRegistration()
+            isApplyingInput = true
+            canvas.drawing = PKDrawing(strokes: result)
+            isApplyingInput = false
+            canvas.undoManager?.enableUndoRegistration()
+        }
+
+        /// A new stroke as the editor's settings want it stored, or nil when
+        /// nothing changes.
+        private func decorated(_ stroke: PKStroke) -> PKStroke? {
+            let isHighlighter = StrokeClassifier.isHighlighter(stroke)
+            if parent.highlighterStraightLines, isHighlighter {
+                return ShapeStrokeBuilder.straightened(stroke)
+            }
+            var result = StrokeSmoothing.smoothed(stroke, strength: parent.smoothing)
+            if parent.lineStyle != .solid, !isHighlighter {
+                result = StrokeDash.masked(result ?? stroke, style: parent.lineStyle)
+            }
+            return result
         }
 
         func reportDrawingChange(_ canvasView: PKCanvasView) {
@@ -873,16 +1090,17 @@ public struct PencilCanvasView: UIViewRepresentable {
             parent.onStrokesChanged(records)
         }
 
-        /// With "Erase Highlighter Only" on, a stroke eraser pass may only
-        /// remove highlighters: every other stroke it took goes back at its
-        /// old index. The restore is not registered with the canvas's undo
-        /// manager, so one undo still restores the whole erase.
-        private func keepNonHighlighterStrokes(in canvas: PKCanvasView) {
+        /// With a filter on, a stroke eraser pass may only remove the inks it
+        /// names: every other stroke it took goes back at its old index. The
+        /// restore is not registered with the canvas's undo manager, so one
+        /// undo still restores the whole erase.
+        private func keepStrokesOutsideFilter(in canvas: PKCanvasView) {
             guard case let .eraser(kind, _) = parent.mode, kind == .stroke else { return }
+            let filter = effectiveEraserFilter
             let current = canvas.drawing.strokes
             let currentIDs = Set(current.map(\.id))
             let removed = baselineStrokes.filter { !currentIDs.contains($0.id) }
-            guard removed.contains(where: { !Self.isHighlighter($0) }) else { return }
+            guard removed.contains(where: { !filter.allows(StrokeClassifier.kind(of: $0)) }) else { return }
 
             var live: [UUID: PKStroke] = [:]
             for stroke in current { live[stroke.id] = stroke }
@@ -893,7 +1111,7 @@ public struct PencilCanvasView: UIViewRepresentable {
                 if let stroke = live[stroke.id] {
                     restored.append(stroke)
                     keptIDs.insert(stroke.id)
-                } else if !Self.isHighlighter(stroke) {
+                } else if !filter.allows(StrokeClassifier.kind(of: stroke)) {
                     restored.append(stroke)
                     keptIDs.insert(stroke.id)
                 }
@@ -908,12 +1126,6 @@ public struct PencilCanvasView: UIViewRepresentable {
             canvas.drawing = PKDrawing(strokes: restored)
             isApplyingInput = false
             canvas.undoManager?.enableUndoRegistration()
-        }
-
-        /// A highlighter is a translucent marker, the same rule the stroke
-        /// codec uses when it stores `StrokeTool.isHighlighter`.
-        private static func isHighlighter(_ stroke: PKStroke) -> Bool {
-            stroke.ink.inkType == .marker && stroke.ink.color.cgColor.alpha < 0.99
         }
     }
 }

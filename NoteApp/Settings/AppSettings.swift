@@ -1,4 +1,5 @@
 import Foundation
+import InkKit
 import NoteCore
 
 /// The app's preferences, stored in `UserDefaults`.
@@ -18,16 +19,21 @@ enum AppSettings {
         static let newNotebookOrientation = "noteapp.settings.newNotebookOrientation"
         static let newNotebookTemplateID = "noteapp.settings.newNotebookTemplateID"
         static let handwritingRecognitionEnabled = "noteapp.settings.handwritingRecognitionEnabled"
+        static let spotlightIndexingEnabled = "noteapp.settings.spotlightIndexingEnabled"
         static let holdToDrawShapes = "noteapp.settings.holdToDrawShapes"
         static let drawWithFinger = "noteapp.settings.drawWithFinger"
         static let twoFingerDoubleTapUndo = "noteapp.settings.twoFingerDoubleTapUndo"
         static let threeFingerDoubleTapRedo = "noteapp.settings.threeFingerDoubleTapRedo"
         static let pencilDoubleTapAction = "noteapp.settings.pencilDoubleTapAction"
         static let eraserHighlighterOnly = "noteapp.settings.eraserHighlighterOnly"
+        static let eraserFilter = "noteapp.settings.eraserFilter"
+        static let scratchOutToErase = "noteapp.settings.scratchOutToErase"
+        static let highlighterStraightLines = "noteapp.settings.highlighterStraightLines"
         static let boardDotGrid = "noteapp.settings.boardDotGrid"
         static let pageScrollMode = "noteapp.settings.pageScrollMode"
         static let rememberLastTool = "noteapp.settings.rememberLastTool"
         static let hideStatusBar = "noteapp.settings.hideStatusBar"
+        static let keepScreenAwake = "noteapp.settings.keepScreenAwake"
         static let zoomAutoAdvance = "noteapp.settings.zoomAutoAdvance"
         static let zoomMagnification = "noteapp.settings.zoomMagnification"
         static let zoomPanelFraction = "noteapp.settings.zoomPanelFraction"
@@ -117,10 +123,26 @@ enum AppSettings {
         bool(Key.eraserHighlighterOnly, default: false)
     }
 
+    /// The stored raw value that means "never chosen": a build before the
+    /// filter only had "Erase Highlighter Only".
+    static let eraserFilterUnset = -1
+
+    /// The filter for a stored raw value, migrating the old switch.
+    static func eraserFilter(rawValue: Int) -> EraserFilter {
+        guard rawValue >= 0 else { return eraserHighlighterOnly ? .highlighter : .all }
+        return EraserFilter(rawValue: rawValue)
+    }
+
     // MARK: - Handwriting recognition
 
     static var handwritingRecognitionEnabled: Bool {
         bool(Key.handwritingRecognitionEnabled, default: true)
+    }
+
+    /// When on, indexed page text is published to system search (Spotlight).
+    /// Everything stays on this device; turning it off withdraws the entries.
+    static var spotlightIndexingEnabled: Bool {
+        bool(Key.spotlightIndexingEnabled, default: true)
     }
 
     // MARK: - Writing

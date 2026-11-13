@@ -42,4 +42,15 @@ public struct AudioClip: Codable, Identifiable, Hashable, Sendable {
         self.createdAt = createdAt
         self.title = title
     }
+
+    /// Whether `date` falls inside this clip's recording window, both ends
+    /// included.
+    ///
+    /// The window comes from the wall clock, so a clock step during a recording
+    /// can shift it; ``AudioAnchor`` is the authority for a live playhead.
+    public func contains(_ date: Date) -> Bool {
+        guard durationSeconds.isFinite, durationSeconds >= 0 else { return false }
+        let offset = date.timeIntervalSince(startedAt)
+        return offset.isFinite && offset >= 0 && offset <= durationSeconds
+    }
 }

@@ -232,6 +232,14 @@ struct BoardStaticItemLayer: View {
                     BoardItemView(item: item, assetsDirectory: assetsDirectory)
                         .frame(width: max(frame.width, 1), height: max(frame.height, 1))
                         .scaleEffect(scale, anchor: .topLeading)
+                        // The scaled view takes the size it is drawn at, so a
+                        // container much smaller than the item (a thumbnail)
+                        // still places it at its offset.
+                        .frame(
+                            width: max(frame.width * scale, 0.01),
+                            height: max(frame.height * scale, 0.01),
+                            alignment: .topLeading
+                        )
                         .offset(
                             x: (frame.minX - content.minX) * scale,
                             y: (frame.minY - content.minY) * scale

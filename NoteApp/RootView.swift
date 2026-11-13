@@ -8,6 +8,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// The appearance choice; `nil` follows the device.
     @AppStorage(AppSettings.Key.theme) private var theme: AppTheme = .system
+    /// When on, the screen stays lit while the app is open.
+    @AppStorage(AppSettings.Key.keepScreenAwake) private var keepScreenAwake = false
 
     var body: some View {
         Group {
@@ -20,6 +22,12 @@ struct RootView: View {
             }
         }
         .preferredColorScheme(theme.colorScheme)
+        #if os(iOS)
+        .onAppear { UIApplication.shared.isIdleTimerDisabled = keepScreenAwake }
+        .onChange(of: keepScreenAwake) { _, isOn in
+            UIApplication.shared.isIdleTimerDisabled = isOn
+        }
+        #endif
         .task {
             #if os(iOS)
             MemoryPressure.purgeCachesOnMemoryWarning()

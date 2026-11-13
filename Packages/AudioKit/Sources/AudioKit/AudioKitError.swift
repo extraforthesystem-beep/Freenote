@@ -14,6 +14,8 @@ public enum AudioKitError: Error, Hashable, Sendable {
     case invalidClip(String)
     /// A metadata file is not valid clip JSON, or its contents do not match its file name.
     case corruptMetadata(String)
+    /// A transcript cannot be stored: it has no clip or a malformed segment.
+    case invalidTranscript(String)
     /// The requested clip has no metadata in the store.
     case clipNotFound(UUID)
     /// The file system refused a store operation.
@@ -42,6 +44,8 @@ extension AudioKitError: CustomStringConvertible {
             "Invalid audio clip: \(reason)"
         case let .corruptMetadata(name):
             "Corrupt audio clip metadata: \(name)"
+        case let .invalidTranscript(reason):
+            "Invalid transcript: \(reason)"
         case let .clipNotFound(id):
             "Audio clip not found: \(id.uuidString)"
         case let .storeFailure(reason):

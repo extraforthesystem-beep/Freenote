@@ -61,6 +61,9 @@ struct BoardEditorView: View {
     @State private var editingText = ""
     /// The finger drag on the selection, while one is in progress.
     @State private var drag: BoardItemDrag?
+    /// Whether the current drag has moved the selection. A tap on the
+    /// selection starts a drag that never moves, and saves nothing.
+    @State private var dragMoved = false
     /// Alignment guides for the current drag.
     @State private var snapGuides: [BoardSnapGuide] = []
     @State private var showsPhotoPicker = false
@@ -71,7 +74,9 @@ struct BoardEditorView: View {
     @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
-    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
+    @AppStorage(AppSettings.Key.eraserFilter) private var eraserFilterRaw = AppSettings.eraserFilterUnset
+    @AppStorage(AppSettings.Key.scratchOutToErase) private var scratchOutToErase = false
+    @AppStorage(AppSettings.Key.highlighterStraightLines) private var highlighterStraightLines = false
     @AppStorage(AppSettings.Key.boardDotGrid) private var showsDotGrid = true
     #endif
 
@@ -135,6 +140,7 @@ struct BoardEditorView: View {
                 showsPageControls: false,
                 showsElementTool: false,
                 backLabel: "Boards",
+                clearPageLabel: "Clear Board…",
                 insertMenu: { insertMenu },
                 moreMenu: { moreMenu },
                 itemMenu: { _ in EmptyView() }
@@ -194,7 +200,11 @@ struct BoardEditorView: View {
                 onToolGestureEnded: { editor.didEndToolGesture() },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
-                eraseHighlighterOnly: eraserHighlighterOnly,
+                smoothing: Double(editor.smoothing),
+                lineStyle: editor.lineStyle,
+                highlighterStraightLines: highlighterStraightLines,
+                scratchOutToErase: scratchOutToErase,
+                eraserFilter: AppSettings.eraserFilter(rawValue: eraserFilterRaw),
                 freeZoom: Self.zoomRange,
                 onViewportChange: { rect, zoom in
                     viewport.update(visibleRect: rect, zoom: zoom)
@@ -220,6 +230,7 @@ struct BoardEditorView: View {
                     onBringToFront: bringSelectionToFront,
                     onSendToBack: sendSelectionToBack,
                     onColor: setColor,
+                    onFillColor: setFillColor,
                     onEditText: beginEditingSelected
                 )
             }
@@ -255,7 +266,7 @@ struct BoardEditorView: View {
     }
 
     private var assetsDirectory: URL {
-        model.rootURL.appendingPathComponent("Assets", isDirectory: true)
+        model.assetsDirectory
     }
 
     #if os(iOS)
@@ -290,6 +301,7 @@ struct BoardEditorView: View {
     private var fingerInteraction: CanvasFingerInteraction {
         CanvasFingerInteraction(
             onTap: { point in canvasTapped(at: point) },
+            onDragPossible: { point in dragTarget(at: point) != nil },
             onDragBegan: { point in beginDrag(at: point) },
             onDragChanged: { translation in dragChanged(translation) },
             onDragEnded: { endDrag() }
@@ -871,34 +883,43 @@ extension BoardEditorView {
 
     // MARK: - Dragging
 
-    private func beginDrag(at point: CGPoint) -> Bool {
+    /// The drag a finger at `point` would start, if it lands on the selection.
+    /// Asked at touch-down, so a finger that also draws can wait for it and
+    /// ink anywhere else.
+    private func dragTarget(at point: CGPoint) -> BoardItemDrag? {
         guard !editor.isReadOnly,
               editingItemID == nil,
               let item = selectedItem,
               let frame = item.frame,
               !item.isLocked
-        else { return false }
+        else { return nil }
 
         let zoom = max(viewport.zoom, 0.001)
         if let corner = BoardResizeCorner.corner(at: point, in: frame, tolerance: 22 / zoom) {
-            drag = BoardItemDrag(
+            return BoardItemDrag(
                 itemID: item.id,
                 frame: frame,
                 corner: corner,
                 keepsSquare: isSticky(item)
             )
-            return true
         }
 
         guard frame.insetBy(dx: -2 / zoom, dy: -2 / zoom).contains(point) else {
-            return false
+            return nil
         }
-        drag = BoardItemDrag(itemID: item.id, frame: frame, corner: nil, keepsSquare: false)
+        return BoardItemDrag(itemID: item.id, frame: frame, corner: nil, keepsSquare: false)
+    }
+
+    private func beginDrag(at point: CGPoint) -> Bool {
+        guard let target = dragTarget(at: point) else { return false }
+        drag = target
+        dragMoved = false
         return true
     }
 
     private func dragChanged(_ translation: CGPoint) {
         guard let drag else { return }
+        dragMoved = true
         let now = Date()
 
         if let corner = drag.corner {
@@ -928,9 +949,13 @@ extension BoardEditorView {
     }
 
     private func endDrag() {
+        let moved = dragMoved && drag != nil
         drag = nil
+        dragMoved = false
         snapGuides = []
-        scheduleSave()
+        if moved {
+            scheduleSave()
+        }
     }
 
     private static func resized(
@@ -1196,6 +1221,23 @@ extension BoardEditorView {
         default:
             return
         }
+        item.updatedAt = Date()
+        board.add(item)
+        scheduleSave()
+    }
+
+    /// Sets or clears a shape's fill, leaving its line colour alone.
+    private func setFillColor(_ color: RGBAColor?) {
+        guard var item = selectedItem,
+              case let .shape(kind, frame, strokeColor, _, lineWidth) = item.content
+        else { return }
+        item.content = .shape(
+            kind: kind,
+            frame: frame,
+            strokeColor: strokeColor,
+            fillColor: color,
+            lineWidth: lineWidth
+        )
         item.updatedAt = Date()
         board.add(item)
         scheduleSave()

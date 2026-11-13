@@ -35,6 +35,9 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     var showsElementTool = true
     /// VoiceOver and tooltip label of the leading back button.
     var backLabel = "Library"
+    /// The eraser popover's destructive action: a page in the notebook, the
+    /// whole board on a board.
+    var clearPageLabel = "Clear Page…"
     @ViewBuilder let insertMenu: () -> InsertMenu
     @ViewBuilder let moreMenu: () -> MoreMenu
     @ViewBuilder let itemMenu: (ToolbarItemID) -> ItemMenu
@@ -551,7 +554,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         .accessibilityLabel("\(editor.penStyle.displayName), current pen")
         .accessibilityHint(isSelected ? "Opens pen settings" : "Selects the pen")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .help("Pen (P): tap again for pen styles")
+        .help("Pen (P): tap again for pen styles, dashes and stabilisation")
         .popover(isPresented: popoverBinding(.pen)) {
             PenSettingsPopover(editor: editor)
                 .presentationCompactAdaptation(.popover)
@@ -581,7 +584,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             "Highlighter",
             systemImage: "highlighter",
             isSelected: editor.tool == .highlighter,
-            help: "Highlighter (H): tap again for width"
+            help: "Highlighter (H): tap again for width, straight lines and stabilisation"
         ) {
             select(.highlighter, popover: .highlighter)
         }
@@ -605,7 +608,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             Button("Pixel Eraser", systemImage: "eraser.line.dashed") { editor.setEraser(kind: .pixel) }
         }
         .popover(isPresented: popoverBinding(.eraser)) {
-            EraserSettingsPopover(editor: editor) {
+            EraserSettingsPopover(editor: editor, clearLabel: clearPageLabel) {
                 popover = nil
                 onClearPage()
             }
@@ -1005,6 +1008,10 @@ private struct PenSettingsPopover: View {
                 }
             }
                 WidthSlider(editor: editor)
+                Divider()
+                LineStylePicker(editor: editor)
+                SmoothingSlider(title: "Stabilisation", editor: editor)
+                ScratchOutToggle()
             }
             .padding(16)
         }
@@ -1016,12 +1023,23 @@ private struct PenSettingsPopover: View {
 private struct WidthSettingsPopover: View {
     let title: String
     @Bindable var editor: EditorToolState
+    @AppStorage(AppSettings.Key.highlighterStraightLines) private var straightLines = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(title)
                 .font(.headline)
             WidthSlider(editor: editor)
+            Divider()
+            SmoothingSlider(title: "Stabilisation", editor: editor)
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Straight Lines", isOn: $straightLines)
+                    .font(.subheadline)
+                    .accessibilityHint("Highlights a straight line from where the Pencil lands to where it lifts")
+                Text("Draws from where the Pencil lands to where it lifts, instead of following the hand.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(16)
         .frame(width: 280)
@@ -1112,11 +1130,86 @@ private struct WidthSlider: View {
     }
 }
 
+/// Solid, dashed or dotted pen ink.
+private struct LineStylePicker: View {
+    @Bindable var editor: EditorToolState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Line Style")
+                .font(.subheadline)
+            Picker("Line Style", selection: Binding(
+                get: { editor.lineStyle },
+                set: { editor.setLineStyle($0) }
+            )) {
+                ForEach(PenLineStyle.allCases, id: \.self) { style in
+                    Text(style.displayName).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Line style")
+            Text("Dashes are part of the stroke, so they keep their place in the page, the thumbnail and the export.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// How hard the saved stroke is steadied, 0...100.
+private struct SmoothingSlider: View {
+    let title: String
+    @Bindable var editor: EditorToolState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.subheadline)
+                Spacer()
+                Text("\(editor.smoothing)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(editor.smoothing) },
+                    set: { editor.setSmoothing(Int($0.rounded())) }
+                ),
+                in: 0...100,
+                step: 5
+            )
+            .accessibilityLabel(title)
+            .accessibilityValue("\(editor.smoothing) of 100")
+            Text("Steadies the saved stroke. 0 keeps every wobble.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// The pen-native delete gesture, with the off switch the competitors' users
+/// ask for.
+private struct ScratchOutToggle: View {
+    @AppStorage(AppSettings.Key.scratchOutToErase) private var scratchOut = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Scratch to Erase", isOn: $scratchOut)
+                .font(.subheadline)
+                .accessibilityHint("Scribble over ink with the pen to delete it")
+            Text("Scribble over ink to delete the strokes it covers. Off keeps every scribble as ink.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 private struct EraserSettingsPopover: View {
     @Bindable var editor: EditorToolState
+    let clearLabel: String
     let onClearPage: () -> Void
     @AppStorage(EditorToolState.eraserAutoDeselectKey) private var autoDeselect = false
-    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var highlighterOnly = false
+    @AppStorage(AppSettings.Key.eraserFilter) private var filterRaw = AppSettings.eraserFilterUnset
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1157,14 +1250,17 @@ private struct EraserSettingsPopover: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 4) {
-                Toggle("Erase Highlighter Only", isOn: $highlighterOnly)
+                Text("Erase")
                     .font(.subheadline)
-                    .disabled(editor.eraserKind != .stroke)
-                    .accessibilityHint("Only highlighter strokes disappear when erasing")
-                Text("Leaves pen ink in place. Works with the whole-stroke eraser.")
+                Toggle("Pen and Pencil", isOn: filterBinding(.pen))
+                Toggle("Highlighter", isOn: filterBinding(.highlighter))
+                Toggle("Shapes", isOn: filterBinding(.shape))
+                    .accessibilityHint("Strokes snapped by Hold to Shape")
+                Text("Only the ink types switched on are erased. Shapes are strokes snapped by Hold to Shape. Works with the whole-stroke eraser.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .disabled(editor.eraserKind != .stroke)
             Divider()
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("Auto-Deselect", isOn: $autoDeselect)
@@ -1175,13 +1271,34 @@ private struct EraserSettingsPopover: View {
                     .foregroundStyle(.secondary)
             }
             Divider()
-            Button("Clear Page…", systemImage: "trash", role: .destructive) {
+            Button(clearLabel, systemImage: "trash", role: .destructive) {
                 onClearPage()
             }
             .font(.subheadline)
         }
         .padding(16)
         .frame(width: 280)
+    }
+
+    /// The filter shown, with the old "Erase Highlighter Only" switch
+    /// migrated until the first toggle.
+    private var eraserFilter: EraserFilter {
+        AppSettings.eraserFilter(rawValue: filterRaw)
+    }
+
+    private func filterBinding(_ kind: EraserFilter) -> Binding<Bool> {
+        Binding(
+            get: { eraserFilter.contains(kind) },
+            set: { isOn in
+                var updated = eraserFilter
+                if isOn {
+                    updated.insert(kind)
+                } else {
+                    updated.remove(kind)
+                }
+                filterRaw = updated.rawValue
+            }
+        )
     }
 }
 
