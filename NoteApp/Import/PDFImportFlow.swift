@@ -84,7 +84,11 @@ final class PDFImportFlow: Identifiable {
         await read()
     }
 
-    func confirm(selection: PDFPageSelection, insertAtEnd: Bool) async {
+    func confirm(
+        selection: PDFPageSelection,
+        insertAtEnd: Bool,
+        margin: PDFPageMargin
+    ) async {
         guard case .choosing = phase else { return }
         importPageCount = selection.pdfIndices(pageCount: pageCount).count
         report(0)
@@ -94,6 +98,7 @@ final class PDFImportFlow: Identifiable {
                 try await model.importPDF(
                     from: url,
                     selection: selection,
+                    margin: margin,
                     password: password
                 ) { [weak self] fraction in
                     Task { @MainActor in self?.report(fraction) }
@@ -104,6 +109,7 @@ final class PDFImportFlow: Identifiable {
                     into: session,
                     selection: selection,
                     atEnd: insertAtEnd,
+                    margin: margin,
                     password: password
                 ) { [weak self] fraction in
                     Task { @MainActor in self?.report(fraction) }
@@ -202,8 +208,14 @@ struct PDFImportSheet: View {
         case let .needsPassword(message):
             passwordSection(message: message)
         case let .choosing(info):
-            PDFPageChoiceForm(info: info, isInsert: flow.isInsert) { selection, insertAtEnd in
-                Task { await flow.confirm(selection: selection, insertAtEnd: insertAtEnd) }
+            PDFPageChoiceForm(info: info, isInsert: flow.isInsert) { selection, insertAtEnd, margin in
+                Task {
+                    await flow.confirm(
+                        selection: selection,
+                        insertAtEnd: insertAtEnd,
+                        margin: margin
+                    )
+                }
             }
         case let .importing(fraction):
             Section {
@@ -266,17 +278,18 @@ struct PDFImportSheet: View {
 private struct PDFPageChoiceForm: View {
     let info: PDFDocumentInfo
     let isInsert: Bool
-    let onImport: (PDFPageSelection, Bool) -> Void
+    let onImport: (PDFPageSelection, Bool, PDFPageMargin) -> Void
 
     @State private var usesRange = false
     @State private var fromPage: Int
     @State private var toPage: Int
     @State private var insertAtEnd = false
+    @State private var margin: PDFPageMargin = .none
 
     init(
         info: PDFDocumentInfo,
         isInsert: Bool,
-        onImport: @escaping (PDFPageSelection, Bool) -> Void
+        onImport: @escaping (PDFPageSelection, Bool, PDFPageMargin) -> Void
     ) {
         self.info = info
         self.isInsert = isInsert
@@ -316,8 +329,21 @@ private struct PDFPageChoiceForm: View {
         }
 
         Section {
+            Picker("Writing Margin", selection: $margin) {
+                ForEach(PDFPageMargin.allCases) { choice in
+                    Text(choice.title).tag(choice)
+                }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("Writing Margin")
+        } footer: {
+            Text("Blank space beside each page to write notes in. The page grows; the PDF keeps its own size.")
+        }
+
+        Section {
             Button(actionTitle) {
-                onImport(selection, isInsert && insertAtEnd)
+                onImport(selection, isInsert && insertAtEnd, margin)
             }
         }
     }
