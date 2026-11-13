@@ -13,6 +13,12 @@ final class HandwritingSearch {
     /// The folder the index file lives in.
     private let indexRoot: URL
     private let recognizer = PencilKitRecognizer()
+    private let spotlight = SpotlightIndexer()
+    /// Notebook titles seen by the last indexing pass, for Spotlight entries.
+    private var notebookTitles: [UUID: String] = [:]
+    /// A one-line message about pages re-read because the recogniser changed;
+    /// the library takes it once and shows it.
+    private var pendingRecognitionNotice: String?
 
     private(set) var hits: [SearchHit] = []
     private(set) var isIndexing = false
@@ -51,6 +57,10 @@ final class HandwritingSearch {
         totalPages = notebooks.reduce(0) { $0 + $1.pageOrder.count }
         defer { isIndexing = false }
 
+        for notebook in notebooks {
+            notebookTitles[notebook.id] = notebook.title
+        }
+
         do {
             try await index.load()
         } catch {
@@ -60,18 +70,28 @@ final class HandwritingSearch {
         // One index file write per batch of pages, not one per page.
         let batch = index
         await batch.beginDeferringWrites()
+        var reReadAfterUpdate = 0
+        var published: [PageSearchRecord] = []
         pages: for notebook in notebooks {
             for (offset, pageID) in notebook.pageOrder.enumerated() {
                 if Task.isCancelled { break pages }
                 if let page = try? await store.loadPage(pageID, in: notebook.id) {
+                    // A stored record from an older recogniser is re-read below;
+                    // count it so the library can say what changed.
+                    if let existing = await index.record(for: notebook.id, pageID: pageID),
+                       existing.recognitionVersion != recognizer.recognitionVersion {
+                        reReadAfterUpdate += 1
+                    }
                     do {
-                        _ = try await index.update(
+                        if let record = try await index.update(
                             page: page,
                             in: notebook.id,
                             pageIndex: offset + 1,
                             using: recognizer,
                             assetsDirectory: store.assetsDirectoryURL(for: notebook.id)
-                        )
+                        ) {
+                            published.append(record)
+                        }
                     } catch {
                         lastError = error.localizedDescription
                     }
@@ -83,6 +103,47 @@ final class HandwritingSearch {
             }
         }
         await endDeferringWrites(of: batch)
+        pendingRecognitionNotice = Self.recognitionNotice(pages: reReadAfterUpdate)
+        await publish(published)
+        await seedSpotlightIfNeeded()
+    }
+
+    /// Whether every indexed page has been offered to system search once.
+    private static let spotlightSeedKey = "noteapp.search.spotlightSeeded"
+
+    /// A sentence for the library when a new recogniser re-read stored pages.
+    private static func recognitionNotice(pages: Int) -> String? {
+        guard pages > 0 else { return nil }
+        return pages == 1
+            ? "1 page was read again with the updated handwriting recogniser."
+            : "\(pages) pages were read again with the updated handwriting recogniser."
+    }
+
+    /// The notice from the last full pass, if any; cleared so it shows once.
+    func takeRecognitionNotice() -> String? {
+        defer { pendingRecognitionNotice = nil }
+        return pendingRecognitionNotice
+    }
+
+    /// Adds or replaces the pages' system-search entries when that is enabled.
+    private func publish(_ records: [PageSearchRecord]) async {
+        guard AppSettings.spotlightIndexingEnabled, !records.isEmpty else { return }
+        try? await spotlight.index(records, notebookTitles: notebookTitles)
+    }
+
+    /// Publishes the whole index once, so pages recognised by an earlier build
+    /// appear in system search without waiting to be edited again.
+    private func seedSpotlightIfNeeded() async {
+        let defaults = UserDefaults.standard
+        guard AppSettings.spotlightIndexingEnabled else {
+            defaults.removeObject(forKey: Self.spotlightSeedKey)
+            return
+        }
+        guard !defaults.bool(forKey: Self.spotlightSeedKey) else { return }
+        let records = await index.allRecords()
+        guard !records.isEmpty else { return }
+        try? await spotlight.index(records, notebookTitles: notebookTitles)
+        defaults.set(true, forKey: Self.spotlightSeedKey)
     }
 
     /// Ends a batch of index writes. An index that `reset()` replaced
@@ -99,6 +160,7 @@ final class HandwritingSearch {
     /// Re-indexes one notebook after it is closed.
     func index(notebook: NotebookManifest, store: LibraryStore) async {
         guard AppSettings.handwritingRecognitionEnabled else { return }
+        notebookTitles[notebook.id] = notebook.title
         do {
             try await index.load()
         } catch {
@@ -106,21 +168,25 @@ final class HandwritingSearch {
         }
         let batch = index
         await batch.beginDeferringWrites()
+        var published: [PageSearchRecord] = []
         for (offset, pageID) in notebook.pageOrder.enumerated() {
             if Task.isCancelled { break }
             guard let page = try? await store.loadPage(pageID, in: notebook.id) else { continue }
-            try? await index.update(
+            if let record = try? await index.update(
                 page: page,
                 in: notebook.id,
                 pageIndex: offset + 1,
                 using: recognizer,
                 assetsDirectory: store.assetsDirectoryURL(for: notebook.id)
-            )
+            ) {
+                published.append(record)
+            }
             if (offset + 1) % Self.pagesPerWrite == 0, batch === index {
                 try? await batch.flushDeferredWrites()
             }
         }
         await endDeferringWrites(of: batch)
+        await publish(published)
     }
 
     func search(_ query: String) async {
@@ -192,8 +258,9 @@ final class HandwritingSearch {
         lastError = nil
     }
 
-    /// All readable text on a page: typed text boxes first, then recognised
-    /// handwriting. Used by the on-device AI panel, not by the search index.
+    /// All readable text on a page: typed text boxes first, then the single best
+    /// reading of the handwriting. Used by the on-device AI panel, not by the
+    /// search index, which keeps the broader `indexableContent`.
     func noteText(for page: Page) async -> String {
         var parts: [String] = []
         let typed = page.elements.compactMap { element -> String? in
@@ -209,7 +276,7 @@ final class HandwritingSearch {
         parts.append(contentsOf: typed)
 
         if !page.strokes.isEmpty,
-           let recognised = await recognizer.text(for: page.strokes) {
+           let recognised = await recognizer.recognizedText(for: page.strokes) {
             let trimmed = recognised.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { parts.append(trimmed) }
         }
@@ -218,6 +285,23 @@ final class HandwritingSearch {
 
     func removeNotebook(_ notebookID: UUID) async {
         try? await index.removeNotebook(notebookID)
+        try? await spotlight.removeNotebook(notebookID)
+        notebookTitles[notebookID] = nil
+    }
+
+    /// Publishes every indexed page, or withdraws them all, when the Spotlight
+    /// setting changes. Recognition being off means there is nothing to publish.
+    func updateSpotlight(enabled: Bool) async {
+        let defaults = UserDefaults.standard
+        guard enabled, AppSettings.handwritingRecognitionEnabled else {
+            defaults.removeObject(forKey: Self.spotlightSeedKey)
+            try? await spotlight.removeAll()
+            return
+        }
+        let records = await index.allRecords()
+        guard !records.isEmpty else { return }
+        try? await spotlight.index(records, notebookTitles: notebookTitles)
+        defaults.set(true, forKey: Self.spotlightSeedKey)
     }
 
     /// Empties the index: the persisted file is removed and the actor is
@@ -236,10 +320,13 @@ final class HandwritingSearch {
         indexedPages = 0
         totalPages = 0
         lastError = nil
+        pendingRecognitionNotice = nil
+        try? await spotlight.removeAll()
     }
 
     func removePage(_ pageID: UUID, notebookID: UUID) async {
         try? await index.remove(pageID: pageID, notebookID: notebookID)
+        try? await spotlight.remove(pageID: pageID, notebookID: notebookID)
         hits.removeAll { $0.notebookID == notebookID && $0.pageID == pageID }
     }
 }
