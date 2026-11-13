@@ -213,6 +213,7 @@ struct BoardEditorView: View {
                     onBringToFront: bringSelectionToFront,
                     onSendToBack: sendSelectionToBack,
                     onColor: setColor,
+                    onFillColor: setFillColor,
                     onEditText: beginEditingSelected
                 )
             }
@@ -1203,6 +1204,23 @@ extension BoardEditorView {
         default:
             return
         }
+        item.updatedAt = Date()
+        board.add(item)
+        scheduleSave()
+    }
+
+    /// Sets or clears a shape's fill, leaving its line colour alone.
+    private func setFillColor(_ color: RGBAColor?) {
+        guard var item = selectedItem,
+              case let .shape(kind, frame, strokeColor, _, lineWidth) = item.content
+        else { return }
+        item.content = .shape(
+            kind: kind,
+            frame: frame,
+            strokeColor: strokeColor,
+            fillColor: color,
+            lineWidth: lineWidth
+        )
         item.updatedAt = Date()
         board.add(item)
         scheduleSave()
