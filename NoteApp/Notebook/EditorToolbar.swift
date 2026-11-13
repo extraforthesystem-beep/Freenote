@@ -28,6 +28,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     @State private var showsZoomOptions = false
     /// The favourite slot the palette is replacing, when one is being edited.
     @State private var editingFavorite: Int?
+    /// The width slot whose edit popover is open.
+    @State private var editingWidth: Int?
     /// The favourite a dragged colour is hovering over, for the drop ring.
     @State private var dropTarget: Int?
 
@@ -254,7 +256,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
                     .fill(Color(pen.color))
                     .overlay(Circle().strokeBorder(.white.opacity(isSelected ? 0.9 : 0), lineWidth: 1.5))
                     .overlay(Circle().strokeBorder(.secondary.opacity(isSelected ? 0 : 0.35), lineWidth: 0.5))
-                    .frame(width: dotSize(pen.width, range: 1...40), height: dotSize(pen.width, range: 1...40))
+                    .frame(width: dotSize(pen.width, range: pen.widthRange), height: dotSize(pen.width, range: pen.widthRange))
                     .frame(width: 18, height: 18)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .bold))
@@ -538,30 +540,58 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
 
     private var widths: some View {
         let presets = editor.widthPresets
+        let ranks = WidthPresets.ranks(for: presets)
         let current = editor.currentWidth
         let nearest = presets.indices.min { abs(presets[$0] - current) < abs(presets[$1] - current) }
+        let nearestWidth = nearest.map { presets[$0] }
         let isApplicable = editor.tool.drawsInk || editor.tool == .eraser
+        let isEditable = editor.tool != .eraser
         return HStack(spacing: 0) {
             ForEach(presets.indices, id: \.self) { index in
-                let isSelected = isApplicable && index == nearest
-                    && abs(presets[index] - current) < max(0.5, current * 0.05)
+                let width = presets[index]
+                let isSelected = isApplicable && nearestWidth.map { abs(width - $0) < 0.0001 } == true
                 Button {
-                    editor.setWidth(presets[index])
+                    editor.setWidth(width)
                 } label: {
                     Circle()
                         .fill(isSelected ? Color.white : Color.primary)
-                        .frame(width: CGFloat(5 + index * 4), height: CGFloat(5 + index * 4))
+                        .frame(width: CGFloat(5 + ranks[index] * 4), height: CGFloat(5 + ranks[index] * 4))
                         .frame(width: 32, height: 32)
                         .background(isSelected ? Color.accentColor : Color.clear, in: Circle())
                         .frame(width: 38, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(["Thin", "Medium", "Thick"][min(index, 2)])
+                .accessibilityLabel("\(PenWidth.label(width)), \(["thin", "medium", "thick"][min(index, 2)]) preset")
+                .accessibilityHint(isEditable ? "Touch and hold to edit this width" : "")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .contextMenu {
+                    if isEditable {
+                        Button("Edit…", systemImage: "slider.horizontal.3") {
+                            editingWidth = index
+                        }
+                        Button("Set to Current Width", systemImage: "arrow.down.to.line") {
+                            editor.setWidthPreset(at: index, to: current)
+                        }
+                        Button("Reset Widths", systemImage: "arrow.counterclockwise") {
+                            editor.resetWidthPresets()
+                        }
+                    }
+                }
             }
         }
         .opacity(isApplicable ? 1 : 0.4)
+        .popover(isPresented: editingWidthBinding) {
+            WidthPresetPopover(editor: editor, slot: editingWidth ?? 0)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var editingWidthBinding: Binding<Bool> {
+        Binding(
+            get: { editingWidth != nil },
+            set: { if !$0 { editingWidth = nil } }
+        )
     }
 
     private func dotSize(_ width: Double, range: ClosedRange<Double>) -> CGFloat {
@@ -630,35 +660,86 @@ private struct WidthSettingsPopover: View {
     }
 }
 
+private struct WidthPresetPopover: View {
+    @Bindable var editor: EditorToolState
+    let slot: Int
+
+    private var width: Double? {
+        editor.widthPresets.indices.contains(slot) ? editor.widthPresets[slot] : nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Edit Width Preset")
+                    .font(.headline)
+                if let width {
+                    Text("Preset \(slot + 1), \(PenWidth.label(width))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            WidthSlider(editor: editor, presetSlot: slot)
+        }
+        .padding(16)
+        .frame(width: 280)
+    }
+}
+
 private struct WidthSlider: View {
     @Bindable var editor: EditorToolState
+    /// When set, the slider edits this width preset slot instead of the ink
+    /// tool's current width.
+    var presetSlot: Int? = nil
     /// Shown while dragging; written to the editor (and so to disk, debounced)
     /// only when the drag ends.
     @State private var draft: Double?
 
+    private var shownWidth: Double {
+        guard let presetSlot, editor.widthPresets.indices.contains(presetSlot) else {
+            return editor.inkTool.width
+        }
+        return editor.widthPresets[presetSlot]
+    }
+
+    private var sliderRange: ClosedRange<Double> {
+        PenWidth.millimetreRange(for: editor.inkWidthRange)
+    }
+
     var body: some View {
+        let shown = draft ?? shownWidth
+        let sliderValue = min(
+            max(PenWidth.millimetres(fromPoints: shown), sliderRange.lowerBound),
+            sliderRange.upperBound
+        )
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Width")
                     .font(.subheadline)
                 Spacer()
-                Text(String(format: "%.1f pt", draft ?? editor.inkTool.width))
+                Text(PenWidth.label(shown))
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Slider(
                 value: Binding(
-                    get: { draft ?? editor.inkTool.width },
-                    set: { draft = $0 }
+                    get: { sliderValue },
+                    set: { draft = PenWidth.snappedPoints(fromMillimetres: $0) }
                 ),
-                in: editor.inkWidthRange
+                in: sliderRange,
+                step: PenWidth.millimetreStep
             ) { isEditing in
                 if !isEditing, let draft {
-                    editor.setWidth(draft)
+                    if let presetSlot {
+                        editor.setWidthPreset(at: presetSlot, to: draft)
+                    } else {
+                        editor.setWidth(draft)
+                    }
                     self.draft = nil
                 }
             }
-            .accessibilityLabel("Width")
+            .accessibilityLabel("Width in millimetres")
+            .accessibilityValue(PenWidth.label(shown))
         }
     }
 }

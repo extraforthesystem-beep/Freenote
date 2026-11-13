@@ -234,12 +234,12 @@ struct FavoritePensPopover: View {
             Circle()
                 .fill(Color(pen.color))
                 .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
-                .frame(width: dotSize(pen.width), height: dotSize(pen.width))
+                .frame(width: dotSize(pen.width, style: pen.style), height: dotSize(pen.width, style: pen.style))
                 .frame(width: 26, height: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(pen.style.displayName)
                     .font(.subheadline)
-                Text(String(format: "%.1f pt", pen.width))
+                Text(PenWidth.label(pen.width))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -253,7 +253,7 @@ struct FavoritePensPopover: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(pen.style.displayName), \(editor.colorName(for: pen.color)), \(String(format: "%.1f points", pen.width))"
+            "\(pen.style.displayName), \(editor.colorName(for: pen.color)), \(PenWidth.label(pen.width))"
         )
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
@@ -267,11 +267,13 @@ struct FavoritePensPopover: View {
             return "This pen is already saved."
         }
         return "Saves \(editor.penStyle.displayName.lowercased()), \(editor.colorName(for: current.color)), "
-            + String(format: "%.1f pt.", current.width)
+            + "\(PenWidth.label(current.width))."
     }
 
-    private func dotSize(_ width: Double) -> CGFloat {
-        CGFloat(10 + min(max((width - 1) / 39, 0), 1) * 10)
+    private func dotSize(_ width: Double, style: PenStyle) -> CGFloat {
+        let range = style.widthRange
+        let fraction = (width - range.lowerBound) / (range.upperBound - range.lowerBound)
+        return CGFloat(7 + min(max(fraction, 0), 1) * 11)
     }
 }
 #endif
