@@ -226,6 +226,7 @@ enum SelectionActions {
             guard let session, session.page?.id == before.id else { return }
             Task {
                 await session.applySelectionEdit(
+                    pageID: before.id,
                     strokes: before.strokes,
                     elements: before.elements,
                     failure: "The last change could not be undone."
@@ -234,6 +235,7 @@ enum SelectionActions {
         }
         Task {
             await session.applySelectionEdit(
+                pageID: before.id,
                 strokes: after.strokes,
                 elements: after.elements,
                 failure: failure

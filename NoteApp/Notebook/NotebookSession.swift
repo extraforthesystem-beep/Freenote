@@ -845,13 +845,15 @@ final class NotebookSession: Identifiable {
 
     /// Replaces the page's ink and items as one edit, for a lasso action and
     /// its undo. Ids that leave get tombstones; ids that come back lose theirs,
-    /// the same rule `strokesChanged` follows.
+    /// the same rule `strokesChanged` follows. A report for a page that is no
+    /// longer open is dropped.
     func applySelectionEdit(
+        pageID: UUID,
         strokes: [StrokeRecord],
         elements: [PageElement],
         failure: String
     ) async {
-        guard var updated = page else { return }
+        guard var updated = page, updated.id == pageID else { return }
         let newStrokeIDs = Set(strokes.map(\.id))
         let newElementIDs = Set(elements.map(\.id))
         updated.deletedStrokeIDs.formUnion(Set(updated.strokes.map(\.id)).subtracting(newStrokeIDs))
