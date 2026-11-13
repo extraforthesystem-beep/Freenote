@@ -176,6 +176,8 @@ struct NotebookPane: View {
     @State private var showsCompactPages = false
     @State private var showsHistory = false
     @State private var showsLassoHint = false
+    @State private var studyScope: NotebookStudyScope?
+    @State private var showsTapeStudy = false
     @State private var selectedElementID: UUID?
     @State private var isRulerActive = false
     @State private var editor = EditorToolState()
@@ -229,6 +231,16 @@ struct NotebookPane: View {
                 VStack(spacing: 0) {
                     pageArea
                         .overlay(alignment: .top) { banners }
+                        #if os(iOS)
+                        .overlay(alignment: .topTrailing) {
+                            if showsTapeStudy {
+                                TapeStudyControls(session: session) {
+                                    showsTapeStudy = false
+                                }
+                                .padding(16)
+                            }
+                        }
+                        #endif
                         .overlay(alignment: .bottom) {
                             PageCounterPill(session: session) { index in
                                 Task { await session.goToPage(index) }
@@ -465,6 +477,9 @@ struct NotebookPane: View {
                 ai: model.ai,
                 study: model.study
             )
+        }
+        .sheet(item: $studyScope) { scope in
+            NotebookStudySheet(study: model.study, session: session, scope: scope)
         }
         .sheet(isPresented: $showsHistory) {
             VersionHistoryView(session: session)
@@ -810,6 +825,24 @@ struct NotebookPane: View {
                 showsTemplatePicker = true
             }
             .disabled(session.currentPageID == nil)
+        }
+        Section("Study") {
+            Button("Review This Notebook…", systemImage: "rectangle.stack") {
+                studyScope = .notebook
+            }
+            Button("Review This Page…", systemImage: "rectangle.on.rectangle") {
+                studyScope = .page
+            }
+            .disabled(session.currentPageID == nil)
+            #if os(iOS)
+            Button(
+                showsTapeStudy ? "Hide Tape Study Bar" : "Tape Study",
+                systemImage: "bandage"
+            ) {
+                showsTapeStudy.toggle()
+            }
+            .disabled(session.currentPageID == nil)
+            #endif
         }
         Section {
             Button(
