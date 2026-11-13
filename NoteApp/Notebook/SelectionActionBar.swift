@@ -20,6 +20,17 @@ struct SelectionActionBar: View {
 
     private var hasInk: Bool { selection.hasInk }
 
+    /// Ink or a selected text box/sticky note to copy as text.
+    private var hasTextContent: Bool {
+        guard let page = session.page else { return false }
+        return hasInk || selection.elements(in: page).contains { element in
+            switch element.content {
+            case .text, .stickyNote: true
+            case .image, .shape, .pdfPage, .tape: false
+            }
+        }
+    }
+
     /// What the actions may change: ink and items on unlocked layers.
     private var editableCount: Int {
         guard let page = session.page else { return 0 }
@@ -210,6 +221,7 @@ struct SelectionActionBar: View {
             Button("Copy as Text", systemImage: "textformat.abc") {
                 runTextAction { await SelectionActions.copyAsText(selection: selection, session: session) }
             }
+            .disabled(!hasTextContent)
             Button("Convert to Text Box", systemImage: "character.textbox") {
                 runTextAction {
                     await SelectionActions.convertToTextBox(
@@ -219,12 +231,13 @@ struct SelectionActionBar: View {
                     )
                 }
             }
+            .disabled(!hasInk)
         } label: {
             iconLabel("textformat")
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .disabled(!hasInk || isWorking)
+        .disabled((!hasTextContent && !hasInk) || isWorking)
         .accessibilityLabel("Selection text")
     }
 
