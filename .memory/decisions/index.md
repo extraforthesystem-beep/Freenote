@@ -15,3 +15,4 @@
 * [PDF export is vector; import rewrites only when it must](2026-11-12-pdf-vector-export-and-import.md)
 * [Physical iPad installs use the personal team and automatic signing](2026-11-12-device-install-signing.md)
 * [Sticky notes and tape are page elements; search hits carry source and snippet](2026-11-12-sticky-tape-and-search-hits.md)
+* [Wave 4 lands eight research-backed feature sets on foundation-base](2026-11-13-wave4-feature-build.md)
