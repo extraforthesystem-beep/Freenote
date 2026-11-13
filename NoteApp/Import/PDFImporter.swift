@@ -30,6 +30,36 @@ enum PDFImportError: LocalizedError {
     }
 }
 
+/// Where blank writing space is added beside each imported PDF page, so notes
+/// can go next to the text instead of on top of it. Page points added per side;
+/// the page grows, the PDF keeps its own size.
+nonisolated enum PDFPageMargin: String, CaseIterable, Identifiable, Sendable {
+    case none
+    case left
+    case right
+    case both
+
+    /// A comfortable column to write a margin note in.
+    static let width: Double = 240
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: "None"
+        case .left: "Left"
+        case .right: "Right"
+        case .both: "Both Sides"
+        }
+    }
+
+    var addsLeft: Bool { self == .left || self == .both }
+    var addsRight: Bool { self == .right || self == .both }
+
+    var leftInset: Double { addsLeft ? Self.width : 0 }
+    var rightInset: Double { addsRight ? Self.width : 0 }
+}
+
 /// Which PDF pages to import, in the 1-based numbers the range picker shows.
 enum PDFPageSelection: Sendable, Hashable {
     case all
@@ -114,6 +144,7 @@ enum PDFImporter {
         into store: LibraryStore,
         title: String? = nil,
         selection: PDFPageSelection = .all,
+        margin: PDFPageMargin = .none,
         password: String? = nil,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> PDFImportResult {
@@ -139,7 +170,7 @@ enum PDFImporter {
             var pageIDs: [UUID] = []
             pageIDs.reserveCapacity(scan.pages.count)
             for (done, scanned) in scan.pages.enumerated() {
-                let page = makePage(scanned, assetName: assetName)
+                let page = makePage(scanned, assetName: assetName, margin: margin)
                 try await store.savePage(page, in: manifest.id)
                 pageIDs.append(page.id)
                 onProgress?(0.5 + 0.5 * Double(done + 1) / Double(scan.pages.count))
@@ -174,6 +205,7 @@ enum PDFImporter {
         into session: NotebookSession,
         selection: PDFPageSelection,
         atEnd: Bool = false,
+        margin: PDFPageMargin = .none,
         password: String? = nil,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> PDFPageInsertResult {
@@ -188,7 +220,7 @@ enum PDFImporter {
         )
 
         let assetName = try await store.addAsset(scan.data, fileExtension: "pdf", to: notebookID)
-        let pages = scan.pages.map { makePage($0, assetName: assetName) }
+        let pages = scan.pages.map { makePage($0, assetName: assetName, margin: margin) }
         let index = atEnd ? session.pageCount : session.pageIndex + 1
 
         let inserted = await session.insertPages(pages, at: index) { written, total in
@@ -322,14 +354,21 @@ enum PDFImporter {
     // MARK: - Pages
 
     /// One notebook page backed by one PDF page, with its imported ink on the
-    /// page's only layer.
-    private static func makePage(_ scanned: ScannedPage, assetName: String) -> Page {
+    /// page's only layer. A writing margin widens the page and moves the PDF
+    /// and its ink across, so both keep their own size and position.
+    private static func makePage(
+        _ scanned: ScannedPage,
+        assetName: String,
+        margin: PDFPageMargin
+    ) -> Page {
         let layer = Page.Layer(id: UUID(), name: "Layer 1")
+        let left = margin.leftInset
+        let right = margin.rightInset
         let element = PageElement(
             id: UUID(),
             layerID: layer.id,
             frame: ElementFrame(
-                x: 0,
+                x: left,
                 y: 0,
                 width: scanned.size.width,
                 height: scanned.size.height
@@ -338,16 +377,17 @@ enum PDFImporter {
             updatedAt: Date(),
             content: .pdfPage(assetName: assetName, pageIndex: scanned.index)
         )
+        let strokes = PDFImportConversion.strokeRecords(
+            for: scanned.strokes,
+            layerID: layer.id
+        )
         return Page(
             id: UUID(),
-            width: scanned.size.width,
+            width: scanned.size.width + left + right,
             height: scanned.size.height,
             template: .blank,
             layers: [layer],
-            strokes: PDFImportConversion.strokeRecords(
-                for: scanned.strokes,
-                layerID: layer.id
-            ),
+            strokes: left > 0 ? strokes.map { $0.translatedBy(x: left) } : strokes,
             elements: [element]
         )
     }
@@ -376,5 +416,17 @@ enum PDFImporter {
             titles[pageID] = indent + item.title
         }
         return titles
+    }
+}
+
+private extension StrokeRecord {
+    /// The stroke moved sideways, for a page that grew a writing margin. The
+    /// points stay in PDF page space and the stroke's own transform carries the
+    /// shift, the same way a moved stroke is stored.
+    func translatedBy(x: Double) -> StrokeRecord {
+        guard transform.count == StrokeRecord.transformElementCount else { return self }
+        var moved = self
+        moved.transform[4] += x
+        return moved
     }
 }

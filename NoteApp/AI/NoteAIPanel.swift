@@ -1,4 +1,5 @@
 import AIKit
+import SearchKit
 import StudyKit
 import SwiftUI
 #if os(iOS)
@@ -21,13 +22,20 @@ struct NoteAIPanel: View {
     @State private var didLoadText = false
     @State private var isLoadingText = true
     @State private var summary = ""
+    @State private var summaryCitations: [AICitation] = []
     @State private var answer = ""
+    @State private var answerCitations: [AICitation] = []
     @State private var cards: [AIFlashcard] = []
     @State private var question = ""
     @State private var isWorking = false
     @State private var errorText: String?
     @State private var savedCards = false
     @State private var addedBlock: String?
+    /// The page the text was read from, so a citation tap can go back to it.
+    @State private var sourcePageID: UUID?
+    /// A title taken from the page text for a notebook still called Untitled.
+    @State private var suggestedTitle: String?
+    @State private var isApplyingTitle = false
 
     private var hasPageText: Bool {
         !pageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -38,17 +46,28 @@ struct NoteAIPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header
+                    titleSuggestion
 
                     if isWorking {
                         workingRow
                     }
 
                     if !summary.isEmpty {
-                        resultBlock(title: "Summary", text: summary, blockID: "summary")
+                        resultBlock(
+                            title: "Summary",
+                            text: summary,
+                            blockID: "summary",
+                            citations: summaryCitations
+                        )
                     }
 
                     if !answer.isEmpty {
-                        resultBlock(title: "Answer", text: answer, blockID: "answer")
+                        resultBlock(
+                            title: "Answer",
+                            text: answer,
+                            blockID: "answer",
+                            citations: answerCitations
+                        )
                     }
 
                     if !cards.isEmpty {
@@ -147,6 +166,37 @@ struct NoteAIPanel: View {
         .frame(minHeight: 44)
     }
 
+    @ViewBuilder
+    private var titleSuggestion: some View {
+        if let suggestedTitle, isUntitled {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notebook title")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(suggestedTitle)
+                        .font(.body.weight(.medium))
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Button("Use") {
+                    applyTitle(suggestedTitle)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(isApplyingTitle)
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    /// True when the notebook still has the name it was created with.
+    private var isUntitled: Bool {
+        let title = session.manifest.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty || title.localizedCaseInsensitiveContains("untitled")
+    }
+
     private var cardBlock: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -215,13 +265,22 @@ struct NoteAIPanel: View {
         }
     }
 
-    private func resultBlock(title: String, text: String, blockID: String) -> some View {
+    private func resultBlock(
+        title: String,
+        text: String,
+        blockID: String,
+        citations: [AICitation] = []
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.headline)
             Text(text)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !citations.isEmpty {
+                sourceMarks(citations)
+            }
 
             HStack(spacing: 10) {
                 Button {
@@ -248,6 +307,71 @@ struct NoteAIPanel: View {
         }
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// The note sentences the answer was built from. Tapping one closes the
+    /// panel and marks those words on the page.
+    private func sourceMarks(_ citations: [AICitation]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Sources on this page")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(Array(citations.enumerated()), id: \.offset) { _, citation in
+                        Button {
+                            reveal(citation)
+                        } label: {
+                            Label(citationSnippet(citation), systemImage: "text.magnifyingglass")
+                                .font(.caption)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Show source on the page: \(citation.text)")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    private func citationSnippet(_ citation: AICitation) -> String {
+        let collapsed = citation.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return collapsed.count > 44 ? String(collapsed.prefix(44)) + "…" : collapsed
+    }
+
+    /// Closes the panel, goes back to the page the text came from, and marks
+    /// the citation's words with the same overlay search uses.
+    private func reveal(_ citation: AICitation) {
+        guard let highlight = Self.highlight(for: citation) else { return }
+        Task {
+            if let sourcePageID,
+               session.page?.id != sourcePageID,
+               let index = session.manifest.pageOrder.firstIndex(of: sourcePageID) {
+                await session.goToPage(index)
+            }
+            session.searchHighlight = highlight
+            dismiss()
+        }
+    }
+
+    /// The citation's most distinctive words as a search query; page marks find
+    /// the ink, text box or PDF words the citation was taken from.
+    private static func highlight(for citation: AICitation) -> SearchHighlight? {
+        var words: [String] = []
+        for word in citation.text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
+            let text = String(word)
+            guard text.count >= 3,
+                  !words.contains(where: { $0.caseInsensitiveCompare(text) == .orderedSame })
+            else { continue }
+            words.append(text)
+        }
+        // The longest words carry the meaning; short ones are mostly "the" and
+        // "and", which would mark half the page.
+        let chosen = words.sorted { $0.count > $1.count }.prefix(5)
+        guard !chosen.isEmpty else { return nil }
+        return SearchHighlight(query: chosen.joined(separator: " "))
     }
 
     private var askBar: some View {
@@ -284,7 +408,9 @@ struct NoteAIPanel: View {
         isLoadingText = true
         defer { isLoadingText = false }
         guard let page = session.page else { return }
+        sourcePageID = page.id
         pageText = await search.noteText(for: page)
+        suggestedTitle = isUntitled ? AutoTitle.suggestion(from: pageText) : nil
     }
 
     private func reloadText() async {
@@ -314,6 +440,7 @@ struct NoteAIPanel: View {
                     to: AIRequest(kind: .summarize(text: text, scope: .page))
                 )
                 summary = response.text
+                summaryCitations = response.citations
                 addedBlock = nil
             } catch {
                 errorText = error.localizedDescription
@@ -355,6 +482,7 @@ struct NoteAIPanel: View {
                     to: AIRequest(kind: .ask(question: query, context: text))
                 )
                 answer = response.text
+                answerCitations = response.citations
                 addedBlock = nil
                 if response.citations.isEmpty,
                    response.text == DeterministicProvider.notFoundText {
@@ -385,6 +513,22 @@ struct NoteAIPanel: View {
                 errorText = study.lastError ?? "The study set could not be saved."
                 // Roll back the empty set so a failed save leaves nothing behind.
                 await study.delete(set)
+            }
+        }
+    }
+
+    /// Renames the notebook in its manifest, the same way the library does.
+    private func applyTitle(_ title: String) {
+        guard !isApplyingTitle else { return }
+        isApplyingTitle = true
+        Task {
+            defer { isApplyingTitle = false }
+            do {
+                try await session.store.renameNotebook(session.notebookID, title: title)
+                await session.reloadManifest()
+                suggestedTitle = nil
+            } catch {
+                errorText = error.localizedDescription
             }
         }
     }

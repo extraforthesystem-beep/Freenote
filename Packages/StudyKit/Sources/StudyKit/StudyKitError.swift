@@ -2,7 +2,7 @@ import Foundation
 
 /// Every error StudyKit throws.
 public enum StudyKitError: Error, Hashable, Sendable {
-    /// A review quality outside the SM-2 range of 0...5.
+    /// A review quality outside the 0...5 range both schedulers grade on.
     case invalidQuality(Int)
     /// The session has no card waiting to be graded.
     case noCurrentCard

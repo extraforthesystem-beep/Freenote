@@ -160,6 +160,14 @@ public actor LibraryStore {
         try writeDocument(manifest, to: layout.manifestFile(notebookID))
     }
 
+    /// Records that the notebook was opened. Kept apart from `updatedAt`, so
+    /// opening a notebook does not reorder a grid sorted by date modified.
+    public func markOpened(_ notebookID: UUID, at date: Date = Date()) throws {
+        var manifest = try loadManifest(notebookID)
+        manifest.lastOpenedAt = date
+        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+    }
+
     /// Moves the notebook's folder, unchanged, to `trash/`, stamping the manifest
     /// with the deletion date used by the 30-day purge.
     ///
@@ -355,9 +363,75 @@ public actor LibraryStore {
         return page
     }
 
+    /// Reads and decodes a page. A file that does not decode is reported as
+    /// corrupt, which lets the editor set it aside instead of failing the
+    /// notebook; the recorded checksum is checked by `verifyPageFile`, not here,
+    /// because the page and its checksum are two writes and a crash between them
+    /// must never make a good page look damaged.
     public func loadPage(_ pageID: UUID, in notebookID: UUID) throws -> Page {
         let file = layout.pageFile(pageID, in: notebookID)
-        return try PageCodec.decode(try readData(file), path: file.path)
+        let page = try PageCodec.decode(try readData(file), path: file.path)
+        guard page.id == pageID else {
+            throw NoteCoreError.corruptFile(path: file.path)
+        }
+        return page
+    }
+
+    /// Re-reads a page file and proves it still decodes to the page with this id,
+    /// then records its SHA-256 beside it. Throws `corruptFile` when the bytes on
+    /// disk are not a readable page or no longer match a checksum already
+    /// recorded, so a check can never bless damaged bytes.
+    @discardableResult
+    public func verifyPageFile(_ pageID: UUID, in notebookID: UUID) throws -> String {
+        let file = layout.pageFile(pageID, in: notebookID)
+        let data = try readData(file)
+        try checkRecordedChecksum(data, pageID: pageID, in: notebookID, path: file.path)
+        let decoded = try PageCodec.decode(data, path: file.path)
+        guard decoded.id == pageID else {
+            throw NoteCoreError.corruptFile(path: file.path)
+        }
+        return try recordChecksum(data, pageID: pageID, in: notebookID)
+    }
+
+    /// Moves a page file that cannot be read out of the notebook and into the
+    /// library cache, keeping its recorded checksum with it. The notebook itself
+    /// stays usable and nothing is deleted; returns where the bytes went.
+    @discardableResult
+    public func quarantinePage(
+        _ pageID: UUID,
+        in notebookID: UUID,
+        now: Date = Date()
+    ) throws -> URL {
+        let source = layout.pageFile(pageID, in: notebookID)
+        guard fileManager.fileExists(atPath: source.path) else {
+            throw NoteCoreError.notFound(path: source.path)
+        }
+        let directory = layout.quarantinedPagesDirectory(notebookID)
+        try createDirectory(directory)
+        let stamp = Int64((now.timeIntervalSince1970 * 1_000).rounded())
+        let name = "\(stamp)-\(pageID.diskName)"
+        let destination = directory.appendingPathComponent(name + ".page")
+        do {
+            try fileManager.moveItem(at: source, to: destination)
+        } catch {
+            throw NoteCoreError.ioFailure("quarantine page: \(error)")
+        }
+        let checksum = layout.pageChecksumFile(pageID, in: notebookID)
+        if fileManager.fileExists(atPath: checksum.path) {
+            try? fileManager.moveItem(
+                at: checksum,
+                to: directory.appendingPathComponent(name + ".sha256")
+            )
+        }
+        return destination
+    }
+
+    /// True when the library (or its trash) already holds a folder for this id.
+    /// Restore uses it to give a returning notebook its old id only when that id
+    /// is free.
+    public func containsNotebook(_ notebookID: UUID) -> Bool {
+        fileManager.fileExists(atPath: layout.notebookDirectory(notebookID).path)
+            || fileManager.fileExists(atPath: layout.trashedNotebookDirectory(notebookID).path)
     }
 
     /// Writes the page file first and the manifest second. A page id that the
@@ -386,6 +460,8 @@ public actor LibraryStore {
         } catch {
             throw NoteCoreError.ioFailure("delete page: \(error)")
         }
+        // The checksum describes a page file that no longer exists.
+        try? fileManager.removeItem(at: layout.pageChecksumFile(pageID, in: notebookID))
     }
 
     public func reorderPages(in notebookID: UUID, order: [UUID]) throws {
@@ -694,10 +770,58 @@ public actor LibraryStore {
     }
 
     private func writePageFile(_ page: Page, in notebookID: UUID) throws {
+        let data = try PageCodec.encode(page)
+        let file = layout.pageFile(page.id, in: notebookID)
+        try writeAtomically(data, to: file)
+
+        // Verify after writing: the bytes that reached the disk must decode back
+        // to the page that was saved. Anything else is reported as a failure and
+        // the caller keeps its in-memory copy for the retry.
+        let stored = try readData(file)
+        guard stored == data else {
+            throw NoteCoreError.corruptFile(path: file.path)
+        }
+        let decoded = try PageCodec.decode(stored, path: file.path)
+        guard decoded == page else {
+            throw NoteCoreError.corruptFile(path: file.path)
+        }
+        _ = try recordChecksum(stored, pageID: page.id, in: notebookID)
+    }
+
+    /// Writes the SHA-256 of a page's bytes beside it and returns the hash.
+    @discardableResult
+    private func recordChecksum(
+        _ data: Data,
+        pageID: UUID,
+        in notebookID: UUID
+    ) throws -> String {
+        let hash = Self.hexString(SHA256.hash(data: data))
         try writeAtomically(
-            try PageCodec.encode(page),
-            to: layout.pageFile(page.id, in: notebookID)
+            Data((hash + "\n").utf8),
+            to: layout.pageChecksumFile(pageID, in: notebookID)
         )
+        return hash
+    }
+
+    /// Throws `corruptFile` when a page has a recorded checksum and the bytes no
+    /// longer match it. Pages written before checksums existed are not checked.
+    /// Only the explicit check calls this; a load decodes instead, so a crash
+    /// between the page write and the checksum write cannot empty a good page.
+    private func checkRecordedChecksum(
+        _ data: Data,
+        pageID: UUID,
+        in notebookID: UUID,
+        path: String
+    ) throws {
+        let file = layout.pageChecksumFile(pageID, in: notebookID)
+        guard fileManager.fileExists(atPath: file.path),
+              let recorded = String(data: try readData(file), encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !recorded.isEmpty
+        else { return }
+        guard recorded == Self.hexString(SHA256.hash(data: data)) else {
+            throw NoteCoreError.corruptFile(path: path)
+        }
     }
 
     private func pageFileIDs(in notebookID: UUID) throws -> [UUID] {

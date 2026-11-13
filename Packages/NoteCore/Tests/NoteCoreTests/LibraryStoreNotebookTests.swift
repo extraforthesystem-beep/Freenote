@@ -122,7 +122,8 @@ struct LibraryStoreNotebookTests {
         let assetName = try await store.addAsset(Data("some pdf bytes".utf8), fileExtension: "pdf", to: notebook.id)
 
         let before = try captureDirectory(notebookDirectory(root: root, notebookID: notebook.id))
-        #expect(before.count == 3 + 1 + 1) // notebook.json, 3 pages, 1 asset
+        // notebook.json, 3 pages, 3 page checksums, 1 asset
+        #expect(before.count == 8)
 
         try await store.deleteNotebook(notebook.id)
 

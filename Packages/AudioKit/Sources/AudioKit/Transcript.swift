@@ -41,6 +41,14 @@ public struct Transcript: Codable, Hashable, Sendable {
         return time == last.endSeconds && last.endSeconds > last.startSeconds ? last : nil
     }
 
+    /// Every segment's words, joined with a space. Empty for an empty transcript.
+    public var text: String {
+        segments
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     /// Case- and diacritic-insensitive substring search over segment text.
     /// A blank query returns no matches.
     public func search(_ query: String) -> [TranscriptSegment] {

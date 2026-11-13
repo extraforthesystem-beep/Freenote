@@ -132,6 +132,15 @@ final class StudyModel {
         return result
     }
 
+    /// Every set's states, for the schedulers that answer over several sets.
+    var allStates: [UUID: [UUID: ReviewState]] {
+        var result: [UUID: [UUID: ReviewState]] = [:]
+        for set in sets {
+            result[set.id] = states(for: set.id)
+        }
+        return result
+    }
+
     /// Records one grade. The in-memory state updates immediately; the file is
     /// written after a short pause so a burst of grades costs one write.
     func record(_ state: ReviewState, for setID: UUID) {
@@ -141,14 +150,150 @@ final class StudyModel {
         scheduleStateWrite()
     }
 
+    /// Every due card in the library, or in one set, notebook or page.
+    func queue(
+        now: Date = Date(),
+        setID: UUID? = nil,
+        notebookID: UUID? = nil,
+        pageID: UUID? = nil
+    ) -> [StudyQueueItem] {
+        let scoped = if let setID {
+            sets.filter { $0.id == setID }
+        } else {
+            sets
+        }
+        return StudyQueue.due(
+            in: scoped,
+            states: allStates,
+            now: now,
+            notebookID: notebookID,
+            pageID: pageID
+        )
+    }
+
+    /// Every card captured from a notebook or page, due or not.
+    func cards(notebookID: UUID? = nil, pageID: UUID? = nil) -> [StudyQueueItem] {
+        StudyQueue.cards(
+            in: sets,
+            states: allStates,
+            now: Date(),
+            notebookID: notebookID,
+            pageID: pageID
+        )
+    }
+
+    /// How many cards are due across the library, or in one set, notebook or page.
+    func dueCount(setID: UUID? = nil, notebookID: UUID? = nil, pageID: UUID? = nil) -> Int {
+        let scoped = if let setID {
+            sets.filter { $0.id == setID }
+        } else {
+            sets
+        }
+        return StudyQueue.dueCount(
+            in: scoped,
+            states: allStates,
+            now: Date(),
+            notebookID: notebookID,
+            pageID: pageID
+        )
+    }
+
+    /// The library-wide count behind the "N due" badge.
+    var totalDueCount: Int {
+        dueCount()
+    }
+
     func dueCount(for set: StudySet) -> Int {
-        SpacedRepetitionScheduler(states: states(for: set.id))
-            .dueCards(in: set, now: Date())
-            .count
+        dueCount(setID: set.id)
+    }
+
+    /// Adds a card captured from a notebook page. Cards from the same notebook
+    /// share one set, so repeated captures do not scatter across the library.
+    @discardableResult
+    func addCard(
+        question: String,
+        answer: String,
+        notebookID: UUID,
+        pageID: UUID,
+        notebookTitle: String
+    ) async -> Bool {
+        let prompt = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return false }
+
+        let existing = sets
+            .filter { set in
+                set.cards.contains { $0.sourceNotebookID == notebookID }
+            }
+            .max { $0.updatedAt < $1.updatedAt }
+
+        var created = false
+        let target: StudySet
+        if let existing {
+            target = existing
+        } else if let newSet = await createSet(title: notebookTitle) {
+            target = newSet
+            created = true
+        } else {
+            return false
+        }
+
+        var updated = target
+        updated.cards.append(
+            StudyCard(
+                question: prompt,
+                answer: answer.trimmingCharacters(in: .whitespacesAndNewlines),
+                sourceNotebookID: notebookID,
+                sourcePageID: pageID
+            )
+        )
+        let saved = await save(updated)
+        if !saved, created {
+            // A failed first capture leaves no empty set behind.
+            await delete(target)
+        }
+        return saved
+    }
+
+    /// Replaces a card's text, keeping its id, source and schedule.
+    @discardableResult
+    func updateCard(_ cardID: UUID, in setID: UUID, question: String, answer: String) async -> Bool {
+        let prompt = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty,
+              var updated = set(withID: setID),
+              let index = updated.cards.firstIndex(where: { $0.id == cardID })
+        else { return false }
+
+        updated.cards[index].question = prompt
+        updated.cards[index].answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.cards[index].updatedAt = Date()
+        return await save(updated)
+    }
+
+    /// Adds a second card beside a leech, with the same source page.
+    @discardableResult
+    func addCard(to setID: UUID, after card: StudyCard, question: String, answer: String) async -> Bool {
+        let prompt = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, var updated = set(withID: setID) else { return false }
+
+        updated.cards.append(
+            StudyCard(
+                question: prompt,
+                answer: answer.trimmingCharacters(in: .whitespacesAndNewlines),
+                sourceNotebookID: card.sourceNotebookID,
+                sourcePageID: card.sourcePageID
+            )
+        )
+        return await save(updated)
     }
 
     func set(withID id: UUID) -> StudySet? {
         sets.first { $0.id == id }
+    }
+
+    /// Starts a rewritten card's schedule over, so it leaves the leech list and
+    /// is due again as a fresh card.
+    func resetSchedule(cardID: UUID, in setID: UUID) {
+        record(.new(cardID: cardID, now: Date()), for: setID)
     }
 
     // MARK: - Persistence

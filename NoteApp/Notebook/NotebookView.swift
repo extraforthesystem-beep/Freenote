@@ -1,3 +1,4 @@
+import AudioKit
 import InkKit
 import NoteCore
 import SwiftUI
@@ -175,10 +176,16 @@ struct NotebookPane: View {
     /// The compact-width sheet, which only opens when the reader asks for it.
     @State private var showsCompactPages = false
     @State private var showsHistory = false
+    @State private var showsPageOverview = false
     @State private var showsLassoHint = false
-    @State private var selectedElementID: UUID?
+    @State private var studyScope: NotebookStudyScope?
+    @State private var showsTapeStudy = false
+    /// The lasso's selection and the elements the Select Elements tool picked.
+    @State private var selection = InkSelection()
     @State private var isRulerActive = false
     @State private var editor = EditorToolState()
+    /// Where PDF links were followed from, so a jump can be undone.
+    @State private var linkHistory = PDFLinkHistory()
     #if os(iOS)
     @State private var controller = PencilCanvasController()
     @State private var zoomController = PageZoomController()
@@ -186,7 +193,9 @@ struct NotebookPane: View {
     @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
-    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
+    @AppStorage(AppSettings.Key.eraserFilter) private var eraserFilterRaw = AppSettings.eraserFilterUnset
+    @AppStorage(AppSettings.Key.scratchOutToErase) private var scratchOutToErase = false
+    @AppStorage(AppSettings.Key.highlighterStraightLines) private var highlighterStraightLines = false
     @State private var zoomView = ZoomViewState()
     @State private var editorHeight: CGFloat = 0
     @AppStorage(AppSettings.Key.zoomAutoAdvance) private var zoomAutoAdvance = true
@@ -203,25 +212,29 @@ struct NotebookPane: View {
     var body: some View {
         VStack(spacing: 0) {
             #if os(iOS)
-            EditorToolbar(
-                editor: editor,
-                controller: controller,
-                showsThumbnails: pagesPanelBinding,
-                audio: session.audio,
-                onBack: { model.showLibrary() },
-                onStopRecording: { Task { await session.audio.stopRecording() } },
-                onClearPage: { showsClearPageConfirmation = true },
-                isRulerActive: $isRulerActive,
-                onItemAction: { item in handleToolbarItem(item) },
-                onCustomizeToolbar: { showsToolbarEditor = true },
-                insertMenu: { insertMenuItems },
-                moreMenu: { moreMenuItems },
-                itemMenu: { item in toolbarItemMenu(for: item) }
-            )
+            if !editor.isReadingMode {
+                EditorToolbar(
+                    editor: editor,
+                    controller: controller,
+                    showsThumbnails: pagesPanelBinding,
+                    audio: session.audio,
+                    onBack: { model.showLibrary() },
+                    onStopRecording: { Task { await session.audio.stopRecording() } },
+                    onClearPage: { showsClearPageConfirmation = true },
+                    isRulerActive: $isRulerActive,
+                    onItemAction: { item in handleToolbarItem(item) },
+                    onCustomizeToolbar: { showsToolbarEditor = true },
+                    insertMenu: { insertMenuItems },
+                    moreMenu: { moreMenuItems },
+                    itemMenu: { item in toolbarItemMenu(for: item) }
+                )
+            }
             #else
             macHeader
             #endif
-            Divider()
+            if !editor.isReadingMode {
+                Divider()
+            }
             HStack(spacing: 0) {
                 if showsPagesPanelInline, pagesOnLeft {
                     pagesPanel
@@ -229,12 +242,53 @@ struct NotebookPane: View {
                 VStack(spacing: 0) {
                     pageArea
                         .overlay(alignment: .top) { banners }
-                        .overlay(alignment: .bottom) {
-                            PageCounterPill(session: session) { index in
-                                Task { await session.goToPage(index) }
+                        #if os(iOS)
+                        .overlay(alignment: .topTrailing) {
+                            if showsTapeStudy {
+                                TapeStudyControls(session: session) {
+                                    showsTapeStudy = false
+                                }
+                                .padding(16)
                             }
+                        }
+                        #endif
+                        .overlay(alignment: .bottom) {
+                            VStack(spacing: 8) {
+                                #if os(iOS)
+                                if showsSelectionActions {
+                                    SelectionActionBar(
+                                        selection: $selection,
+                                        editor: editor,
+                                        session: session,
+                                        controller: controller
+                                    )
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                                }
+                                #endif
+                                #if os(iOS)
+                                if session.audio.hasActiveClip {
+                                    NowPlayingBar(audio: session.audio)
+                                        .padding(.horizontal, 12)
+                                }
+                                #endif
+                                // Reading Mode is one clean page: no page chrome.
+                                if !editor.isReadingMode {
+                                    PageCounterPill(session: session) { index in
+                                        Task { await session.goToPage(index) }
+                                    }
+                                    .padding(.bottom, 12)
+                                }
+                            }
+                        }
+                        .overlay(alignment: .bottomLeading) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                PageHistoryControls(session: session)
+                                pdfLinkHistoryChip
+                            }
+                            .padding(.leading, 12)
                             .padding(.bottom, 12)
                         }
+                        .overlay(alignment: .topTrailing) { readingModeExit }
                     #if os(iOS)
                     if showsZoomView {
                         // `session.page` changes with every stroke, so the
@@ -254,14 +308,23 @@ struct NotebookPane: View {
             }
         }
         .background(AppColor.groupedBackground)
+        .background(alignment: .topLeading) { pageHistoryShortcuts }
         #if os(iOS)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { editorHeight = $0 }
         #endif
         .animation(.easeInOut(duration: 0.2), value: bannerState)
         .onAppear {
             Task { await session.audio.load() }
+            session.audio.replayPageChanged(session.visibleStrokes)
             // Opened from a search: show its results beside the marked pages.
             if session.searchHighlight != nil { showsSearch = true }
+        }
+        .onChange(of: session.currentPageID) { _, _ in
+            // Replay seeks wait on the ink of the page in view.
+            session.audio.replayPageChanged(session.visibleStrokes)
+        }
+        .onChange(of: session.audio.playingClipID) { _, _ in
+            session.audio.replayPageChanged(session.visibleStrokes)
         }
         .onChange(of: session.searchHighlight) { _, highlight in
             if highlight != nil { showsSearch = true }
@@ -275,14 +338,29 @@ struct NotebookPane: View {
             }
         }
         .onChange(of: editor.tool) { _, newTool in
-            if newTool != .elements { selectedElementID = nil }
+            if newTool != .elements { selection.elementIDs = [] }
+            if newTool != .lasso {
+                selection.strokeIDs = []
+                #if os(iOS)
+                controller.clearSelection()
+                #endif
+            }
             showsLassoHint = newTool == .lasso && !editor.isReadOnly
         }
         .onChange(of: editor.isReadOnly) { _, isReadOnly in
             if isReadOnly {
                 showsLassoHint = false
-                selectedElementID = nil
+                selection.clear()
+                #if os(iOS)
+                controller.clearSelection()
+                #endif
+            } else {
+                editor.isReadingMode = false
             }
+        }
+        .onChange(of: session.currentPageID) {
+            // A selection belongs to the page it was made on.
+            selection.clear()
         }
         .task(id: showsLassoHint) {
             guard showsLassoHint else { return }
@@ -380,6 +458,8 @@ struct NotebookPane: View {
                 isApplying: session.isApplyingTemplate,
                 currentWidth: session.page?.width,
                 currentHeight: session.page?.height,
+                customTemplates: model.templates,
+                assetsDirectory: session.assetsDirectory,
                 onApplySize: { size, orientation, applyToAll in
                     let points = size.size(orientation)
                     Task {
@@ -456,7 +536,11 @@ struct NotebookPane: View {
         }
         #endif
         .sheet(isPresented: $showsAudio) {
-            AudioRecordingsView(session: session)
+            AudioRecordingsView(session: session) {
+                // Spoken words become searchable as soon as they are recognised,
+                // not only when the notebook closes.
+                Task { await model.search.index(notebook: session.manifest, store: session.store) }
+            }
         }
         .sheet(isPresented: $showsAI) {
             NoteAIPanel(
@@ -466,8 +550,18 @@ struct NotebookPane: View {
                 study: model.study
             )
         }
+        .sheet(item: $studyScope) { scope in
+            NotebookStudySheet(study: model.study, session: session, scope: scope)
+        }
         .sheet(isPresented: $showsHistory) {
             VersionHistoryView(session: session)
+        }
+        .sheet(isPresented: $showsPageOverview) {
+            PageOverviewGrid(
+                session: session,
+                outline: model.outline,
+                bookmarks: model.bookmarks
+            )
         }
         .sheet(isPresented: $showsToolbarEditor) {
             ToolbarEditorView()
@@ -573,12 +667,35 @@ struct NotebookPane: View {
         .transition(.move(edge: pagesOnLeft ? .leading : .trailing).combined(with: .opacity))
     }
 
+    // MARK: - Page history
+
+    /// ⌘[ and ⌘] step through the pages this notebook has shown, like a browser.
+    /// Hidden: the chevrons over the page are the visible pair.
+    private var pageHistoryShortcuts: some View {
+        Group {
+            Button("Back") {
+                Task { await session.goBack() }
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(!session.canGoBack)
+            Button("Forward") {
+                Task { await session.goForward() }
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(!session.canGoForward)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
     // MARK: - Banners
 
     /// Which banners are showing, so their appearance animates.
     private var bannerState: [String] {
         var state: [String] = []
         if session.errorMessage != nil { state.append("error") }
+        if session.currentPageWasQuarantined { state.append("quarantine") }
         if hasLayerBlock { state.append("layer") }
         if showsLassoHint { state.append("lasso") }
         if isExporting || isExportingPNG { state.append("export") }
@@ -613,6 +730,14 @@ struct NotebookPane: View {
                     message: message,
                     tint: .red,
                     onDismiss: { session.errorMessage = nil }
+                )
+            }
+            if session.currentPageWasQuarantined {
+                EditorBanner(
+                    systemImage: "doc.badge.exclamationmark",
+                    message: "This page could not be read. The damaged file was kept; restore the last good version.",
+                    actionTitle: "Version History",
+                    action: { showsHistory = true }
                 )
             }
             switch layerBlock {
@@ -657,7 +782,7 @@ struct NotebookPane: View {
             if showsLassoHint, !hasLayerBlock {
                 EditorBanner(
                     systemImage: "lasso",
-                    message: "Circle ink with the lasso, then drag the selection to move it.",
+                    message: "Circle ink with the lasso, then drag to move it or use the bar to recolour, resize or copy it.",
                     tint: .accentColor,
                     onDismiss: { showsLassoHint = false }
                 )
@@ -779,6 +904,10 @@ struct NotebookPane: View {
                 get: { editor.isReadOnly },
                 set: { editor.isReadOnly = $0 }
             ))
+            Button("Reading Mode", systemImage: "book") {
+                startReadingMode()
+            }
+            .disabled(session.currentPageID == nil)
             Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
                 showsToolbarEditor = true
             }
@@ -801,6 +930,10 @@ struct NotebookPane: View {
             Button("Outline…", systemImage: "list.bullet.indent") {
                 showsOutline = true
             }
+            Button("Page Overview…", systemImage: "square.grid.2x2") {
+                showsPageOverview = true
+            }
+            .disabled(session.pageCount == 0)
             Button("Search in Notebook…", systemImage: "magnifyingglass") {
                 showsSearch = true
             }
@@ -810,6 +943,24 @@ struct NotebookPane: View {
                 showsTemplatePicker = true
             }
             .disabled(session.currentPageID == nil)
+        }
+        Section("Study") {
+            Button("Review This Notebook…", systemImage: "rectangle.stack") {
+                studyScope = .notebook
+            }
+            Button("Review This Page…", systemImage: "rectangle.on.rectangle") {
+                studyScope = .page
+            }
+            .disabled(session.currentPageID == nil)
+            #if os(iOS)
+            Button(
+                showsTapeStudy ? "Hide Tape Study Bar" : "Tape Study",
+                systemImage: "bandage"
+            ) {
+                showsTapeStudy.toggle()
+            }
+            .disabled(session.currentPageID == nil)
+            #endif
         }
         Section {
             Button(
@@ -1052,24 +1203,110 @@ struct NotebookPane: View {
 
     #if os(iOS)
     private func openPDFLink(at point: CGPoint) async {
-        guard let page = session.page,
-              let target = PDFLinkHandler.target(
-                  at: point,
-                  page: page,
-                  assetsDirectory: session.assetsDirectory
-              )
-        else { return }
+        guard let page = session.page else { return }
+
+        guard let target = PDFLinkHandler.target(
+            at: point,
+            page: page,
+            assetsDirectory: session.assetsDirectory
+        ) else {
+            // Nothing under the tap: in Reading Mode the page edges turn it.
+            guard editor.isReadingMode else { return }
+            await turnReadingPage(at: point, pageWidth: page.width)
+            return
+        }
 
         switch target {
         case .url(let url):
             await UIApplication.shared.open(url)
         case .page(let pdfPageIndex):
             if let index = session.notebookPageIndex(forPDFPage: pdfPageIndex, from: page) {
+                linkHistory.recordJump(from: session.pageIndex, notebookID: session.notebookID)
                 await session.goToPage(index)
             }
         }
     }
+
+    /// A tap in the outer strip of the page turns it: left goes back, right goes
+    /// on. The strip is a 44 pt target at its narrowest.
+    private func turnReadingPage(at point: CGPoint, pageWidth: Double) async {
+        let edge = max(44, pageWidth * 0.18)
+        if point.x <= edge {
+            await session.goToPreviousPage()
+        } else if point.x >= pageWidth - edge {
+            await session.goToNextPage()
+        }
+    }
     #endif
+
+    // MARK: - Reading Mode
+
+    /// Read Only with the chrome gone: one page, a tap on either edge turns it,
+    /// and PDF links still work. Leaving it brings the tools back.
+    private func startReadingMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            pagesPanelBinding.wrappedValue = false
+            showsSearch = false
+            editor.isReadingMode = true
+            editor.isReadOnly = true
+        }
+    }
+
+    /// The only chrome Reading Mode keeps, so there is always a way back.
+    @ViewBuilder
+    private var readingModeExit: some View {
+        if editor.isReadingMode {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    editor.isReadingMode = false
+                    editor.isReadOnly = false
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "book")
+                        .font(.caption.weight(.semibold))
+                    Text("Done")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 36)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Leave Reading Mode")
+            .padding(12)
+        }
+    }
+
+    /// Back and Forward for the pages a PDF link led to.
+    @ViewBuilder
+    private var pdfLinkHistoryChip: some View {
+        let notebookID = session.notebookID
+        let back = linkHistory.backPageIndex(notebookID: notebookID)
+        let forward = linkHistory.forwardPageIndex(notebookID: notebookID)
+        if back != nil || forward != nil {
+            PDFLinkHistoryChip(
+                backPageNumber: back.map { $0 + 1 },
+                forwardPageNumber: forward.map { $0 + 1 },
+                onBack: { goInLinkHistory(backward: true) },
+                onForward: { goInLinkHistory(backward: false) }
+            )
+        }
+    }
+
+    private func goInLinkHistory(backward: Bool) {
+        let notebookID = session.notebookID
+        let current = session.pageIndex
+        let target = backward
+            ? linkHistory.goBack(notebookID: notebookID, pageIndex: current)
+            : linkHistory.goForward(notebookID: notebookID, pageIndex: current)
+        guard let target else { return }
+        Task { await session.goToPage(target) }
+    }
 
     private var bookmarkedPageIndices: [Int] {
         let ids = model.bookmarks.bookmarkedPageIDs(notebookID: session.notebookID)
@@ -1156,6 +1393,12 @@ struct NotebookPane: View {
         editor.isReadOnly ? .links : editor.canvasMode
     }
 
+    /// Which ink the stroke eraser may remove, with the old "Erase Highlighter
+    /// Only" switch migrated until a filter is chosen.
+    private var eraserFilter: EraserFilter {
+        AppSettings.eraserFilter(rawValue: eraserFilterRaw)
+    }
+
     /// Fingers needed to scroll or page. With Pencil-only drawing one finger
     /// scrolls; tools that drag with a finger (items, laser) and finger
     /// drawing (the simulator) keep it at two. The Pencil never scrolls.
@@ -1195,8 +1438,88 @@ struct NotebookPane: View {
         }
     }
 
+    /// The lasso or the element tool has something to act on.
+    private var showsSelectionActions: Bool {
+        !editor.isReadOnly
+            && !selection.isEmpty
+            && (editor.tool == .lasso || editor.tool == .elements)
+    }
+
+    /// The Select Elements layer edits one element at a time; the shared
+    /// selection model is what the actions read.
+    private var selectedElementID: Binding<UUID?> {
+        Binding(
+            get: { selection.elementIDs.first },
+            set: { selection.elementIDs = $0.map { [$0] } ?? [] }
+        )
+    }
+
+    // MARK: - Audio replay
+
+    /// The stroke time the audio playhead stands at, when Follow is on and this
+    /// page has ink from the recording. Ink written after it is faded.
+    private func replayCutoff() -> Date? {
+        guard session.audio.followsPlayhead, let clip = session.audio.activeClip else {
+            return nil
+        }
+        let strokes = session.visibleStrokes
+        guard strokes.contains(where: { clip.contains($0.createdAt) }) else { return nil }
+        if let active = strokes.first(where: { $0.id == session.audio.activeStrokeID }) {
+            return active.createdAt
+        }
+        // Before the first stroke of the clip, everything from it is still ahead.
+        return clip.startedAt
+    }
+
+    /// Where the now-playing marker sits: the end of the stroke the recording
+    /// has reached.
+    private func activeReplayPoint() -> CGPoint? {
+        guard let strokeID = session.audio.activeStrokeID,
+              let stroke = session.visibleStrokes.first(where: { $0.id == strokeID })
+        else { return nil }
+        return ZoomBand.endPoint(of: stroke)
+    }
+
+    /// A finger tap on ink plays the recording from the moment that ink was
+    /// written. Taps on blank paper, and ink from outside a recording, do
+    /// nothing. The lasso and element tools keep their own taps.
+    ///
+    /// The interaction is always installed, so the canvas's tap recogniser
+    /// exists before the reader's first tap; the tool check lives in
+    /// ``replayInk(at:)``.
+    private var replayFingerInteraction: CanvasFingerInteraction {
+        #if targetEnvironment(simulator)
+        // PencilKit draws with any input on the simulator, so a finger tap would
+        // ink a dot as well as seek. There, replay is driven from the transcript
+        // and the now-playing bar instead.
+        return CanvasFingerInteraction()
+        #else
+        return CanvasFingerInteraction(onTap: { point in
+            replayInk(at: point)
+        })
+        #endif
+    }
+
+    private func replayInk(at point: CGPoint) {
+        // With finger drawing on, the tap inks first; it is not a seek.
+        guard !editor.isReadOnly, !drawWithFinger else { return }
+        switch editor.tool {
+        case .pen, .highlighter, .eraser: break
+        case .lasso, .laser, .elements, .links: return
+        }
+        let strokes = session.visibleStrokes
+        guard let stroke = ReplayTarget.nearestStroke(to: point, in: strokes) else { return }
+        session.audio.replay(from: stroke, strokes: strokes)
+    }
+
     private func pageContent(_ page: Page) -> some View {
-        ZStack(alignment: .topLeading) {
+        // While a recording plays with Follow on, ink it has not reached yet is
+        // faded, and the canvas takes no ink so the two views cannot disagree.
+        let cutoff = replayCutoff()
+        let shownStrokes = cutoff.map {
+            ReplayInk.fading(session.visibleStrokes, after: $0)
+        } ?? session.visibleStrokes
+        return ZStack(alignment: .topLeading) {
             // Tape is drawn by `TapeOverlay` above the ink so it can hide and
             // reveal it; leaving it in the background would show through.
             PaperBackground(
@@ -1218,12 +1541,12 @@ struct NotebookPane: View {
             }
 
             PencilCanvasView(
-                strokes: session.visibleStrokes,
+                strokes: shownStrokes,
                 pageSize: CGSize(width: page.width, height: page.height),
                 tool: editor.inkTool,
-                mode: canvasMode,
+                mode: cutoff == nil ? canvasMode : .disabled,
                 activeLayerID: session.activeLayerID ?? page.layers.first?.id ?? UUID(),
-                isEditable: canvasIsEditable,
+                isEditable: canvasIsEditable && cutoff == nil,
                 isRulerActive: isRulerActive,
                 controller: controller,
                 drawsWithFinger: drawWithFinger,
@@ -1240,9 +1563,28 @@ struct NotebookPane: View {
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
-                eraseHighlighterOnly: eraserHighlighterOnly,
+                smoothing: Double(editor.smoothing),
+                lineStyle: editor.lineStyle,
+                highlighterStraightLines: highlighterStraightLines,
+                scratchOutToErase: scratchOutToErase,
+                eraserFilter: eraserFilter,
                 usesDarkPaper: usesDarkPaper,
-                onStrokesChanged: { [pageID = page.id] in session.strokesChanged($0, onPage: pageID) }
+                fingerInteraction: replayFingerInteraction,
+                onSelectionChanged: { ids in
+                    // Only the lasso selects ink. An empty report can also come
+                    // from the canvas rebuilding after an action while those
+                    // strokes still exist, so the bar is cleared explicitly on a
+                    // tool or page change instead.
+                    guard editor.tool == .lasso, !ids.isEmpty else { return }
+                    selection.strokeIDs = Set(ids)
+                },
+                onStrokesChanged: { records in
+                    // Follow mode hands the canvas faded copies of the page's
+                    // ink. The canvas takes no input then, so any report (an
+                    // undo from the toolbar) must not write those copies back.
+                    guard cutoff == nil else { return }
+                    session.strokesChanged(records, onPage: page.id)
+                }
             )
             .id(page.id)
 
@@ -1263,6 +1605,10 @@ struct NotebookPane: View {
                 allowsHitTesting: editor.tool != .elements && editor.tool != .laser,
                 onTap: { session.toggleTapeRevealed($0) }
             )
+
+            if let point = activeReplayPoint() {
+                NowPlayingMarker(point: point)
+            }
 
             if showsZoomView, let band = zoomBand(page) {
                 ZoomFrameOverlay(
@@ -1291,7 +1637,7 @@ struct NotebookPane: View {
             if editor.tool == .elements, !editor.isReadOnly {
                 ElementEditLayer(
                     page: page,
-                    selectedID: $selectedElementID,
+                    selectedID: selectedElementID,
                     onFrame: { elementID, frame in
                         Task { await session.updateElementFrame(elementID, frame: frame) }
                     },
@@ -1299,7 +1645,7 @@ struct NotebookPane: View {
                         Task { await session.setElementLocked(elementID, isLocked: isLocked) }
                     },
                     onDelete: { elementID in
-                        selectedElementID = nil
+                        selection.elementIDs = []
                         Task { await session.removeElement(elementID) }
                     },
                     onMoveZ: { elementID, offset in
@@ -1412,7 +1758,11 @@ struct NotebookPane: View {
                 // The page's canvas answers the Pencil's double-tap; two
                 // answers would switch the tool and straight back.
                 onPencilDoubleTap: nil,
-                eraseHighlighterOnly: eraserHighlighterOnly,
+                smoothing: Double(editor.smoothing),
+                lineStyle: editor.lineStyle,
+                highlighterStraightLines: highlighterStraightLines,
+                scratchOutToErase: scratchOutToErase,
+                eraserFilter: eraserFilter,
                 viewport: band.rect,
                 usesDarkPaper: usesDarkPaper,
                 onToolGestureBegan: { zoomView.cancelAdvance() },

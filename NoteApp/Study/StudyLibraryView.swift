@@ -7,12 +7,15 @@ struct StudyLibraryView: View {
     @Bindable var study: StudyModel
     /// False when the view is embedded in the library's detail column instead of a sheet.
     var showsDoneButton = true
+    /// Opens the notebook page a card came from; `nil` hides the source button.
+    var onOpenSource: ((UUID, UUID) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedSet: StudySet?
     @State private var showsNewSet = false
     @State private var newSetTitle = ""
     @State private var showsImporter = false
+    @State private var reviewingAll = false
     @State private var errorText: String?
 
     var body: some View {
@@ -59,7 +62,19 @@ struct StudyLibraryView: View {
                 }
             }
             .sheet(item: $selectedSet) { set in
-                StudySetEditorView(study: study, setID: set.id)
+                StudySetEditorView(
+                    study: study,
+                    setID: set.id,
+                    onOpenSource: onOpenSource
+                )
+            }
+            .sheet(isPresented: $reviewingAll) {
+                StudyReviewView(
+                    study: study,
+                    scope: .all,
+                    passTitle: "Due Cards",
+                    onOpenSource: onOpenSource
+                )
             }
             .fileImporter(
                 isPresented: $showsImporter,
@@ -100,6 +115,9 @@ struct StudyLibraryView: View {
             emptyState
         } else {
             List {
+                if study.totalDueCount > 0 {
+                    dueNowSection
+                }
                 Section {
                     ForEach(study.sets) { set in
                         row(set)
@@ -112,6 +130,25 @@ struct StudyLibraryView: View {
 #if os(iOS)
             .listStyle(.insetGrouped)
 #endif
+        }
+    }
+
+    /// The one mixed pass across every set, above the per-set rows.
+    private var dueNowSection: some View {
+        let due = study.totalDueCount
+        return Section {
+            Button {
+                reviewingAll = true
+            } label: {
+                Label(
+                    "Review \(due) Due Card\(due == 1 ? "" : "s")",
+                    systemImage: "play.circle.fill"
+                )
+                .font(.headline)
+                .frame(minHeight: 44)
+            }
+        } footer: {
+            Text("One pass across every set, earliest due first.")
         }
     }
 
