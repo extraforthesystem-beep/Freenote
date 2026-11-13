@@ -98,10 +98,12 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 controller.undo()
             }
             .keyboardShortcut("z", modifiers: .command)
+            .disabled(editor.isReadOnly)
             Button("Redo") {
                 controller.redo()
             }
             .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(editor.isReadOnly)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
