@@ -31,6 +31,9 @@ public enum BoardItemContent: Codable, Hashable, Sendable {
     /// A text box.
     case text(String, frame: CGRect, fontSize: Double, color: RGBAColor)
 
+    /// A sticky note: typed text on a square pastel card.
+    case sticky(String, frame: CGRect, color: RGBAColor)
+
     /// A geometric shape. A nil fill means no fill.
     case shape(
         kind: BoardShapeKind,
@@ -61,7 +64,7 @@ public enum BoardItemContent: Codable, Hashable, Sendable {
     }
 
     private enum Kind: String, Codable {
-        case ink, image, text, shape, connector
+        case ink, image, text, sticky, shape, connector
     }
 
     /// Decodes one content case; an unknown case is rejected.
@@ -80,6 +83,12 @@ public enum BoardItemContent: Codable, Hashable, Sendable {
                 try container.decode(String.self, forKey: .string),
                 frame: try container.decode(CGRect.self, forKey: .frame),
                 fontSize: try container.decode(Double.self, forKey: .fontSize),
+                color: try container.decode(RGBAColor.self, forKey: .color)
+            )
+        case .sticky:
+            self = .sticky(
+                try container.decodeIfPresent(String.self, forKey: .string) ?? "",
+                frame: try container.decode(CGRect.self, forKey: .frame),
                 color: try container.decode(RGBAColor.self, forKey: .color)
             )
         case .shape:
@@ -115,6 +124,11 @@ public enum BoardItemContent: Codable, Hashable, Sendable {
             try container.encode(string, forKey: .string)
             try container.encode(frame, forKey: .frame)
             try container.encode(fontSize, forKey: .fontSize)
+            try container.encode(color, forKey: .color)
+        case let .sticky(string, frame, color):
+            try container.encode(Kind.sticky, forKey: .kind)
+            try container.encode(string, forKey: .string)
+            try container.encode(frame, forKey: .frame)
             try container.encode(color, forKey: .color)
         case let .shape(kind, frame, strokeColor, fillColor, lineWidth):
             try container.encode(Kind.shape, forKey: .kind)
@@ -164,12 +178,15 @@ public struct BoardItem: Codable, Identifiable, Hashable, Sendable {
         self.content = content
     }
 
-    /// The frame of an image, text or shape item; nil for ink and connectors.
+    /// The frame of an image, text, sticky note or shape item; nil for ink and
+    /// connectors.
     public var frame: CGRect? {
         switch content {
         case .image(_, let frame):
             return frame
         case .text(_, let frame, _, _):
+            return frame
+        case .sticky(_, let frame, _):
             return frame
         case .shape(_, let frame, _, _, _):
             return frame
@@ -187,6 +204,8 @@ public struct BoardItem: Codable, Identifiable, Hashable, Sendable {
             return frame
         case .text(_, let frame, _, _):
             return frame
+        case .sticky(_, let frame, _):
+            return frame
         case .shape(_, let frame, _, _, _):
             return frame
         case .connector:
@@ -201,6 +220,8 @@ public struct BoardItem: Codable, Identifiable, Hashable, Sendable {
             content = .image(assetName: assetName, frame: newFrame)
         case let .text(string, _, fontSize, color):
             content = .text(string, frame: newFrame, fontSize: fontSize, color: color)
+        case let .sticky(string, _, color):
+            content = .sticky(string, frame: newFrame, color: color)
         case let .shape(kind, _, strokeColor, fillColor, lineWidth):
             content = .shape(
                 kind: kind,

@@ -45,6 +45,34 @@ public actor BoardStore {
         )
     }
 
+    /// The folder holding images and other files inserted into boards. It is
+    /// shared by every board, and asset names are unique, so a duplicate
+    /// board can point at the same file.
+    public nonisolated var assetsDirectoryURL: URL {
+        rootURL.appendingPathComponent("Assets", isDirectory: true)
+    }
+
+    /// Writes an inserted file under the assets folder and returns the asset
+    /// name an item stores. The folder is created on first use.
+    public func addAsset(_ data: Data, fileExtension: String) throws -> String {
+        let name = UUID().uuidString.lowercased() + Self.normalizedExtension(fileExtension)
+        let directory = assetsDirectoryURL
+        let file = directory.appendingPathComponent(name, isDirectory: false)
+
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            try data.write(to: file, options: [.atomic])
+        } catch {
+            throw BoardStoreError.ioFailure(
+                "could not write \(file.path): \(error.localizedDescription)"
+            )
+        }
+        return name
+    }
+
     /// Lists board IDs that have a file, sorted by UUID string.
     public func list() throws -> [UUID] {
         let fileManager = FileManager.default
@@ -172,14 +200,14 @@ public actor BoardStore {
         } catch {
             throw BoardStoreError.corruptFile(path)
         }
-        guard probe.schemaVersion == BoardDocument.currentSchemaVersion else {
+        guard Self.supports(probe.schemaVersion) else {
             throw BoardStoreError.unsupportedSchemaVersion(
                 found: probe.schemaVersion,
                 supported: BoardDocument.currentSchemaVersion
             )
         }
         if let boardVersion = probe.board?.schemaVersion,
-           boardVersion != BoardDocument.currentSchemaVersion {
+           !Self.supports(boardVersion) {
             throw BoardStoreError.unsupportedSchemaVersion(
                 found: boardVersion,
                 supported: BoardDocument.currentSchemaVersion
@@ -187,11 +215,23 @@ public actor BoardStore {
         }
     }
 
+    /// Reads are lenient about older versions, which are upgraded on load;
+    /// writes always use the current version.
+    private static func supports(_ version: Int) -> Bool {
+        version >= 1 && version <= BoardDocument.currentSchemaVersion
+    }
+
     private static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .secondsSince1970
         return encoder
+    }
+
+    /// A file extension as a dot and lower-case letters, or `.png`.
+    private static func normalizedExtension(_ raw: String) -> String {
+        let cleaned = raw.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        return cleaned.isEmpty ? ".png" : ".\(cleaned)"
     }
 
     private static func makeDecoder() -> JSONDecoder {

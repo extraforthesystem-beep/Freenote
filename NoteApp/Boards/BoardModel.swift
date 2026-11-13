@@ -109,6 +109,12 @@ final class BoardModel {
         }
     }
 
+    /// Writes an image inserted into a board and returns the asset name the
+    /// board item stores.
+    func addAsset(_ data: Data, fileExtension: String) async throws -> String {
+        try await store.addAsset(data, fileExtension: fileExtension)
+    }
+
     /// Renames a board, keeping its items and camera.
     @discardableResult
     func rename(_ board: Board, to title: String) async -> Bool {

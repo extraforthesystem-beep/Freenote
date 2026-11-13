@@ -83,13 +83,15 @@ struct BoardDotGrid: View {
     }
 }
 
-/// Text, shape and image items in page space, under the ink so a board can be
-/// annotated over them. Phase 2 adds selection and editing; this layer only
-/// draws.
+/// Sticky notes, text, shapes and images in page space, under the ink so a
+/// board can be annotated over them.
 struct BoardItemLayer: View {
     let items: [BoardItem]
     let viewport: BoardViewportState
     let assetsDirectory: URL
+    var reduceMotion = false
+    /// The item whose text is being typed into above the canvas.
+    var editingItemID: UUID?
 
     var body: some View {
         let zoom = viewport.zoom
@@ -98,7 +100,11 @@ struct BoardItemLayer: View {
             if visible.width > 0 {
                 ForEach(items) { item in
                     if let frame = item.frame, frame.intersects(visible) {
-                        BoardItemView(item: item, assetsDirectory: assetsDirectory)
+                        BoardItemView(
+                            item: item,
+                            assetsDirectory: assetsDirectory,
+                            hidesText: item.id == editingItemID
+                        )
                             .frame(
                                 width: max(frame.width, 1),
                                 height: max(frame.height, 1),
@@ -109,6 +115,7 @@ struct BoardItemLayer: View {
                                 x: (frame.minX - visible.minX) * zoom,
                                 y: (frame.minY - visible.minY) * zoom
                             )
+                            .transition(transition)
                     }
                 }
             }
@@ -117,133 +124,301 @@ struct BoardItemLayer: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
+
+    /// Inserted objects spring in from 90 %; a delete only fades.
+    private var transition: AnyTransition {
+        reduceMotion
+            ? .opacity
+            : .asymmetric(
+                insertion: .scale(scale: 0.9).combined(with: .opacity),
+                removal: .opacity
+            )
+    }
 }
 
-struct BoardItemView: View {
+// MARK: - Selection geometry
+
+/// One of the four round handles on a selection.
+enum BoardResizeCorner: CaseIterable, Hashable {
+    case topLeft, topRight, bottomLeft, bottomRight
+
+    var isLeft: Bool { self == .topLeft || self == .bottomLeft }
+    var isTop: Bool { self == .topLeft || self == .topRight }
+
+    /// Where the handle sits in a rectangle, in the rectangle's space.
+    func point(in frame: CGRect) -> CGPoint {
+        CGPoint(x: isLeft ? frame.minX : frame.maxX, y: isTop ? frame.minY : frame.maxY)
+    }
+
+    /// The corner whose handle is within `tolerance` of a point.
+    static func corner(
+        at point: CGPoint,
+        in frame: CGRect,
+        tolerance: CGFloat
+    ) -> BoardResizeCorner? {
+        allCases.first { corner in
+            let handle = corner.point(in: frame)
+            return abs(point.x - handle.x) <= tolerance && abs(point.y - handle.y) <= tolerance
+        }
+    }
+}
+
+/// An alignment guide shown while dragging: a thin line through the board at
+/// a world coordinate.
+struct BoardSnapGuide: Equatable, Identifiable {
+    enum Axis {
+        case vertical, horizontal
+    }
+
+    let axis: Axis
+    /// The world coordinate of the line.
+    let position: CGFloat
+
+    var id: String { "\(axis == .vertical ? "v" : "h")-\(position)" }
+}
+
+// MARK: - Selection chrome
+
+/// The selection's outline, corner handles, snap guides and floating bar.
+/// It exists only while a board object is selected, and only the bar takes
+/// touches, so the canvas keeps panning and the Pencil keeps inking.
+struct BoardSelectionOverlay: View {
     let item: BoardItem
-    let assetsDirectory: URL
+    let viewport: BoardViewportState
+    let guides: [BoardSnapGuide]
+    /// The keyboard is up: the bar would sit under it, so the outline stays
+    /// and the bar goes.
+    var isEditing = false
+    let reduceMotion: Bool
+    let onDuplicate: () -> Void
+    let onDelete: () -> Void
+    let onBringToFront: () -> Void
+    let onSendToBack: () -> Void
+    let onColor: (RGBAColor) -> Void
+    let onEditText: () -> Void
+
+    private static let handleSize: CGFloat = 11
+    private static let barHalfWidth: CGFloat = 170
 
     var body: some View {
-        switch item.content {
-        case let .text(string, _, fontSize, color):
-            Text(string)
-                .font(.system(size: CGFloat(fontSize)))
-                .foregroundStyle(Color(color))
+        GeometryReader { proxy in
+            if let frame = item.frame, viewport.isReady {
+                let rect = viewRect(frame, in: proxy.size)
+
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .strokeBorder(Color.selectionBlue, lineWidth: 1.5)
+                        .frame(width: max(rect.width, 1), height: max(rect.height, 1))
+                        .offset(x: rect.minX, y: rect.minY)
+
+                    ForEach(BoardResizeCorner.allCases, id: \.self) { corner in
+                        Circle()
+                            .fill(Color.selectionBlue)
+                            .frame(width: Self.handleSize, height: Self.handleSize)
+                            .offset(
+                                x: corner.point(in: rect).x - Self.handleSize / 2,
+                                y: corner.point(in: rect).y - Self.handleSize / 2
+                            )
+                    }
+
+                    ForEach(guides) { guide in
+                        Rectangle()
+                            .fill(Color.selectionBlue.opacity(0.65))
+                            .frame(
+                                width: guide.axis == .vertical ? 1 : proxy.size.width,
+                                height: guide.axis == .horizontal ? 1 : proxy.size.height
+                            )
+                            .offset(
+                                x: guide.axis == .vertical
+                                    ? (guide.position - viewport.visibleRect.minX) * viewport.zoom
+                                    : 0,
+                                y: guide.axis == .horizontal
+                                    ? (guide.position - viewport.visibleRect.minY) * viewport.zoom
+                                    : 0
+                            )
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .clipped()
-        case let .shape(kind, _, strokeColor, fillColor, lineWidth):
-            BoardShapeView(
-                kind: kind,
-                stroke: Color(strokeColor),
-                fill: fillColor.map { Color($0) },
-                lineWidth: CGFloat(lineWidth)
-            )
-        case let .image(assetName, _):
-            BoardImageView(assetName: assetName, assetsDirectory: assetsDirectory)
-        case .ink, .connector:
-            EmptyView()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
+                if !isEditing {
+                    BoardSelectionBar(
+                        color: selectedColor,
+                        canEditText: isTextLike,
+                        onDuplicate: onDuplicate,
+                        onDelete: onDelete,
+                        onBringToFront: onBringToFront,
+                        onSendToBack: onSendToBack,
+                        onColor: onColor,
+                        onEditText: onEditText
+                    )
+                    .position(
+                        x: min(
+                            max(rect.midX, Self.barHalfWidth),
+                            max(proxy.size.width - Self.barHalfWidth, Self.barHalfWidth)
+                        ),
+                        y: rect.minY > 72 ? rect.minY - 32 : rect.minY + rect.height + 32
+                    )
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .opacity.combined(with: .scale(scale: 0.95))
+                    )
+                }
+            }
+        }
+    }
+
+    private var isTextLike: Bool {
+        switch item.content {
+        case .text, .sticky: true
+        default: false
+        }
+    }
+
+    /// The colour the bar's palette starts from, when the item has one.
+    private var selectedColor: RGBAColor? {
+        switch item.content {
+        case let .sticky(_, _, color): color
+        case let .shape(_, _, strokeColor, _, _): strokeColor
+        default: nil
+        }
+    }
+
+    private func viewRect(_ frame: CGRect, in size: CGSize) -> CGRect {
+        let visible = viewport.visibleRect
+        let zoom = viewport.zoom
+        return CGRect(
+            x: (frame.minX - visible.minX) * zoom,
+            y: (frame.minY - visible.minY) * zoom,
+            width: frame.width * zoom,
+            height: frame.height * zoom
+        )
+    }
+}
+
+/// The capsule that hugs the selection.
+private struct BoardSelectionBar: View {
+    let color: RGBAColor?
+    let canEditText: Bool
+    let onDuplicate: () -> Void
+    let onDelete: () -> Void
+    let onBringToFront: () -> Void
+    let onSendToBack: () -> Void
+    let onColor: (RGBAColor) -> Void
+    let onEditText: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            button("Duplicate", "plus.square.on.square", action: onDuplicate)
+            button("Delete", "trash", action: onDelete)
+            Divider().frame(height: 20)
+            button("Bring to Front", "square.3.layers.3d.top.filled", action: onBringToFront)
+            button("Send to Back", "square.3.layers.3d.bottom.filled", action: onSendToBack)
+            if canEditText || color != nil {
+                Divider().frame(height: 20)
+            }
+            if canEditText {
+                button("Edit Text", "character.cursor.ibeam", action: onEditText)
+            }
+            if color != nil {
+                Menu {
+                    ForEach(Array(BoardStickyPalette.colors.enumerated()), id: \.offset) { index, swatch in
+                        Button(BoardStickyPalette.names[index]) { onColor(swatch) }
+                    }
+                } label: {
+                    Image(systemName: "paintpalette")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Colour")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 44)
+        .background(.regularMaterial, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(Color.primary.opacity(0.08))
+        }
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+    }
+
+    private func button(_ label: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .help(label)
+    }
+}
+
+/// The in-place editor over a selected sticky note or text box. Its font size
+/// follows the zoom so it sits exactly where the text will land.
+struct BoardTextEditor: View {
+    let frame: CGRect
+    let viewport: BoardViewportState
+    let isSticky: Bool
+    /// The text box's stored font size; a sticky note shrinks its own.
+    let textFontSize: CGFloat
+    let textColor: Color
+    @Binding var text: String
+    let onSubmit: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            let zoom = max(viewport.zoom, 0.05)
+            let visible = viewport.visibleRect
+            let x = (frame.minX - visible.minX) * zoom
+            let y = (frame.minY - visible.minY) * zoom
+            let height = max(frame.height * zoom, 32)
+            let fontSize = isSticky
+                ? BoardStickyText.fontSize(for: text, in: frame.size)
+                : textFontSize
+
+            ZStack(alignment: .topLeading) {
+                TextField("", text: $text, axis: .vertical)
+                    .font(.system(size: fontSize * zoom))
+                    .foregroundStyle(textColor)
+                    .textFieldStyle(.plain)
+                    .padding(isSticky ? BoardStickyText.padding * zoom : 2 * zoom)
+                    .frame(width: max(frame.width * zoom, 40), height: height, alignment: .topLeading)
+                    .offset(x: x, y: y)
+                    .focused($isFocused)
+                    .submitLabel(.done)
+                    .onSubmit(onSubmit)
+                    .onAppear { isFocused = true }
+                    .onChange(of: isFocused) { _, focused in
+                        if !focused { onSubmit() }
+                    }
+
+                // A hardware keyboard has no dismiss key, and a sticky note's
+                // growing text can cover the keyboard's Done button.
+                Button("Done", action: onSubmit)
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay { Capsule().strokeBorder(Color.primary.opacity(0.08)) }
+                    .offset(x: x, y: y > 44 ? y - 40 : y + height + 8)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
     }
 }
 
-private struct BoardShapeView: View {
-    let kind: BoardShapeKind
-    let stroke: Color
-    let fill: Color?
-    let lineWidth: CGFloat
-
-    var body: some View {
-        Canvas { context, size in
-            let inset = max(lineWidth, 0) / 2
-            let rect = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
-            guard rect.width > 0, rect.height > 0 else { return }
-            let path = Self.path(for: kind, in: rect)
-            if let fill {
-                context.fill(path, with: .color(fill))
-            }
-            context.stroke(
-                path,
-                with: .color(stroke),
-                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
-            )
-        }
-    }
-
-    private static func path(for kind: BoardShapeKind, in rect: CGRect) -> Path {
-        switch kind {
-        case .rectangle:
-            return Path(rect)
-        case .roundedRectangle:
-            return Path(roundedRect: rect, cornerRadius: min(rect.width, rect.height) * 0.12)
-        case .ellipse:
-            return Path(ellipseIn: rect)
-        case .triangle:
-            var path = Path()
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-            path.closeSubpath()
-            return path
-        case .line:
-            var path = Path()
-            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-            return path
-        case .arrow:
-            var path = Path()
-            let start = CGPoint(x: rect.minX, y: rect.maxY)
-            let end = CGPoint(x: rect.maxX, y: rect.minY)
-            path.move(to: start)
-            path.addLine(to: end)
-            let head = min(rect.width, rect.height) * 0.2
-            path.move(to: CGPoint(x: end.x - head, y: end.y))
-            path.addLine(to: end)
-            path.addLine(to: CGPoint(x: end.x, y: end.y + head))
-            return path
-        case .star:
-            var path = Path()
-            let center = CGPoint(x: rect.midX, y: rect.midY)
-            let outer = min(rect.width, rect.height) / 2
-            let inner = outer * 0.42
-            for index in 0..<10 {
-                let radius = index.isMultiple(of: 2) ? outer : inner
-                let angle = -CGFloat.pi / 2 + CGFloat(index) * .pi / 5
-                let point = CGPoint(
-                    x: center.x + cos(angle) * radius,
-                    y: center.y + sin(angle) * radius
-                )
-                if index == 0 {
-                    path.move(to: point)
-                } else {
-                    path.addLine(to: point)
-                }
-            }
-            path.closeSubpath()
-            return path
-        }
-    }
-}
-
-private struct BoardImageView: View {
-    let assetName: String
-    let assetsDirectory: URL
-
-    var body: some View {
-        if let image = UIImage(contentsOfFile: assetsDirectory.appendingPathComponent(assetName).path) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .clipped()
-        } else {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.secondary.opacity(0.10))
-                .overlay {
-                    Image(systemName: "photo")
-                        .font(.title3)
-                        .foregroundStyle(.tertiary)
-                }
-        }
-    }
+private extension Color {
+    /// The selection chrome's blue, as in Freeform.
+    static let selectionBlue = Color(uiColor: .systemBlue)
 }
 
 /// The zoom readout at the bottom-left. Tapping it opens the presets and

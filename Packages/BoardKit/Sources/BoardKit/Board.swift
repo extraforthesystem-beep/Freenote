@@ -4,7 +4,10 @@ import Foundation
 /// One board: a z-ordered collection of items plus deletion tombstones.
 public struct Board: Codable, Identifiable, Hashable, Sendable {
     /// Schema version written by this build.
-    public static let currentSchemaVersion = 1
+    ///
+    /// Version 2 adds sticky notes. Reads stay compatible with version 1, and
+    /// an unknown item kind is skipped instead of failing the whole board.
+    public static let currentSchemaVersion = 2
 
     /// Stable identity, also used as the board file name by `BoardStore`.
     public var id: UUID
@@ -172,6 +175,33 @@ public struct Board: Codable, Identifiable, Hashable, Sendable {
         case id, title, items, deletedItemIDs, createdAt, updatedAt, schemaVersion
     }
 
+    /// Decodes a board from an older schema, and skips item kinds this build
+    /// does not know instead of refusing the file. The board is upgraded to
+    /// `currentSchemaVersion`, so its next save writes the current format.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled Board"
+        items = try container.decodeIfPresent([LossyBoardItem].self, forKey: .items)?
+            .compactMap(\.item) ?? []
+        deletedItemIDs = Set(
+            try container.decodeIfPresent([UUID].self, forKey: .deletedItemIDs) ?? []
+        )
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        schemaVersion = Self.currentSchemaVersion
+    }
+
+    /// One item decoded on its own: an unknown content kind drops that item
+    /// and keeps the rest of the board readable.
+    private struct LossyBoardItem: Decodable {
+        let item: BoardItem?
+
+        init(from decoder: any Decoder) throws {
+            item = try? BoardItem(from: decoder)
+        }
+    }
+
     /// Encodes tombstones in sorted order so board files are deterministic.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -191,7 +221,7 @@ public struct Board: Codable, Identifiable, Hashable, Sendable {
 extension Board {
     /// Applies a frame from layout code, respecting locks and tombstones.
     @discardableResult
-    mutating func setFrame(_ itemID: UUID, to frame: CGRect, at date: Date) -> Bool {
+    public mutating func setFrame(_ itemID: UUID, to frame: CGRect, at date: Date) -> Bool {
         guard let index = items.firstIndex(where: { $0.id == itemID }),
               !items[index].isLocked,
               !deletedItemIDs.contains(itemID),

@@ -267,4 +267,48 @@ final class BoardStoreTests: XCTestCase {
         let ids = try await store.list()
         XCTAssertEqual(ids, [document.board.id])
     }
+
+    func testLoadUpgradesAVersionOneFile() async throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BoardStore(rootURL: directory)
+
+        var board = makeDocument().board
+        board.schemaVersion = 1
+        let legacy = BoardDocument(board: board, schemaVersion: 1)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        try encoder.encode(legacy).write(to: store.fileURL(for: board.id))
+
+        let loaded = try await store.load(board.id)
+        XCTAssertEqual(loaded.board.schemaVersion, Board.currentSchemaVersion)
+        XCTAssertEqual(loaded.schemaVersion, BoardDocument.currentSchemaVersion)
+        XCTAssertEqual(loaded.board.items, board.items)
+
+        // The upgraded document saves over the old file in the current format.
+        try await store.save(loaded)
+        let data = try Data(contentsOf: store.fileURL(for: board.id))
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(json["schemaVersion"] as? Int, BoardDocument.currentSchemaVersion)
+    }
+
+    func testAddAssetWritesUnderTheAssetsFolder() async throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BoardStore(rootURL: directory)
+        let data = Data([1, 2, 3, 4])
+
+        let name = try await store.addAsset(data, fileExtension: "PNG")
+        XCTAssertTrue(name.hasSuffix(".png"))
+
+        let file = store.assetsDirectoryURL.appendingPathComponent(name)
+        XCTAssertEqual(store.assetsDirectoryURL.lastPathComponent, "Assets")
+        XCTAssertEqual(try Data(contentsOf: file), data)
+
+        let other = try await store.addAsset(data, fileExtension: "")
+        XCTAssertNotEqual(other, name)
+        XCTAssertTrue(other.hasSuffix(".png"))
+    }
 }
