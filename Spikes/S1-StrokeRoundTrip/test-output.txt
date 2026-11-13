@@ -1,0 +1,287 @@
+Building for debugging...
+[1 / 5]
+Build complete! (0.48 secs)
+Test Suite 'All tests' started at 2026-11-12 12:12:29.135.
+Test Suite 'All tests' passed at 2026-11-12 12:12:29.144.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.009) seconds
+􀟈  Test run started.
+􀄵  Testing Library Version: 2403
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Diagnostics" started.
+􀟈  Suite "Erased strokes" started.
+􀟈  Suite "Stroke round trip" started.
+􀟈  Suite "Drift details" started.
+􀟈  Suite "Colour spaces" started.
+􀟈  Suite "Generator coverage" started.
+􀟈  Test "PencilKit-erased strokes round trip" started.
+􀟈  Test "A. field equality" started.
+􀟈  Test "non-point fields that drift" started.
+􀟈  Test "synthetic strokes cover the requested ranges" started.
+􀟈  Test "Display P3 colour round trips" started.
+􀟈  Test "JSON encoding is exact" started.
+􀟈  Test "catalog colour round trips" started.
+􀟈  Test case passing 1 argument name → "com.apple.ink.pen" to "A. field equality" started.
+􀟈  Test "grey colour round trips" started.
+􀟈  Test "extended-range sRGB colour round trips" started.
+􀟈  Test "pattern colour cannot be represented" started.
+􀟈  Test "sRGB colour round trips" started.
+RESULT|ERASED|marker|pass|strokesAfterErase=2|maskedStrokes=2|maskElementCounts=39/39,35/35|maskCountsAndKindsEqual=true|maskShapeMatches=true|maxMaskGeometryDelta=0.01|maskStartVertexStable=false|maskFieldsExact=false|pointFieldsWithin1e-6=false|recordsEqual=false|rendersEqual=true|fieldDetail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].altitude: 1.306707917111122 -> 1.3067318859266677 delta=2.39688155e-05; point[6].size.height: 19.840777206420896 -> 19.826605222702028 delta=-0.0141719837; point[8].azimuth: 2.9344062120117798 -> 2.934310336749597 delta=-9.58752622e-05; point[10].azimuth: -2.8336413114571797 -> -2.833737186719363 delta=-9.58752622e-05; point[10].altitude: 1.019273881085725 -> 1.0192978499012706 delta=2.39688155e-05; point[11].azimuth: -0.703005359958714 -> -0.7031012352208972 delta=-9.58752622e-05; point[14].altitude: 0.3048353961116579 -> 0.30485936492720356 delta=2.39688155e-05; point[15].azimuth: 1.6642507386080236 -> 1.664154863345841 delta=-9.58752622e-05; point[17].azimuth: -1.7328974263312342 -> -1.7329933015934174 delta=-9.58752622e-05; point[18].azimuth: -1.3663662990046521 -> -1.3664621742668352 delta=-9.58752622e-05; point[23].altitude: 1.162535491603053 -> 1.1625594604185987 delta=2.39688155e-05|renderDetail=identical=true size=48315/48315px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+RESULT|G|all|pass|strokes=40|masked=32|distinctSeeds=40
+RESULT|COLOUR|displayP3|pass|inputSpace=kCGColorSpaceDisplayP3|storedSpace=kCGColorSpaceSRGB|rebuiltSpace=kCGColorSpaceSRGB|storedMatchesInputSpace=false|recordStable=true|fieldReport=fields=64 exactMismatches=1 maxDelta=9.58752622e-05@point[0].azimuth beyond1e-6=1|rendersEqual=true|renderDetail=identical=true size=9970/9970px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􁁛  Test "PencilKit-erased strokes round trip" passed after 0.415 seconds.
+􁁛  Test "Display P3 colour round trips" passed after 0.415 seconds.
+􁁛  Test "synthetic strokes cover the requested ranges" passed after 0.415 seconds.
+􁁛  Suite "Generator coverage" passed after 0.415 seconds.
+􀟈  Test "mask built by hand survives the round trip" started.
+RESULT|COLOUR|catalog-systemRed|pass|inputSpace=catalog|storedSpace=kCGColorSpaceSRGB|rebuiltSpace=kCGColorSpaceSRGB|storedMatchesInputSpace=false|recordStable=true|fieldReport=fields=64 exactMismatches=1 maxDelta=9.58752622e-05@point[0].azimuth beyond1e-6=1|rendersEqual=true|renderDetail=identical=true size=9970/9970px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+RESULT|A|com.apple.ink.pen|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=156|maxDelta=0.01|maxDeltaField=mask[3].point[0].x|beyond1e-6=156|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[5].altitude: 1.377847361651097 -> 1.3778713304666426 delta=2.39688155e-05; point[7].azimuth: -2.352539245821608 -> -2.3526351210837912 delta=-9.58752622e-05; point[8].altitude: 0.3767658115646446 -> 0.3767897803801903 delta=2.39688155e-05; point[13].altitude: 1.461162964488345 -> 1.4611869333038907 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[5].altitude: 1.3586004027678085 -> 1.3586243715833541 delta=2.39688155e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.pen" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[5].altitude: 1.377847361651097 -> 1.3778713304666426 delta=2.39688155e-05; point[7].azimuth: -2.352539245821608 -> -2.3526351210837912 delta=-9.58752622e-05; point[8].altitude: 0.3767658115646446 -> 0.3767897803801903 delta=2.39688155e-05; point[13].altitude: 1.461162964488345 -> 1.4611869333038907 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[5].altitude: 1.3586004027678085 -> 1.3586243715833541 delta=2.39688155e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.pen" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.009999999999990905 at mask[3].point[0].x. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[5].altitude: 1.377847361651097 -> 1.3778713304666426 delta=2.39688155e-05; point[7].azimuth: -2.352539245821608 -> -2.3526351210837912 delta=-9.58752622e-05; point[8].altitude: 0.3767658115646446 -> 0.3767897803801903 delta=2.39688155e-05; point[13].altitude: 1.461162964488345 -> 1.4611869333038907 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[5].altitude: 1.3586004027678085 -> 1.3586243715833541 delta=2.39688155e-05
+􀄵  exactZero → <not evaluated>
+DRIFT|com.apple.ink.pen|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+DRIFT|com.apple.ink.pencil|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+DRIFT|com.apple.ink.marker|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+DRIFT|com.apple.ink.monoline|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+DRIFT|com.apple.ink.fountainpen|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+DRIFT|com.apple.ink.watercolor|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+DRIFT|com.apple.ink.crayon|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+DRIFT|com.apple.ink.reedcalligraphy|2|mask[3].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[27].point[0].x: 315.03 -> 315.02 delta=-0.01; mask[30].point[0].y: 289.53 -> 289.52 delta=-0.01; mask[32].point[0].y: 289.53 -> 289.52 delta=-0.01
+RESULT|JSON|all|pass|strokes=40|recordChangedByJSON=0|detail=none
+RESULT|COLOUR|genericGamma22Gray|pass|inputSpace=kCGColorSpaceGenericGrayGamma2_2|storedSpace=kCGColorSpaceSRGB|rebuiltSpace=kCGColorSpaceSRGB|storedMatchesInputSpace=false|recordStable=true|fieldReport=fields=64 exactMismatches=1 maxDelta=9.58752622e-05@point[0].azimuth beyond1e-6=1|rendersEqual=true|renderDetail=identical=true size=9949/9949px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+RESULT|COLOUR|extendedSRGB|pass|inputSpace=kCGColorSpaceSRGB|storedSpace=kCGColorSpaceSRGB|rebuiltSpace=kCGColorSpaceSRGB|storedMatchesInputSpace=true|recordStable=true|fieldReport=fields=64 exactMismatches=1 maxDelta=9.58752622e-05@point[0].azimuth beyond1e-6=1|rendersEqual=true|renderDetail=identical=true size=9970/9970px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+RESULT|COLOUR|pattern|fail|inputSpace=pattern|detail=pattern colour has no component representation
+RESULT|COLOUR|sRGB|pass|inputSpace=kCGColorSpaceSRGB|storedSpace=kCGColorSpaceSRGB|rebuiltSpace=kCGColorSpaceSRGB|storedMatchesInputSpace=true|recordStable=true|fieldReport=fields=64 exactMismatches=1 maxDelta=9.58752622e-05@point[0].azimuth beyond1e-6=1|rendersEqual=true|renderDetail=identical=true size=9958/9958px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􁁛  Test "catalog colour round trips" passed after 0.746 seconds.
+􁁛  Test "non-point fields that drift" passed after 0.746 seconds.
+􁁛  Test "sRGB colour round trips" passed after 0.746 seconds.
+􁁛  Test "grey colour round trips" passed after 0.746 seconds.
+􁁛  Test "extended-range sRGB colour round trips" passed after 0.746 seconds.
+􀟈  Test case passing 1 argument name → "com.apple.ink.pencil" to "A. field equality" started.
+􀟈  Test "a second round trip is stable" started.
+􁁛  Test "pattern colour cannot be represented" passed after 0.746 seconds.
+􁁛  Test "JSON encoding is exact" passed after 0.746 seconds.
+􁁛  Suite "Colour spaces" passed after 0.746 seconds.
+􀟈  Test "PKStrokePoint replay drift" started.
+RESULT|MASK|all|pass|stylesWithMask=8|maskFieldsExact=true|maskDetail=none|otherDetail=none
+􁁛  Test "mask built by hand survives the round trip" passed after 0.348 seconds.
+􀟈  Test "PencilKit normalises mask geometry on ingestion" started.
+RESULT|A|com.apple.ink.pencil|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=180|maxDelta=0.01|maxDeltaField=mask[3].point[0].x|beyond1e-6=180|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -0.8670479335542622 -> -0.8671438088164458 delta=-9.58752622e-05; point[5].azimuth: -1.5818938883926081 -> -1.5819897636547915 delta=-9.58752622e-05; point[5].altitude: 0.8458355317962174 -> 0.8458595006117632 delta=2.39688155e-05; point[6].azimuth: -2.961922412258374 -> -2.962018287520557 delta=-9.58752622e-05; point[10].azimuth: -2.8958643566141116 -> -2.895960231876295 delta=-9.58752622e-05; point[13].altitude: 1.5244885751603847 -> 1.5245125439759304 delta=2.39688155e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.pencil" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -0.8670479335542622 -> -0.8671438088164458 delta=-9.58752622e-05; point[5].azimuth: -1.5818938883926081 -> -1.5819897636547915 delta=-9.58752622e-05; point[5].altitude: 0.8458355317962174 -> 0.8458595006117632 delta=2.39688155e-05; point[6].azimuth: -2.961922412258374 -> -2.962018287520557 delta=-9.58752622e-05; point[10].azimuth: -2.8958643566141116 -> -2.895960231876295 delta=-9.58752622e-05; point[13].altitude: 1.5244885751603847 -> 1.5245125439759304 delta=2.39688155e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.pencil" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.009999999999990905 at mask[3].point[0].x. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -0.8670479335542622 -> -0.8671438088164458 delta=-9.58752622e-05; point[5].azimuth: -1.5818938883926081 -> -1.5819897636547915 delta=-9.58752622e-05; point[5].altitude: 0.8458355317962174 -> 0.8458595006117632 delta=2.39688155e-05; point[6].azimuth: -2.961922412258374 -> -2.962018287520557 delta=-9.58752622e-05; point[10].azimuth: -2.8958643566141116 -> -2.895960231876295 delta=-9.58752622e-05; point[13].altitude: 1.5244885751603847 -> 1.5245125439759304 delta=2.39688155e-05
+􀄵  exactZero → <not evaluated>
+RESULT|SECOND|all|fail|strokes=40|unstableAfterNormalisation=40|maxDelta=0.0507
+RESULT|FIXPOINT|all|info|stableAfterRoundTrips=2:13,3:27|maxIterations=3
+􀢄  Test "a second round trip is stable" recorded an issue at DiagnosticsTests.swift:197:9: Expectation failed: unstable == 0
+􀄵  40 of 40 strokes still change on a second round trip
+􀄵  unstable == 0 → false
+􀄵    unstable → 40
+RESULT|POINT|all|fail|points=3328|driftingFields=altitude+azimuth+size.height|maxGenerationsToFixpoint=3|oscillating=0|detail=altitude:n=612,max=2.4e-05,gen2=2.4e-05 azimuth:n=684,max=9.59e-05,gen2=9.59e-05 size.height:n=18,max=0.0566,gen2=0.0507
+RESULT|POINT|azimuth|fail|points=3328|drifted=684|maxDelta=9.59e-05|secondGenerationMaxDelta=9.59e-05
+RESULT|POINT|altitude|fail|points=3328|drifted=612|maxDelta=2.4e-05|secondGenerationMaxDelta=2.4e-05
+􀢄  Test "a second round trip is stable" failed after 0.594 seconds with 1 issue.
+􁁛  Test "PKStrokePoint replay drift" passed after 0.594 seconds.
+􀟈  Test case passing 1 argument name → "com.apple.ink.marker" to "A. field equality" started.
+􁁛  Suite "Diagnostics" passed after 1.340 seconds.
+􀢄  Suite "Drift details" failed after 1.340 seconds with 1 issue.
+RESULT|MASKSTRUCT|pen|info|inputElements=7|inputKinds=[0, 2, 2, 2, 2, 3, 0]|storedCubics=0|storedElements=66|storedLines=63|rebuiltElements=66|elementKindsPreserved=true
+􁁛  Test "PencilKit normalises mask geometry on ingestion" passed after 0.578 seconds.
+􀟈  Test "renderState survives" started.
+RESULT|A|com.apple.ink.marker|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=169|maxDelta=0.0284|maxDeltaField=point[55].size.height|beyond1e-6=169|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -1.7664537680953731 -> -1.7665496433575565 delta=-9.58752622e-05; point[3].altitude: 1.3724064405221972 -> 1.3724304093377429 delta=2.39688155e-05; point[4].azimuth: 2.307286122071112 -> 2.307190246808929 delta=-9.58752622e-05; point[5].altitude: 1.1958042075806423 -> 1.195828176396188 delta=2.39688155e-05; point[8].azimuth: -1.9346189779648018 -> -1.9347148532269849 delta=-9.58752622e-05; point[10].altitude: 0.8884281170211282 -> 0.888452085836674 delta=2.39688155e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.marker" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -1.7664537680953731 -> -1.7665496433575565 delta=-9.58752622e-05; point[3].altitude: 1.3724064405221972 -> 1.3724304093377429 delta=2.39688155e-05; point[4].azimuth: 2.307286122071112 -> 2.307190246808929 delta=-9.58752622e-05; point[5].altitude: 1.1958042075806423 -> 1.195828176396188 delta=2.39688155e-05; point[8].azimuth: -1.9346189779648018 -> -1.9347148532269849 delta=-9.58752622e-05; point[10].altitude: 0.8884281170211282 -> 0.888452085836674 delta=2.39688155e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.marker" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.028371242523185458 at point[55].size.height. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -1.7664537680953731 -> -1.7665496433575565 delta=-9.58752622e-05; point[3].altitude: 1.3724064405221972 -> 1.3724304093377429 delta=2.39688155e-05; point[4].azimuth: 2.307286122071112 -> 2.307190246808929 delta=-9.58752622e-05; point[5].altitude: 1.1958042075806423 -> 1.195828176396188 delta=2.39688155e-05; point[8].azimuth: -1.9346189779648018 -> -1.9347148532269849 delta=-9.58752622e-05; point[10].altitude: 0.8884281170211282 -> 0.888452085836674 delta=2.39688155e-05
+􀄵  exactZero → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.monoline" to "A. field equality" started.
+RESULT|STATE|crayon|pass|constructedStatePreserved=true|originalHasState=true|rebuiltHasState=true|renderStateJSON="YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMSAAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGkCwwRElUkbnVsbNINDg8QViRjbGFzc1tyZW5kZXJTdGF0ZYADgAJKDQAASEEVAABQwNITFBUWWiRjbGFzc25hbWVYJGNsYXNzZXNfEBNQS1N0cm9rZVJlbmRlclN0YXRlohcYXxATUEtTdHJva2VSZW5kZXJTdGF0ZVhOU09iamVjdAgRGiQpMjdJTFFTWF5janZ4eoWKlZ60t80AAAAAAAABAQAAAAAAAAAZAAAAAAAAAAAAAAAAAAAA1g=="|substrokeHasPencilKitState=false|fieldReport=fields=262 exactMismatches=9 maxDelta=9.58752622e-05@point[4].azimuth beyond1e-6=9|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[4].azimuth: -1.929825214855639 -> -1.9299210901178223 delta=-9.58752622e-05; point[6].altitude: 0.8619425758430042 -> 0.8619665446585499 delta=2.39688155e-05; point[9].altitude: 1.2100656528304015 -> 1.2100896216459471 delta=2.39688155e-05; point[10].azimuth: -2.655600949582876 -> -2.655696824845059 delta=-9.58752622e-05; point[10].altitude: 0.8547519311792601 -> 0.8547758999948059 delta=2.39688155e-05; point[11].altitude: 1.4692404553272842 -> 1.46926442414283 delta=2.39688155e-05; point[14].azimuth: -1.8383602147328142 -> -1.8384560899949973 delta=-9.58752622e-05; point[16].azimuth: -1.9295375890690891 -> -1.9296334643312725 delta=-9.58752622e-05
+􁁛  Test "renderState survives" passed after 0.019 seconds.
+􁁛  Suite "Erased strokes" passed after 1.361 seconds.
+RESULT|A|com.apple.ink.monoline|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=167|maxDelta=0.01|maxDeltaField=mask[3].point[0].x|beyond1e-6=167|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.686472784005884 -> -2.686568659268067 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[4].altitude: 0.24908393115209537 -> 0.24910789996764104 delta=2.39688155e-05; point[10].altitude: 1.2712580389188637 -> 1.2712820077344094 delta=2.39688155e-05; point[13].azimuth: 2.2574309857358195 -> 2.2573351104736368 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -2.725302265190102 -> -2.725398140452285 delta=-9.58752622e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.monoline" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.686472784005884 -> -2.686568659268067 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[4].altitude: 0.24908393115209537 -> 0.24910789996764104 delta=2.39688155e-05; point[10].altitude: 1.2712580389188637 -> 1.2712820077344094 delta=2.39688155e-05; point[13].azimuth: 2.2574309857358195 -> 2.2573351104736368 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -2.725302265190102 -> -2.725398140452285 delta=-9.58752622e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.monoline" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.009999999999990905 at mask[3].point[0].x. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.686472784005884 -> -2.686568659268067 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[4].altitude: 0.24908393115209537 -> 0.24910789996764104 delta=2.39688155e-05; point[10].altitude: 1.2712580389188637 -> 1.2712820077344094 delta=2.39688155e-05; point[13].azimuth: 2.2574309857358195 -> 2.2573351104736368 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -2.725302265190102 -> -2.725398140452285 delta=-9.58752622e-05
+􀄵  exactZero → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.fountainpen" to "A. field equality" started.
+RESULT|A|com.apple.ink.fountainpen|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=163|maxDelta=0.01|maxDeltaField=mask[3].point[0].x|beyond1e-6=163|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.988671610407502 -> -2.9887674856696855 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].altitude: 0.22077675999248947 -> 0.22080072880803514 delta=2.39688155e-05; point[2].azimuth: -1.3795970851859412 -> -1.3796929604481245 delta=-9.58752622e-05; point[5].altitude: 1.3747793532612327 -> 1.3748033220767786 delta=2.39688155e-05; point[9].azimuth: -1.0070258163418142 -> -1.0071216916039973 delta=-9.58752622e-05; point[13].altitude: 1.3516494462595225 -> 1.3516734150750682 delta=2.39688155e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.fountainpen" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.988671610407502 -> -2.9887674856696855 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].altitude: 0.22077675999248947 -> 0.22080072880803514 delta=2.39688155e-05; point[2].azimuth: -1.3795970851859412 -> -1.3796929604481245 delta=-9.58752622e-05; point[5].altitude: 1.3747793532612327 -> 1.3748033220767786 delta=2.39688155e-05; point[9].azimuth: -1.0070258163418142 -> -1.0071216916039973 delta=-9.58752622e-05; point[13].altitude: 1.3516494462595225 -> 1.3516734150750682 delta=2.39688155e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.fountainpen" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.009999999999990905 at mask[3].point[0].x. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.988671610407502 -> -2.9887674856696855 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].altitude: 0.22077675999248947 -> 0.22080072880803514 delta=2.39688155e-05; point[2].azimuth: -1.3795970851859412 -> -1.3796929604481245 delta=-9.58752622e-05; point[5].altitude: 1.3747793532612327 -> 1.3748033220767786 delta=2.39688155e-05; point[9].azimuth: -1.0070258163418142 -> -1.0071216916039973 delta=-9.58752622e-05; point[13].altitude: 1.3516494462595225 -> 1.3516734150750682 delta=2.39688155e-05
+􀄵  exactZero → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.watercolor" to "A. field equality" started.
+RESULT|A|com.apple.ink.watercolor|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=173|maxDelta=0.0566|maxDeltaField=point[43].size.height|beyond1e-6=173|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[2].azimuth: 1.2757641762414762 -> 1.2756683009792935 delta=-9.58752622e-05; point[5].altitude: 1.52302647741209 -> 1.5230504462276357 delta=2.39688155e-05; point[6].altitude: 1.5363531388555625 -> 1.5363771076711081 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -0.0918005635404664 -> -0.09189643880264953 delta=-9.58752622e-05; point[6].azimuth: -1.9250314517464762 -> -1.9251273270086595 delta=-9.58752622e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.watercolor" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[2].azimuth: 1.2757641762414762 -> 1.2756683009792935 delta=-9.58752622e-05; point[5].altitude: 1.52302647741209 -> 1.5230504462276357 delta=2.39688155e-05; point[6].altitude: 1.5363531388555625 -> 1.5363771076711081 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -0.0918005635404664 -> -0.09189643880264953 delta=-9.58752622e-05; point[6].azimuth: -1.9250314517464762 -> -1.9251273270086595 delta=-9.58752622e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.watercolor" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.056600673675518465 at point[43].size.height. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[2].azimuth: 1.2757641762414762 -> 1.2756683009792935 delta=-9.58752622e-05; point[5].altitude: 1.52302647741209 -> 1.5230504462276357 delta=2.39688155e-05; point[6].altitude: 1.5363531388555625 -> 1.5363771076711081 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -0.0918005635404664 -> -0.09189643880264953 delta=-9.58752622e-05; point[6].azimuth: -1.9250314517464762 -> -1.9251273270086595 delta=-9.58752622e-05
+􀄵  exactZero → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.crayon" to "A. field equality" started.
+RESULT|A|com.apple.ink.crayon|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=182|maxDelta=0.054|maxDeltaField=point[28].size.height|beyond1e-6=182|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[4].azimuth: -1.929825214855639 -> -1.9299210901178223 delta=-9.58752622e-05; point[6].altitude: 0.8619425758430042 -> 0.8619665446585499 delta=2.39688155e-05; point[9].altitude: 1.2100656528304015 -> 1.2100896216459471 delta=2.39688155e-05; point[10].azimuth: -2.655600949582876 -> -2.655696824845059 delta=-9.58752622e-05; point[10].altitude: 0.8547519311792601 -> 0.8547758999948059 delta=2.39688155e-05; point[11].altitude: 1.4692404553272842 -> 1.46926442414283 delta=2.39688155e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.crayon" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[4].azimuth: -1.929825214855639 -> -1.9299210901178223 delta=-9.58752622e-05; point[6].altitude: 0.8619425758430042 -> 0.8619665446585499 delta=2.39688155e-05; point[9].altitude: 1.2100656528304015 -> 1.2100896216459471 delta=2.39688155e-05; point[10].azimuth: -2.655600949582876 -> -2.655696824845059 delta=-9.58752622e-05; point[10].altitude: 0.8547519311792601 -> 0.8547758999948059 delta=2.39688155e-05; point[11].altitude: 1.4692404553272842 -> 1.46926442414283 delta=2.39688155e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.crayon" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.05400397109984567 at point[28].size.height. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[4].azimuth: -1.929825214855639 -> -1.9299210901178223 delta=-9.58752622e-05; point[6].altitude: 0.8619425758430042 -> 0.8619665446585499 delta=2.39688155e-05; point[9].altitude: 1.2100656528304015 -> 1.2100896216459471 delta=2.39688155e-05; point[10].azimuth: -2.655600949582876 -> -2.655696824845059 delta=-9.58752622e-05; point[10].altitude: 0.8547519311792601 -> 0.8547758999948059 delta=2.39688155e-05; point[11].altitude: 1.4692404553272842 -> 1.46926442414283 delta=2.39688155e-05
+􀄵  exactZero → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.reedcalligraphy" to "A. field equality" started.
+RESULT|A|com.apple.ink.reedcalligraphy|fail|strokes=5|fieldsPerStroke=54+10|exactPass=false|exactMismatches=156|maxDelta=0.0524|maxDeltaField=point[19].size.height|beyond1e-6=156|detail=point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.4492773853645122 -> -2.4493732606266954 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -1.9391251152874147 -> -1.9392209905495978 delta=-9.58752622e-05; point[4].azimuth: 2.379671945019469 -> 2.3795760697572863 delta=-9.58752622e-05; point[12].altitude: 1.5612807070232086 -> 1.5613046758387543 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].altitude: 0.023489439234897436 -> 0.023513408050443108 delta=2.39688155e-05
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.reedcalligraphy" at RoundTripTests.swift:46:9: Expectation failed: reports.allSatisfy { $0.toleranceMet }
+􀄵  A: fields differ by more than 1e-6 after the round trip: point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.4492773853645122 -> -2.4493732606266954 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -1.9391251152874147 -> -1.9392209905495978 delta=-9.58752622e-05; point[4].azimuth: 2.379671945019469 -> 2.3795760697572863 delta=-9.58752622e-05; point[12].altitude: 1.5612807070232086 -> 1.5613046758387543 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].altitude: 0.023489439234897436 -> 0.023513408050443108 delta=2.39688155e-05
+􀄵  reports.allSatisfy { $0.toleranceMet } → <not evaluated>
+􀢄  Test "A. field equality" recorded an issue with 1 argument name → "com.apple.ink.reedcalligraphy" at RoundTripTests.swift:48:9: Expectation failed: exactZero
+􀄵  A: round trip is not bit-exact; largest delta 0.052406738281234766 at point[19].size.height. point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[1].azimuth: -2.4492773853645122 -> -2.4493732606266954 delta=-9.58752622e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[3].azimuth: -1.9391251152874147 -> -1.9392209905495978 delta=-9.58752622e-05; point[4].azimuth: 2.379671945019469 -> 2.3795760697572863 delta=-9.58752622e-05; point[12].altitude: 1.5612807070232086 -> 1.5613046758387543 delta=2.39688155e-05; point[0].azimuth: -4.7937631091787836e-05 -> -0.00014381289327491942 delta=-9.58752622e-05; point[0].altitude: 0.023489439234897436 -> 0.023513408050443108 delta=2.39688155e-05
+􀄵  exactZero → <not evaluated>
+􀢄  Test "A. field equality" with 8 test cases failed after 1.453 seconds with 16 issues.
+􀟈  Test "B. record stability" started.
+􀟈  Test case passing 1 argument name → "com.apple.ink.pen" to "B. record stability" started.
+RESULT|B|com.apple.ink.pen|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.pen" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.pencil" to "B. record stability" started.
+RESULT|B|com.apple.ink.pencil|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.pencil" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.marker" to "B. record stability" started.
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.marker" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+RESULT|B|com.apple.ink.marker|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀟈  Test case passing 1 argument name → "com.apple.ink.monoline" to "B. record stability" started.
+RESULT|B|com.apple.ink.monoline|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.monoline" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.fountainpen" to "B. record stability" started.
+RESULT|B|com.apple.ink.fountainpen|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.fountainpen" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.watercolor" to "B. record stability" started.
+RESULT|B|com.apple.ink.watercolor|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.watercolor" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.crayon" to "B. record stability" started.
+RESULT|B|com.apple.ink.crayon|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.crayon" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.reedcalligraphy" to "B. record stability" started.
+RESULT|B|com.apple.ink.reedcalligraphy|fail|recordsEqual=false|detail=path.controlPoints[0]
+􀢄  Test "B. record stability" recorded an issue with 1 argument name → "com.apple.ink.reedcalligraphy" at RoundTripTests.swift:71:9: Expectation failed: stable
+􀄵  B: toRecord(rebuilt) != toRecord(original): path.controlPoints[0]
+􀄵  stable → <not evaluated>
+􀢄  Test "B. record stability" with 8 test cases failed after 0.079 seconds with 8 issues.
+􀟈  Test "C. rendering" started.
+􀟈  Test case passing 1 argument name → "com.apple.ink.pen" to "C. rendering" started.
+RESULT|C|com.apple.ink.pen|pass|identical=true|pixels=1004x716|nonTransparent=23393/23393|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=27.0,44.0 502.0x358.0|aggregate=identical=true size=23393/23393px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􀟈  Test case passing 1 argument name → "com.apple.ink.pencil" to "C. rendering" started.
+RESULT|C|com.apple.ink.pencil|pass|identical=true|pixels=1002x716|nonTransparent=40656/40656|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=28.0,44.0 501.0x358.0|aggregate=identical=true size=40656/40656px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􀟈  Test case passing 1 argument name → "com.apple.ink.marker" to "C. rendering" started.
+RESULT|C|com.apple.ink.marker|pass|identical=true|pixels=1016x716|nonTransparent=147106/147106|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=21.0,44.0 508.0x358.0|aggregate=identical=true size=147106/147106px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􀟈  Test case passing 1 argument name → "com.apple.ink.monoline" to "C. rendering" started.
+RESULT|C|com.apple.ink.monoline|pass|identical=true|pixels=998x716|nonTransparent=21537/21537|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=30.0,44.0 499.0x358.0|aggregate=identical=true size=21537/21537px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􀟈  Test case passing 1 argument name → "com.apple.ink.fountainpen" to "C. rendering" started.
+RESULT|C|com.apple.ink.fountainpen|pass|identical=true|pixels=1004x716|nonTransparent=29717/29717|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=27.0,44.0 502.0x358.0|aggregate=identical=true size=29717/29717px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􀟈  Test case passing 1 argument name → "com.apple.ink.watercolor" to "C. rendering" started.
+RESULT|C|com.apple.ink.watercolor|pass|identical=true|pixels=1078x716|nonTransparent=271513/271513|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=-6.0,44.0 539.0x358.0|aggregate=identical=true size=271513/271513px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􀟈  Test case passing 1 argument name → "com.apple.ink.crayon" to "C. rendering" started.
+RESULT|C|com.apple.ink.crayon|pass|identical=true|pixels=1092x716|nonTransparent=296344/296344|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=-17.0,44.0 546.0x358.0|aggregate=identical=true size=296344/296344px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􀟈  Test case passing 1 argument name → "com.apple.ink.reedcalligraphy" to "C. rendering" started.
+RESULT|C|com.apple.ink.reedcalligraphy|pass|identical=true|pixels=1108x716|nonTransparent=218915/218915|differingPixels=0|maxChannelDelta=0|alphaDiffPixels=0|rgbDiffPixels=0|rect=-25.0,44.0 554.0x358.0|aggregate=identical=true size=218915/218915px differingPixels=0 maxChannelDelta=0 alphaOnlyDiff=0 rgbDiffAtSameAlpha=0
+􁁛  Test "C. rendering" with 8 test cases passed after 5.416 seconds.
+􀟈  Test "D. dataRepresentation" started.
+􀟈  Test case passing 1 argument name → "com.apple.ink.pen" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.pen|fail|bytesEqual=false|originalBytes=13751|rebuiltBytes=13751|delta=0
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.pen" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 13751 vs 13751 bytes
+􀄵  equal → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.pencil" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.pencil|fail|bytesEqual=false|originalBytes=14598|rebuiltBytes=14598|delta=0
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.pencil" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 14598 vs 14598 bytes
+􀄵  equal → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.marker" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.marker|fail|bytesEqual=false|originalBytes=13776|rebuiltBytes=13776|delta=0
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.marker" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 13776 vs 13776 bytes
+􀄵  equal → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.monoline" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.monoline|fail|bytesEqual=false|originalBytes=13826|rebuiltBytes=13826|delta=0
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.monoline" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 13826 vs 13826 bytes
+􀄵  equal → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.fountainpen" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.fountainpen|fail|bytesEqual=false|originalBytes=14119|rebuiltBytes=14119|delta=0
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.fountainpen" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 14119 vs 14119 bytes
+􀄵  equal → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.watercolor" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.watercolor|fail|bytesEqual=false|originalBytes=13958|rebuiltBytes=14084|delta=126
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.watercolor" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 13958 vs 14084 bytes
+􀄵  equal → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.crayon" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.crayon|fail|bytesEqual=false|originalBytes=13776|rebuiltBytes=13776|delta=0
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.crayon" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 13776 vs 13776 bytes
+􀄵  equal → <not evaluated>
+􀟈  Test case passing 1 argument name → "com.apple.ink.reedcalligraphy" to "D. dataRepresentation" started.
+RESULT|D|com.apple.ink.reedcalligraphy|fail|bytesEqual=false|originalBytes=13957|rebuiltBytes=13957|delta=0
+􀢄  Test "D. dataRepresentation" recorded an issue with 1 argument name → "com.apple.ink.reedcalligraphy" at RoundTripTests.swift:128:9: Expectation failed: equal
+􀄵  D (supporting): PKDrawing.dataRepresentation differs, 13957 vs 13957 bytes
+􀄵  equal → <not evaluated>
+􀢄  Test "D. dataRepresentation" with 8 test cases failed after 0.079 seconds with 8 issues.
+􀟈  Test "E. identity" started.
+􀟈  Test case passing 1 argument name → "com.apple.ink.pen" to "E. identity" started.
+RESULT|E|com.apple.ink.pen|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􀟈  Test case passing 1 argument name → "com.apple.ink.pencil" to "E. identity" started.
+RESULT|E|com.apple.ink.pencil|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􀟈  Test case passing 1 argument name → "com.apple.ink.marker" to "E. identity" started.
+RESULT|E|com.apple.ink.marker|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􀟈  Test case passing 1 argument name → "com.apple.ink.monoline" to "E. identity" started.
+RESULT|E|com.apple.ink.monoline|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􀟈  Test case passing 1 argument name → "com.apple.ink.fountainpen" to "E. identity" started.
+RESULT|E|com.apple.ink.fountainpen|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􀟈  Test case passing 1 argument name → "com.apple.ink.watercolor" to "E. identity" started.
+RESULT|E|com.apple.ink.watercolor|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􀟈  Test case passing 1 argument name → "com.apple.ink.crayon" to "E. identity" started.
+RESULT|E|com.apple.ink.crayon|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􀟈  Test case passing 1 argument name → "com.apple.ink.reedcalligraphy" to "E. identity" started.
+RESULT|E|com.apple.ink.reedcalligraphy|pass|n=5|strokeIDsPreserved=true|pathIDsPreserved=true|distinctAfterRoundTrip=true|distinctInDrawing=true|setEqual=true
+􁁛  Test "E. identity" with 8 test cases passed after 0.075 seconds.
+􀟈  Test "F. content version" started.
+􀟈  Test case passing 1 argument name → "com.apple.ink.pen" to "F. content version" started.
+RESULT|F|com.apple.ink.pen|pass|strokeVersion=1...1|inkVersion=1...1|preserved=true|inkTypeVersion=1|drawingVersion=1
+􀟈  Test case passing 1 argument name → "com.apple.ink.pencil" to "F. content version" started.
+RESULT|F|com.apple.ink.pencil|pass|strokeVersion=1...1|inkVersion=1...1|preserved=true|inkTypeVersion=1|drawingVersion=1
+􀟈  Test case passing 1 argument name → "com.apple.ink.marker" to "F. content version" started.
+RESULT|F|com.apple.ink.marker|pass|strokeVersion=1...1|inkVersion=1...1|preserved=true|inkTypeVersion=1|drawingVersion=1
+􀟈  Test case passing 1 argument name → "com.apple.ink.monoline" to "F. content version" started.
+RESULT|F|com.apple.ink.monoline|pass|strokeVersion=2...2|inkVersion=2...2|preserved=true|inkTypeVersion=2|drawingVersion=2
+􀟈  Test case passing 1 argument name → "com.apple.ink.fountainpen" to "F. content version" started.
+RESULT|F|com.apple.ink.fountainpen|pass|strokeVersion=3...3|inkVersion=3...3|preserved=true|inkTypeVersion=2|drawingVersion=3
+􀟈  Test case passing 1 argument name → "com.apple.ink.watercolor" to "F. content version" started.
+RESULT|F|com.apple.ink.watercolor|pass|strokeVersion=2...2|inkVersion=2...2|preserved=true|inkTypeVersion=2|drawingVersion=2
+􀟈  Test case passing 1 argument name → "com.apple.ink.crayon" to "F. content version" started.
+RESULT|F|com.apple.ink.crayon|pass|strokeVersion=2...2|inkVersion=2...2|preserved=true|inkTypeVersion=2|drawingVersion=2
+􀟈  Test case passing 1 argument name → "com.apple.ink.reedcalligraphy" to "F. content version" started.
+RESULT|F|com.apple.ink.reedcalligraphy|pass|strokeVersion=4...4|inkVersion=4...4|preserved=true|inkTypeVersion=4|drawingVersion=4
+􁁛  Test "F. content version" with 8 test cases passed after 0.074 seconds.
+􀢄  Suite "Stroke round trip" failed after 7.179 seconds with 32 issues.
+􀢄  Test run with 21 tests in 6 suites failed after 7.179 seconds with 33 issues.
+Note: Some test targets reported failures:
+  - StrokeRoundTripTests (Swift Testing)

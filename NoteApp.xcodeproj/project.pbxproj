@@ -1,0 +1,534 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA0000000000000000000014 /* NoteCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001E /* NoteCore */; };
+		AA0000000000000000000015 /* InkKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001F /* InkKit */; };
+		AA0000000000000000000016 /* SearchKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000020 /* SearchKit */; };
+		AA0000000000000000000017 /* SyncKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000021 /* SyncKit */; };
+		AA0000000000000000000030 /* StudyKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000031 /* StudyKit */; };
+		AA0000000000000000000033 /* AudioKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000034 /* AudioKit */; };
+		AA0000000000000000000036 /* AIKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000037 /* AIKit */; };
+		AA0000000000000000000039 /* TextDocKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000003A /* TextDocKit */; };
+		AA000000000000000000003C /* BoardKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000003D /* BoardKit */; };
+		AA000000000000000000003F /* HistoryKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000040 /* HistoryKit */; };
+		AA000000000000000000005B /* NoteCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001E /* NoteCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AA0000000000000000000058 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000002;
+			remoteInfo = NoteApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		AA0000000000000000000003 /* NoteApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NoteApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000050 /* NoteAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NoteAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		AA0000000000000000000004 /* NoteApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NoteApp;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000051 /* NoteAppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NoteAppTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0000000000000000000014 /* NoteCore in Frameworks */,
+				AA0000000000000000000015 /* InkKit in Frameworks */,
+				AA0000000000000000000016 /* SearchKit in Frameworks */,
+				AA0000000000000000000017 /* SyncKit in Frameworks */,
+				AA0000000000000000000030 /* StudyKit in Frameworks */,
+				AA0000000000000000000033 /* AudioKit in Frameworks */,
+				AA0000000000000000000036 /* AIKit in Frameworks */,
+				AA0000000000000000000039 /* TextDocKit in Frameworks */,
+				AA000000000000000000003C /* BoardKit in Frameworks */,
+				AA000000000000000000003F /* HistoryKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000055 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000000000000000000005B /* NoteCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000000000000000000005 = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000004 /* NoteApp */,
+				AA0000000000000000000051 /* NoteAppTests */,
+				AA0000000000000000000006 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000006 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000003 /* NoteApp.app */,
+				AA0000000000000000000050 /* NoteAppTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0000000000000000000002 /* NoteApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA000000000000000000000B /* Build configuration list for PBXNativeTarget "NoteApp" */;
+			buildPhases = (
+				AA0000000000000000000007 /* Sources */,
+				AA0000000000000000000008 /* Frameworks */,
+				AA0000000000000000000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA0000000000000000000004 /* NoteApp */,
+			);
+			name = NoteApp;
+			packageProductDependencies = (
+				AA000000000000000000001E /* NoteCore */,
+				AA000000000000000000001F /* InkKit */,
+				AA0000000000000000000020 /* SearchKit */,
+				AA0000000000000000000021 /* SyncKit */,
+				AA0000000000000000000031 /* StudyKit */,
+				AA0000000000000000000034 /* AudioKit */,
+				AA0000000000000000000037 /* AIKit */,
+				AA000000000000000000003A /* TextDocKit */,
+				AA000000000000000000003D /* BoardKit */,
+				AA0000000000000000000040 /* HistoryKit */,
+			);
+			productName = NoteApp;
+			productReference = AA0000000000000000000003 /* NoteApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA0000000000000000000052 /* NoteAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000053 /* Build configuration list for PBXNativeTarget "NoteAppTests" */;
+			buildPhases = (
+				AA0000000000000000000054 /* Sources */,
+				AA0000000000000000000055 /* Frameworks */,
+				AA0000000000000000000056 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000000000000000000057 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA0000000000000000000051 /* NoteAppTests */,
+			);
+			name = NoteAppTests;
+			packageProductDependencies = (
+				AA000000000000000000001E /* NoteCore */,
+			);
+			productName = NoteAppTests;
+			productReference = AA0000000000000000000050 /* NoteAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2720;
+				LastUpgradeCheck = 2720;
+				TargetAttributes = {
+					AA0000000000000000000002 = {
+						CreatedOnToolsVersion = 27.2;
+					};
+				};
+			};
+			buildConfigurationList = AA000000000000000000000A /* Build configuration list for PBXProject "NoteApp" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AA0000000000000000000005;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AA0000000000000000000028 /* XCLocalSwiftPackageReference "Packages/NoteCore" */,
+				AA0000000000000000000029 /* XCLocalSwiftPackageReference "Packages/InkKit" */,
+				AA000000000000000000002A /* XCLocalSwiftPackageReference "Packages/SearchKit" */,
+				AA000000000000000000002B /* XCLocalSwiftPackageReference "Packages/SyncKit" */,
+				AA0000000000000000000032 /* XCLocalSwiftPackageReference "Packages/StudyKit" */,
+				AA0000000000000000000035 /* XCLocalSwiftPackageReference "Packages/AudioKit" */,
+				AA0000000000000000000038 /* XCLocalSwiftPackageReference "Packages/AIKit" */,
+				AA000000000000000000003B /* XCLocalSwiftPackageReference "Packages/TextDocKit" */,
+				AA000000000000000000003E /* XCLocalSwiftPackageReference "Packages/BoardKit" */,
+				AA0000000000000000000041 /* XCLocalSwiftPackageReference "Packages/HistoryKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = AA0000000000000000000006 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0000000000000000000002 /* NoteApp */,
+				AA0000000000000000000052 /* NoteAppTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA0000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000056 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000054 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA0000000000000000000057 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000002 /* NoteApp */;
+			targetProxy = AA0000000000000000000058 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AA000000000000000000000C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AA000000000000000000000D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA000000000000000000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CQ65B26KFJ;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = NoteApp;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio while you take notes. Recordings stay on your device unless you export them.";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = local.noteapp.NoteApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		AA000000000000000000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CQ65B26KFJ;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = NoteApp;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio while you take notes. Recordings stay on your device unless you export them.";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = local.noteapp.NoteApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		AA0000000000000000000059 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = local.noteapp.NoteAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoteApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)NoteApp";
+			};
+			name = Debug;
+		};
+		AA000000000000000000005A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = local.noteapp.NoteAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoteApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)NoteApp";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA000000000000000000000A /* Build configuration list for PBXProject "NoteApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000000000C /* Debug */,
+				AA000000000000000000000D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA000000000000000000000B /* Build configuration list for PBXNativeTarget "NoteApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000000000E /* Debug */,
+				AA000000000000000000000F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000053 /* Build configuration list for PBXNativeTarget "NoteAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000059 /* Debug */,
+				AA000000000000000000005A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AA0000000000000000000028 /* XCLocalSwiftPackageReference "Packages/NoteCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/NoteCore;
+		};
+		AA0000000000000000000029 /* XCLocalSwiftPackageReference "Packages/InkKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/InkKit;
+		};
+		AA000000000000000000002A /* XCLocalSwiftPackageReference "Packages/SearchKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SearchKit;
+		};
+		AA000000000000000000002B /* XCLocalSwiftPackageReference "Packages/SyncKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SyncKit;
+		};
+		AA0000000000000000000032 /* XCLocalSwiftPackageReference "Packages/StudyKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/StudyKit;
+		};
+		AA0000000000000000000035 /* XCLocalSwiftPackageReference "Packages/AudioKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AudioKit;
+		};
+		AA0000000000000000000038 /* XCLocalSwiftPackageReference "Packages/AIKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AIKit;
+		};
+		AA000000000000000000003B /* XCLocalSwiftPackageReference "Packages/TextDocKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TextDocKit;
+		};
+		AA000000000000000000003E /* XCLocalSwiftPackageReference "Packages/BoardKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/BoardKit;
+		};
+		AA0000000000000000000041 /* XCLocalSwiftPackageReference "Packages/HistoryKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/HistoryKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA000000000000000000001E /* NoteCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoteCore;
+		};
+		AA000000000000000000001F /* InkKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkKit;
+		};
+		AA0000000000000000000020 /* SearchKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SearchKit;
+		};
+		AA0000000000000000000021 /* SyncKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SyncKit;
+		};
+		AA0000000000000000000031 /* StudyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = StudyKit;
+		};
+		AA0000000000000000000034 /* AudioKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AudioKit;
+		};
+		AA0000000000000000000037 /* AIKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AIKit;
+		};
+		AA000000000000000000003A /* TextDocKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TextDocKit;
+		};
+		AA000000000000000000003D /* BoardKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BoardKit;
+		};
+		AA0000000000000000000040 /* HistoryKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HistoryKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = AA0000000000000000000001 /* Project object */;
+}

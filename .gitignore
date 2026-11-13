@@ -6,3 +6,8 @@ xcuserdata/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 build/
+
+# Memory tooling scratch space
+.memory/.adr-snap/
+.memory/.viz-staging/
+.memory/_legacy/

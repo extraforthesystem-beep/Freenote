@@ -2,6 +2,8 @@
 
 Written 2026-11-12. Planned Path, no code exists yet. Research behind this plan: `reports/iPad note app feature plan.md` and `research_notes/iPad note app feature plan/`.
 
+> **GoodNotes parity (2026-11-12):** `GOODNOTES-PARITY-PLAN.md` holds the gap analysis against the installed Goodnotes 7.1.34 and the phased plan for the missing features. `BUILD-STATUS.md` records what the multi-agent build actually integrated and what remains. Phase 9 there supersedes Phase 5 below; Phase 4's open Mac tasks move to P11.9. Phases 0–3 and 6 stand.
+
 Evidence tags used below: `[TESTED]` = checked by a command or a fetch of the vendor's own documentation in this session; `[RESEARCH]` = from the research notes, source page re-fetched during review; `[ASSUMED]` = believed, not checked, and listed as a risk in section 9.
 
 ## 1. Goal and locked decisions
@@ -27,7 +29,7 @@ Change from the report: it recommended leaving a custom ink engine as a later de
 Toolchain on this Mac `[TESTED]`:
 
 - Xcode 27.2, Swift 6.4.2, macOS 27.2.1, iOS SDK 27.2 and macOS SDK 27.2 installed.
-- **No simulator runtimes are installed** (`xcrun simctl list runtimes` is empty). Pencil pressure, tilt and palm rejection cannot be tested in a simulator anyway, so a physical iPad is the test device.
+- At planning time no simulator runtimes were installed. The iOS 27.2 runtime is now installed, with an iPad Pro 11-inch (M5) simulator used for UI checks. Pencil pressure, tilt and palm rejection still require the physical iPad.
 - `xcodegen`, `tuist`, `swiftlint`, `swiftformat` are not installed. Nothing in this plan requires them.
 - The project folder is empty and is not a git repository.
 
@@ -73,14 +75,14 @@ Dependencies: none in phases 0 to 5 beyond Apple frameworks. Google sign-in uses
 
 ### 3.2 The central design choice: who owns the stroke data
 
-- **H1 (chosen, pending spike S1):** the app's own stroke record is the stored truth. A `PKDrawing` is built from it for display and is only a cache.
+- **H1 (chosen, confirmed by spike S1 on 2026-11-12):** the app's own stroke record is the stored truth. A `PKDrawing` is built from it for display and is only a cache.
 - **H2 (rival):** Apple's `PKDrawing` blob per page is the stored truth, with a small sidecar file for extra fields.
 
 Strongest case for H2: phases 1 to 5 need nothing more. `PKStroke` already carries an ID and a creation date, merging two versions of a page is a union of `PKDrawing.strokes` by ID, and Apple maintains the format. It is the least code.
 
 Input that breaks H2: a stroke drawn with a custom-engine brush (phase 6) has no `PKInk` type, so it cannot live in a `PKDrawing` blob. The page would then have two stores that must stay in step, and the "open, editable format" goal fails because the blob is opaque.
 
-Discriminating check, run first (spike S1): convert strokes of all eight pen styles to the app's record and back, render both, and compare. If the round trip is lossless, H1 stands. If any pen style loses fidelity, fall back to a hybrid: keep the `PKDrawing` blob for Apple-pen strokes and the app's records for custom strokes, and accept two stores. `[INFERRED from the public PKStroke initialiser taking every stored field]` that the round trip is lossless; not yet tested.
+Discriminating check, run first (spike S1, done): convert strokes of all eight pen styles to the app's record and back, render both, and compare. **Result:** not bit-exact for any style, but rendering is pixel-identical for all eight, and the loss is bounded to PencilKit's own compressed storage — azimuth ≤ 9.6e-5 rad, altitude ≤ 2.4e-5 rad, `size.height` ≤ 0.057 pt, mask vertices 0.01 pt, mask vertex order. Values reach a fixed point after 2–3 round trips, so there is no cumulative drift. H1 stands. Evidence: `Spikes/S1-StrokeRoundTrip/RESULTS.md`. If a future feature needs bit-exact archival reproduction, keep `PKDrawing.dataRepresentation()` beside the record as an optional cache; the plan does not need that today.
 
 ### 3.3 On-disk format
 
@@ -262,7 +264,7 @@ Decision rule: ship option 1 if S5 transcribes the fixed test set well enough th
 
 | Risk | Tag | Resolved by |
 |---|---|---|
-| Stroke round trip loses fidelity for some pen style | `[INFERRED]` lossless | S1 |
+| Stroke round trip loses fidelity for some pen style | **Resolved** — bounded, pixel-identical; see 3.2 | S1, done 2026-11-12 |
 | `ASWebAuthenticationSession` + PKCE yields a durable refresh token on both platforms | `[ASSUMED]` | S2 |
 | A Google project "In production" with only `drive.file` has no weekly expiry for a personal account | `[RESEARCH]`, flagged unconfirmed there | S2, by leaving the spike signed in for more than 7 days |
 | Drawing overlay swallows PDF link taps | `[ASSUMED]` | S4 |
@@ -294,3 +296,25 @@ Predict: S1 round trip is lossless → not yet run
 T2/3: Impact: none yet | Fail mode: if S1 fails, phase 1 uses the hybrid store in 3.2; if S3 fails, sync stops at conflict copies
 Action: PLAN ONLY — no code, nothing staged, project is not yet a git repository
 ```
+
+## 12. Implementation status (2026-11-12)
+
+`[TESTED]` on the iPad Pro 11-inch (M5) simulator, iOS 27.2, unless marked.
+
+| Phase | Item | State |
+|---|---|---|
+| 0 | P0.1 git, P0.2 project and packages, S1 stroke round trip | Done |
+| 0 | P0.3 signing on a physical iPad | Blocked: needs the iPad and an Apple ID team |
+| 0 | S2 Google sign-in, S3 two-device merge, S4 PDF links, S5 handwritten math, S6 Mac render | Not started (S2 needs the Google Cloud project) |
+| 1 | P1.1 NoteCore format, P1.2 library, P1.3 canvas and pens (eight styles, presets), P1.4 erasers, P1.5 undo/redo, P1.6 pages (add, delete, duplicate, reorder, templates, covers), P1.7 Pencil gestures, P1.9 autosave | Done in the app; P1.4 lasso move/copy still needs a Pencil test |
+| 1 | P1.8 thumbnails and cache; live-canvas window of ±1 | Thumbnails done; ±1 live canvases not implemented |
+| 1 | P1.10 tabs, quick switcher, bookmarks, outline, split view | Not implemented |
+| 2 | P2.1 PDF import, P2.3 text boxes, images and shapes, P2.4/P2.5 handwriting search, P2.6 PDF export | Done on the simulator; elements cannot be dragged or resized yet |
+| 2 | P2.2 PDF links inside the annotation canvas | Not implemented; the ink canvas receives the taps |
+| 3 | Google Drive auth, backup, restore, sync, merge | Not started; needs the user's Google Cloud project and approval |
+| 4 | Mac library, read-only pages, search | Builds and shares the code; not run on a Mac yet |
+| 4 | Mac annotation (PaperKit) | Not started |
+| 5 | Audio, transcripts, math, on-device AI | Not started |
+| 6 | Custom Metal ink engine | Not started (open-ended) |
+
+Tests at this point: NoteCore 34, InkKit 20, SearchKit 12, all passing. The simulator library is separate from the Mac library.

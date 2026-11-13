@@ -13,18 +13,29 @@ let package = Package(
             targets: ["SearchKit"]
         ),
     ],
+    dependencies: [
+        .package(path: "../NoteCore"),
+        .package(path: "../InkKit"),
+    ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "SearchKit",
+            dependencies: [
+                .product(name: "NoteCore", package: "NoteCore"),
+                .product(name: "InkKit", package: "InkKit"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],
         ),
         .testTarget(
             name: "SearchKitTests",
-            dependencies: ["SearchKit"],
+            dependencies: [
+                "SearchKit",
+                .product(name: "NoteCore", package: "NoteCore"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],
