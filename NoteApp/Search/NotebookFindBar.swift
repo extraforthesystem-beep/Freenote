@@ -78,6 +78,8 @@ struct NotebookFindBar: View {
         .accessibilityLabel("Notebook search")
         .task { isFieldFocused = true }
         .onChange(of: query) { _, value in
+            // A new query reopens the list after a jump folded it away.
+            showsResults = true
             scheduleSearch(value)
         }
         .onChange(of: sources) { _, _ in
@@ -142,7 +144,7 @@ struct NotebookFindBar: View {
             #endif
             SearchFilterMenu(sources: $sources, dateRange: $dateRange)
                 .labelStyle(.iconOnly)
-            if showsCount {
+            if showsCount, !hits.isEmpty {
                 Text(matchCountText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -160,12 +162,16 @@ struct NotebookFindBar: View {
                 }
                 .disabled(!canStepForward)
             }
-            iconButton(
-                showsResults ? "chevron.up" : "chevron.down",
-                label: showsResults ? "Hide results" : "Show results"
-            ) {
+            Button {
                 showsResults.toggle()
+            } label: {
+                Image(systemName: "list.bullet")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(showsResults ? Color.accentColor : .secondary)
+            .accessibilityLabel(showsResults ? "Hide results" : "Show results")
             .disabled(trimmedQuery.isEmpty)
             iconButton("xmark", label: "Close search") {
                 onClose()
