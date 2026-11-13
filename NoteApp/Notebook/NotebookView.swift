@@ -1248,13 +1248,21 @@ struct NotebookPane: View {
     /// exists before the reader's first tap; the tool check lives in
     /// ``replayInk(at:)``.
     private var replayFingerInteraction: CanvasFingerInteraction {
-        CanvasFingerInteraction(onTap: { point in
+        #if targetEnvironment(simulator)
+        // PencilKit draws with any input on the simulator, so a finger tap would
+        // ink a dot as well as seek. There, replay is driven from the transcript
+        // and the now-playing bar instead.
+        return CanvasFingerInteraction()
+        #else
+        return CanvasFingerInteraction(onTap: { point in
             replayInk(at: point)
         })
+        #endif
     }
 
     private func replayInk(at point: CGPoint) {
-        guard !editor.isReadOnly else { return }
+        // With finger drawing on, the tap inks first; it is not a seek.
+        guard !editor.isReadOnly, !drawWithFinger else { return }
         switch editor.tool {
         case .pen, .highlighter, .eraser: break
         case .lasso, .laser, .elements, .links: return
