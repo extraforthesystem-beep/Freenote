@@ -65,49 +65,29 @@ public struct FolderTree: Sendable, Hashable, Codable {
         var favourites: [String]
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case notebookFolder, favourites
-    }
-
     public init(from decoder: any Decoder) throws {
         let wire = try Wire(from: decoder)
 
+        // One unreadable id skips that entry only. A single malformed value must
+        // never cost the whole tree, or every folder, tag and favourite is lost
+        // along with the notebook-to-folder map.
         var notebookFolder: [UUID: UUID] = [:]
         for (key, value) in wire.notebookFolder {
-            guard let notebookID = UUID(uuidString: key), let folderID = UUID(uuidString: value) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: decoder.codingPath + [CodingKeys.notebookFolder],
-                        debugDescription: "notebookFolder contains a value that is not a UUID"
-                    )
-                )
-            }
+            guard let notebookID = UUID(uuidString: key),
+                  let folderID = UUID(uuidString: value)
+            else { continue }
             notebookFolder[notebookID] = folderID
         }
 
         var tags: [UUID: [String]] = [:]
         for (key, value) in wire.tags {
-            guard let notebookID = UUID(uuidString: key) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: decoder.codingPath + [CodingKeys.notebookFolder],
-                        debugDescription: "tags contains a key that is not a UUID"
-                    )
-                )
-            }
+            guard let notebookID = UUID(uuidString: key) else { continue }
             tags[notebookID] = value
         }
 
         var favourites = Set<UUID>()
         for identifier in wire.favourites {
-            guard let notebookID = UUID(uuidString: identifier) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: decoder.codingPath + [CodingKeys.favourites],
-                        debugDescription: "favourites contains a value that is not a UUID"
-                    )
-                )
-            }
+            guard let notebookID = UUID(uuidString: identifier) else { continue }
             favourites.insert(notebookID)
         }
 

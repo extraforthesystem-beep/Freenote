@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// The library on disk: notebooks, pages, assets and the folder tree.
@@ -46,10 +47,12 @@ public actor LibraryStore {
         public var unreadableCount: Int { unreadableIDs.count }
     }
 
-    public let root: URL
+    public nonisolated let root: URL
 
     private nonisolated let layout: LibraryLayout
     private let fileManager = FileManager.default
+    /// Files set aside because they did not decode, drained by `takeRecoveryNotices`.
+    private var recoveryNotices: [RecoveryNotice] = []
 
     public init(root: URL) {
         self.root = root
@@ -60,6 +63,11 @@ public actor LibraryStore {
 
     /// Creates the layout if it is missing and returns the library info, writing a
     /// new `deviceID` on the first run.
+    ///
+    /// A damaged `library.json` never blocks the app: it is moved to the cache
+    /// quarantine and a fresh one is written, because the file holds nothing but a
+    /// schema version and a device id. A genuine read or directory failure still
+    /// throws.
     @discardableResult
     public func open() throws -> LibraryInfo {
         try createDirectory(layout.root)
@@ -68,12 +76,41 @@ public actor LibraryStore {
         try createDirectory(layout.cacheDirectory)
 
         let file = layout.libraryFile
-        if fileManager.fileExists(atPath: file.path) {
-            return try LibraryInfoCodec.decode(try readData(file), path: file.path)
+        guard fileManager.fileExists(atPath: file.path) else {
+            let info = LibraryInfo(deviceID: UUID())
+            try writeDocument(info, to: file)
+            return info
         }
+
+        let data = try readData(file)
+        if let info = try? LibraryInfoCodec.decode(data, path: file.path) {
+            return info
+        }
+        try quarantine(file)
         let info = LibraryInfo(deviceID: UUID())
         try writeDocument(info, to: file)
         return info
+    }
+
+    /// A file that could not be read and was moved aside instead of failing the
+    /// whole library. The bytes are kept so they can be repaired or restored.
+    public struct RecoveryNotice: Sendable, Hashable {
+        /// The file name that was replaced with defaults, e.g. `folders.json`.
+        public var fileName: String
+        /// Where the damaged bytes were moved.
+        public var quarantinedURL: URL
+
+        public init(fileName: String, quarantinedURL: URL) {
+            self.fileName = fileName
+            self.quarantinedURL = quarantinedURL
+        }
+    }
+
+    /// Returns the recovery notices recorded since the last call and clears them,
+    /// so the library can show one notice instead of one per reload.
+    public func takeRecoveryNotices() -> [RecoveryNotice] {
+        defer { recoveryNotices.removeAll() }
+        return recoveryNotices
     }
 
     // MARK: - Notebooks
@@ -574,6 +611,23 @@ public actor LibraryStore {
         return try FolderTreeCodec.decode(try readData(file), path: file.path)
     }
 
+    /// Reads `folders.json` without letting a damaged tree take the library down.
+    ///
+    /// A file that does not decode is moved to the cache quarantine and an empty
+    /// tree is returned, so the caller can still publish the notebooks that are
+    /// on disk. Only a failure to read the file itself is thrown.
+    public func loadFolderTreeRecovering() throws -> FolderTree {
+        let file = layout.folderTreeFile
+        guard fileManager.fileExists(atPath: file.path) else { return FolderTree() }
+        let data = try readData(file)
+        do {
+            return try FolderTreeCodec.decode(data, path: file.path)
+        } catch {
+            try quarantine(file)
+            return FolderTree()
+        }
+    }
+
     public func saveFolderTree(_ tree: FolderTree) throws {
         try writeDocument(tree, to: layout.folderTreeFile)
     }
@@ -755,13 +809,79 @@ public actor LibraryStore {
         }
     }
 
-    /// A temporary file in the target directory, moved into place by the system.
-    private func writeAtomically(_ data: Data, to url: URL) throws {
-        try createDirectory(url.deletingLastPathComponent())
+    /// Moves a file that did not decode into `cache/quarantine`, stamped so a
+    /// later failure never overwrites the earlier copy, and records a notice.
+    /// The original name is kept on the end so the file is recognisable.
+    @discardableResult
+    private func quarantine(_ url: URL, now: Date = Date()) throws -> URL {
+        let directory = layout.cacheDirectory.appendingPathComponent("quarantine", isDirectory: true)
+        try createDirectory(directory)
+        let stamp = Int64((now.timeIntervalSince1970 * 1_000).rounded())
+        let destination = directory.appendingPathComponent("\(stamp)-\(url.lastPathComponent)")
         do {
-            try data.write(to: url, options: .atomic)
+            try fileManager.moveItem(at: url, to: destination)
         } catch {
+            throw NoteCoreError.ioFailure("quarantine \(url.path): \(error)")
+        }
+        recoveryNotices.append(
+            RecoveryNotice(fileName: url.lastPathComponent, quarantinedURL: destination)
+        )
+        return destination
+    }
+
+    /// Writes bytes atomically and durably: a hidden temporary file in the target
+    /// directory, flushed to the disk, renamed into place, then the directory
+    /// entry flushed too. A power loss leaves either the old file or the complete
+    /// new one, and a failure removes the temporary file.
+    private func writeAtomically(_ data: Data, to url: URL) throws {
+        let directory = url.deletingLastPathComponent()
+        try createDirectory(directory)
+
+        let temporary = directory.appendingPathComponent(
+            ".tmp-\(UUID().uuidString)", isDirectory: false
+        )
+        do {
+            try data.write(to: temporary, options: [])
+            try syncFile(temporary)
+            guard Darwin.rename(temporary.path, url.path) == 0 else {
+                throw NoteCoreError.ioFailure(
+                    "rename onto \(url.path): \(String(cString: strerror(errno)))"
+                )
+            }
+            try syncDirectory(directory)
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            if let error = error as? NoteCoreError { throw error }
             throw NoteCoreError.ioFailure("write \(url.path): \(error)")
+        }
+    }
+
+    /// Flushes a just-written file's contents to the disk.
+    private func syncFile(_ url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        do {
+            try handle.synchronize()
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+    }
+
+    /// Flushes a directory so the rename that put a file in it survives a power
+    /// loss, not just the file contents.
+    private func syncDirectory(_ directory: URL) throws {
+        let descriptor = Darwin.open(directory.path, O_RDONLY)
+        guard descriptor >= 0 else {
+            throw NoteCoreError.ioFailure(
+                "open directory \(directory.path): \(String(cString: strerror(errno)))"
+            )
+        }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw NoteCoreError.ioFailure(
+                "sync directory \(directory.path): \(String(cString: strerror(errno)))"
+            )
         }
     }
 

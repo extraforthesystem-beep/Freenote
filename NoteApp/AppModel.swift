@@ -164,6 +164,7 @@ final class AppModel {
             await reload()
             templates.load()
             await purgeExpiredTrash()
+            await sweepOrphanedHistory()
             await study.load()
             await textDocs.load()
             await boards.load()
@@ -197,8 +198,19 @@ final class AppModel {
     }
 
     func reload() async {
+        // The folder tree and the notebooks are independent loads: a damaged
+        // tree must never be able to make the library look empty.
         do {
-            folderTree = try await store.loadFolderTree()
+            folderTree = try await store.loadFolderTreeRecovering()
+        } catch {
+            folderTree = FolderTree()
+            notice = Notice(
+                title: "Folders could not be read",
+                message: "Your notebooks are unaffected. \(error.localizedDescription)"
+            )
+        }
+
+        do {
             let listing = try await store.scanNotebooks()
             let trash = try await store.scanTrash()
             notebooks = listing.manifests
@@ -210,6 +222,20 @@ final class AppModel {
         } catch {
             notice = Notice(title: "The library could not be read", message: error.localizedDescription)
         }
+
+        await announceRecoveredFilesIfNeeded()
+    }
+
+    /// One notice when a library file had to be set aside, then the store forgets
+    /// it so a later reload does not repeat the alert.
+    private func announceRecoveredFilesIfNeeded() async {
+        let recovered = await store.takeRecoveryNotices()
+        guard !recovered.isEmpty else { return }
+        let names = recovered.map(\.fileName).joined(separator: " and ")
+        notice = Notice(
+            title: "A library file needed repair",
+            message: "A damaged library file was moved to the library cache: \(names). The library opened with defaults; your notebooks are unaffected."
+        )
     }
 
     /// One notice when unreadable files appear, not one on every reload.
@@ -232,6 +258,34 @@ final class AppModel {
         guard !purged.isEmpty else { return }
         let gone = Set(purged)
         trashedNotebooks.removeAll { gone.contains($0.id) }
+        for notebookID in purged {
+            try? await history.deleteNotebook(notebookID)
+        }
+    }
+
+    /// Removes ink history that belongs to no notebook in the library or the
+    /// trash: a crash between a permanent delete and its history purge, or a
+    /// build that purged without touching history. Best effort, once per launch.
+    private func sweepOrphanedHistory() async {
+        let histories = history.root.appendingPathComponent("notebooks", isDirectory: true)
+        let libraryRoot = store.root
+        let orphaned: [UUID] = await Task.detached(priority: .utility) {
+            let manager = FileManager.default
+            let names = (try? manager.contentsOfDirectory(atPath: histories.path)) ?? []
+            return names.compactMap { name -> UUID? in
+                guard let notebookID = UUID(uuidString: name) else { return nil }
+                let alive = manager.fileExists(atPath: libraryRoot
+                    .appendingPathComponent("notebooks")
+                    .appendingPathComponent(name).path)
+                    || manager.fileExists(atPath: libraryRoot
+                        .appendingPathComponent("trash")
+                        .appendingPathComponent(name).path)
+                return alive ? nil : notebookID
+            }
+        }.value
+        for notebookID in orphaned {
+            try? await history.deleteNotebook(notebookID)
+        }
     }
 
     // MARK: - Filtering
@@ -512,6 +566,7 @@ final class AppModel {
     private func discardCreation(_ notebookID: UUID) async {
         try? await store.deleteNotebook(notebookID)
         try? await store.purgeNotebook(notebookID)
+        try? await history.deleteNotebook(notebookID)
         _ = try? await store.setFolder(nil, forNotebook: notebookID)
         await reload()
     }
@@ -586,9 +641,19 @@ final class AppModel {
 
     func delete(_ notebook: NotebookManifest) async {
         do {
+            let open = tabs.first { $0.notebookID == notebook.id }
+            if let open {
+                // The open session must be on disk before the folder moves: a
+                // flush queued after the move finds no manifest and drops the
+                // page it was carrying. Stop recording before the move too.
+                await open.audio.stopRecording()
+                await open.flushPendingSave()
+            }
             try await store.deleteNotebook(notebook.id)
-            if let open = tabs.first(where: { $0.notebookID == notebook.id }) {
-                closeTab(open)
+            if let open {
+                // The flush already ran; removing the tab here must not start a
+                // second, unawaited write into the trashed notebook.
+                removeTab(open)
             }
             await search.removeNotebook(notebook.id)
             await reload()
@@ -610,6 +675,8 @@ final class AppModel {
         do {
             try await store.purgeNotebook(notebook.id)
             LibraryCovers.removeCachedCovers(for: notebook.id, store: store)
+            // A permanently deleted notebook must not stay readable on disk.
+            try? await history.deleteNotebook(notebook.id)
             await reload()
         } catch {
             notice = Notice(title: "Could not permanently delete the notebook", message: error.localizedDescription)
@@ -623,6 +690,7 @@ final class AppModel {
             _ = try await store.emptyTrash()
             for notebook in trashed {
                 LibraryCovers.removeCachedCovers(for: notebook.id, store: store)
+                try? await history.deleteNotebook(notebook.id)
             }
             await reload()
         } catch {
@@ -823,7 +891,11 @@ final class AppModel {
         splitNotebookID = nil
     }
 
-    func closeTab(_ closing: NotebookSession) {
+    /// Removes a tab and fixes the selection, without writing anything. Callers
+    /// that close a notebook normally use `closeTab`, which flushes first;
+    /// permanent deletion uses this after its own flush so nothing is queued to
+    /// write into the notebook after it is gone.
+    private func removeTab(_ closing: NotebookSession) {
         tabs.removeAll { $0.notebookID == closing.notebookID }
         if splitNotebookID == closing.notebookID {
             splitNotebookID = nil
@@ -838,6 +910,10 @@ final class AppModel {
         if tabs.isEmpty {
             isShowingLibrary = true
         }
+    }
+
+    func closeTab(_ closing: NotebookSession) {
+        removeTab(closing)
         Task {
             // Persist the last page and stop any recording before the notebook
             // leaves the session list.
