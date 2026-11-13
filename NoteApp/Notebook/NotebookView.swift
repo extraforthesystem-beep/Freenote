@@ -136,6 +136,8 @@ struct NotebookPane: View {
     @Bindable var model: AppModel
 
     @AppStorage("noteapp.editor.showsThumbnails") private var showsThumbnails = true
+    @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesOnLeft = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showsDeletePageConfirmation = false
     @State private var isRenaming = false
     @State private var renameText = ""
@@ -170,6 +172,8 @@ struct NotebookPane: View {
     @State private var showsAudio = false
     @State private var showsAI = false
     @State private var showsToolbarEditor = false
+    /// The compact-width sheet, which only opens when the reader asks for it.
+    @State private var showsCompactPages = false
     @State private var showsHistory = false
     @State private var showsLassoHint = false
     @State private var selectedElementID: UUID?
@@ -202,7 +206,7 @@ struct NotebookPane: View {
             EditorToolbar(
                 editor: editor,
                 controller: controller,
-                showsThumbnails: $showsThumbnails,
+                showsThumbnails: pagesPanelBinding,
                 audio: session.audio,
                 onBack: { model.showLibrary() },
                 onStopRecording: { Task { await session.audio.stopRecording() } },
@@ -218,32 +222,35 @@ struct NotebookPane: View {
             macHeader
             #endif
             Divider()
-            pageArea
-                .overlay(alignment: .top) { banners }
-                .overlay(alignment: .bottom) {
-                    PageCounterPill(session: session) { index in
-                        Task { await session.goToPage(index) }
+            HStack(spacing: 0) {
+                if showsPagesPanelInline, pagesOnLeft {
+                    pagesPanel
+                }
+                VStack(spacing: 0) {
+                    pageArea
+                        .overlay(alignment: .top) { banners }
+                        .overlay(alignment: .bottom) {
+                            PageCounterPill(session: session) { index in
+                                Task { await session.goToPage(index) }
+                            }
+                            .padding(.bottom, 12)
+                        }
+                    #if os(iOS)
+                    if showsZoomView {
+                        // `session.page` changes with every stroke, so the
+                        // panel is hosted in its own view: reading the page
+                        // here would redraw this body — the toolbar, both
+                        // menus and every modifier — once per stroke.
+                        ZoomViewSection(session: session) { page in
+                            zoomPanel(page)
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    .padding(.bottom, 12)
+                    #endif
                 }
-            #if os(iOS)
-            if showsZoomView {
-                // `session.page` changes with every stroke, so the panel is
-                // hosted in its own view: reading the page here would redraw
-                // this body — the toolbar, both menus and every modifier —
-                // once per stroke.
-                ZoomViewSection(session: session) { page in
-                    zoomPanel(page)
+                if showsPagesPanelInline, !pagesOnLeft {
+                    pagesPanel
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            #endif
-            if showsThumbnails {
-                Divider()
-                PageThumbnailStrip(session: session) { index in
-                    Task { await session.goToPage(index) }
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .background(AppColor.groupedBackground)
@@ -431,6 +438,23 @@ struct NotebookPane: View {
             .id(session.notebookID)
             .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
         }
+        // Search takes the right edge, so a right-side panel cannot stay open.
+        .onChange(of: showsSearch) { _, isShowing in
+            guard isShowing, showsPagesPanelInline, !pagesOnLeft else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
+        }
+        #if os(iOS)
+        // Too narrow for a column: the same panel arrives as a sheet.
+        .sheet(isPresented: compactPagesSheetBinding) {
+            PagesSidePanel(
+                session: session,
+                isOnLeft: pagesOnLeft,
+                onSelect: { index in Task { await session.goToPage(index) } },
+                onClose: { pagesPanelBinding.wrappedValue = false }
+            )
+            .presentationDetents([.medium, .large])
+        }
+        #endif
         .sheet(isPresented: $showsAudio) {
             AudioRecordingsView(session: session)
         }
@@ -491,6 +515,62 @@ struct NotebookPane: View {
                 editor.tool = .elements
             }
         }
+    }
+
+    // MARK: - Pages panel
+
+    /// Regular width shows the panel beside the page; compact shows a sheet.
+    private var pagesPanelIsInline: Bool {
+        #if os(iOS)
+        horizontalSizeClass != .compact
+        #else
+        true
+        #endif
+    }
+
+    private var showsPagesPanelInline: Bool {
+        showsThumbnails && pagesPanelIsInline
+    }
+
+    /// Opening the panel closes Search when the panel would share its edge.
+    private var pagesPanelBinding: Binding<Bool> {
+        Binding(
+            get: { pagesPanelIsInline ? showsThumbnails : showsCompactPages },
+            set: { isShown in
+                if isShown && !pagesOnLeft { showsSearch = false }
+                if pagesPanelIsInline {
+                    showsThumbnails = isShown
+                } else {
+                    showsCompactPages = isShown
+                    // The stored flag remembers the panel closed too.
+                    showsThumbnails = isShown
+                }
+            }
+        )
+    }
+
+    /// Compact width presents the same grid as a sheet. The sheet waits for a
+    /// tap, so a remembered open panel never covers a page at launch.
+    private var compactPagesSheetBinding: Binding<Bool> {
+        Binding(
+            get: { showsCompactPages && !pagesPanelIsInline },
+            set: { if !$0 { showsCompactPages = false } }
+        )
+    }
+
+    private var pagesPanel: some View {
+        PagesSidePanel(
+            session: session,
+            isOnLeft: pagesOnLeft,
+            onSelect: { index in
+                Task { await session.goToPage(index) }
+            },
+            onClose: {
+                withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
+            }
+        )
+        .frame(width: 220)
+        .transition(.move(edge: pagesOnLeft ? .leading : .trailing).combined(with: .opacity))
     }
 
     // MARK: - Banners
@@ -947,9 +1027,9 @@ struct NotebookPane: View {
             .help(editor.isReadOnly ? "Read Only: tap to edit again" : "Hide the tools and stop editing")
             .accessibilityAddTraits(editor.isReadOnly ? .isSelected : [])
             Button {
-                withAnimation { showsThumbnails.toggle() }
+                withAnimation(.easeInOut(duration: 0.2)) { pagesPanelBinding.wrappedValue.toggle() }
             } label: {
-                Label("Pages", systemImage: "rectangle.bottomthird.inset.filled")
+                Label("Pages", systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing")
             }
             Menu {
                 insertMenuItems

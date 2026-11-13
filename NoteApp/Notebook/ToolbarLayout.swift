@@ -6,6 +6,8 @@ nonisolated enum ToolbarItemID: String, CaseIterable, Codable, Identifiable, Sen
     case highlighter, eraser, lasso, elements, insert
     case laser, zoomView, followLinks, ruler, shapes
     case textBox, image, stickyNote, addPage, search, favoritePens
+    // Opt-in, at the end so the order of the existing items never changes.
+    case undo, redo
 
     var id: String { rawValue }
 
@@ -27,6 +29,8 @@ nonisolated enum ToolbarItemID: String, CaseIterable, Codable, Identifiable, Sen
         case .addPage: "Add Page"
         case .search: "Search in Notebook"
         case .favoritePens: "Favourite Pens"
+        case .undo: "Undo"
+        case .redo: "Redo"
         }
     }
 
@@ -48,6 +52,8 @@ nonisolated enum ToolbarItemID: String, CaseIterable, Codable, Identifiable, Sen
         case .addPage: "plus.square"
         case .search: "magnifyingglass"
         case .favoritePens: "star"
+        case .undo: "arrow.uturn.backward"
+        case .redo: "arrow.uturn.forward"
         }
     }
 }

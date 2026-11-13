@@ -31,6 +31,7 @@ enum AppSettings {
         static let zoomAutoAdvance = "noteapp.settings.zoomAutoAdvance"
         static let zoomMagnification = "noteapp.settings.zoomMagnification"
         static let zoomPanelFraction = "noteapp.settings.zoomPanelFraction"
+        static let pagesPanelOnLeft = "noteapp.settings.pagesPanelOnLeft"
     }
 
     /// The catalog id of the plain blank template.

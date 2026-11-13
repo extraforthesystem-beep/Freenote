@@ -2,60 +2,127 @@ import InkKit
 import NoteCore
 import SwiftUI
 
-/// A horizontal page switcher. Only the cells near the viewport decode their
-/// page, and rendering happens off the main actor.
-struct PageThumbnailStrip: View {
+/// A vertical page switcher that sits beside the page. Only the cells the
+/// viewport reaches decode their page, and rendering happens off the main actor.
+///
+/// The caller sets the panel's width: a fixed column on a regular-width iPad,
+/// or the whole sheet when width is compact.
+struct PagesSidePanel: View {
     let session: NotebookSession
+    /// Which edge the panel sits on; its divider faces the page.
+    let isOnLeft: Bool
     let onSelect: (Int) -> Void
+    let onClose: () -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 84, maximum: 120), spacing: 10)]
+
+    /// Pages can be different sizes, so the grid follows the page on screen.
+    private var aspectRatio: CGFloat {
+        guard let page = session.page, page.height > 0 else { return 0.707 }
+        return page.width / page.height
+    }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 10) {
-                    ForEach(0..<session.pageCount, id: \.self) { index in
-                        PageThumbnailCell(
-                            session: session,
-                            index: index,
-                            isCurrent: index == session.pageIndex
-                        )
-                        .id(index)
-                        .onTapGesture { onSelect(index) }
-                    }
-
-                    Button {
-                        Task { await session.addPage() }
-                    } label: {
-                        VStack(spacing: 6) {
-                            Image(systemName: "plus")
-                                .font(.title3)
-                            Text("Page")
-                                .font(.caption2)
+        HStack(spacing: 0) {
+            if !isOnLeft { edge }
+            VStack(spacing: 0) {
+                header
+                Divider()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 10) {
+                            ForEach(0..<session.pageCount, id: \.self) { index in
+                                pageCell(index)
+                            }
+                            addPageTile
                         }
-                        .frame(width: 54, height: 76)
-                        .foregroundStyle(.secondary)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                        )
+                        .padding(10)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Add Page")
-                    .padding(.leading, 2)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-            }
-            .onChange(of: session.pageIndex) { _, index in
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    proxy.scrollTo(index, anchor: .center)
+                    .onChange(of: session.pageIndex) { _, index in
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            proxy.scrollTo(index, anchor: .center)
+                        }
+                    }
+                    .onAppear {
+                        proxy.scrollTo(session.pageIndex, anchor: .center)
+                    }
                 }
             }
-            .onAppear {
-                proxy.scrollTo(session.pageIndex, anchor: .center)
-            }
+            if isOnLeft { edge }
         }
-        .frame(height: 94)
         .background(.bar)
+    }
+
+    private var edge: some View {
+        Divider()
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text("Pages")
+                .font(.subheadline.weight(.semibold))
+            Text("\(session.pageCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Button(action: onClose) {
+                Image(systemName: isOnLeft ? "sidebar.leading" : "sidebar.trailing")
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Hide Pages")
+            .help("Hide Pages")
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 44)
+    }
+
+    private func pageCell(_ index: Int) -> some View {
+        let isCurrent = index == session.pageIndex
+        return Button {
+            onSelect(index)
+        } label: {
+            VStack(spacing: 3) {
+                PageThumbnailCell(
+                    session: session,
+                    index: index,
+                    isCurrent: isCurrent,
+                    aspectRatio: aspectRatio
+                )
+                Text("\(index + 1)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .id(index)
+        .accessibilityLabel("Page \(index + 1)")
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+    }
+
+    private var addPageTile: some View {
+        Button {
+            Task { await session.addPage() }
+        } label: {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
+                .aspectRatio(aspectRatio, contentMode: .fit)
+                .overlay {
+                    VStack(spacing: 4) {
+                        Image(systemName: "plus")
+                            .font(.title3)
+                        Text("Page")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add Page")
+        .help("Add Page")
     }
 }
 
@@ -63,6 +130,8 @@ private struct PageThumbnailCell: View {
     let session: NotebookSession
     let index: Int
     let isCurrent: Bool
+    /// The page's width over its height, so the cell matches the paper.
+    let aspectRatio: CGFloat
 
     @AppStorage(AppSettings.Key.darkPaper) private var darkPaperInDarkMode = false
     @Environment(\.colorScheme) private var colorScheme
@@ -98,19 +167,8 @@ private struct PageThumbnailCell: View {
                 ProgressView()
                     .controlSize(.mini)
             }
-
-            VStack {
-                Spacer()
-                Text("\(index + 1)")
-                    .font(.caption2.monospacedDigit())
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.45), in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(4)
-            }
         }
-        .frame(width: 54, height: 76)
+        .aspectRatio(aspectRatio, contentMode: .fit)
         .overlay {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(
@@ -129,7 +187,7 @@ private struct PageThumbnailCell: View {
         return "\(pageID)-\(isCurrent ? session.revision : 0)-\(usesDarkPaper)"
     }
 
-    /// Small enough to be cheap, sharp enough for a 54 pt cell on Retina.
+    /// Small enough to be cheap, sharp enough for a panel-sized cell on Retina.
     private static let renderScale: CGFloat = 0.3
     /// Edits keep coming while writing; wait for a pause before re-rendering.
     private static let editDebounce: Duration = .milliseconds(1_500)

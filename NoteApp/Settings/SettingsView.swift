@@ -25,6 +25,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.hideStatusBar) private var hideStatusBar = false
     @AppStorage(AppSettings.Key.zoomAutoAdvance) private var zoomAutoAdvance = true
     @AppStorage(AppSettings.Key.zoomMagnification) private var zoomMagnification = 2.5
+    @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesPanelOnLeft = false
 
     @State private var isRebuildingSearch = false
     @State private var didRebuildSearch = false
@@ -101,6 +102,7 @@ struct SettingsView: View {
             Toggle("Two-Finger Double-Tap to Undo", isOn: $twoFingerDoubleTapUndo)
             Toggle("Three-Finger Double-Tap to Redo", isOn: $threeFingerDoubleTapRedo)
             Toggle("Hide Status Bar in Notebooks", isOn: $hideStatusBar)
+            Toggle("Pages Panel on Left", isOn: $pagesPanelOnLeft)
             Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
                 showsToolbarEditor = true
             }

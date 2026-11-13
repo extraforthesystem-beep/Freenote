@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// The editor's single toolbar row.
 ///
-/// Left (pinned): back, thumbnails, undo, redo. Centre: the pen chip and the
+/// Left (pinned): back and the Pages toggle. Centre: the pen chip and the
 /// customisable tool items, the colour favourites and the width presets.
 /// Right: recording and the More menu. Only the colour favourites scroll; when
 /// the row is too narrow for every tool the extra ones move into an overflow
@@ -16,8 +16,9 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     let controller: PencilCanvasController
     @Binding var showsThumbnails: Bool
     /// The notebook's recording state and elapsed time. A view of its own
-    /// reads it, so the 2 Hz timer redraws only the recording label.
-    let audio: NotebookAudio
+    /// reads it, so the 2 Hz timer redraws only the recording label. Nil on a
+    /// board, which does not record.
+    let audio: NotebookAudio?
     let onBack: () -> Void
     let onStopRecording: () -> Void
     /// Opens the notebook's Clear Page confirmation.
@@ -27,11 +28,19 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     /// Runs an optional item's existing action. Menu-style items use `itemMenu`.
     let onItemAction: (ToolbarItemID) -> Void
     let onCustomizeToolbar: () -> Void
+    /// Page-only controls: thumbnails, Zoom View and PDF link following. A
+    /// board shares every other tool but has no pages, zoom panel or links.
+    var showsPageControls = true
+    /// The element tool; a board has no element editing yet.
+    var showsElementTool = true
+    /// VoiceOver and tooltip label of the leading back button.
+    var backLabel = "Library"
     @ViewBuilder let insertMenu: () -> InsertMenu
     @ViewBuilder let moreMenu: () -> MoreMenu
     @ViewBuilder let itemMenu: (ToolbarItemID) -> ItemMenu
 
     @AppStorage(ToolbarLayout.storageKey) private var layoutStorage = ToolbarLayout.defaultStorage
+    @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesOnLeft = false
     @State private var popover: ToolPopover?
     @State private var showsPalette = false
     @State private var showsFavoritePens = false
@@ -96,6 +105,16 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 editor.isZoomViewShown.toggle()
             }
             .keyboardShortcut("z", modifiers: [])
+            Button("Undo") {
+                controller.undo()
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(editor.isReadOnly)
+            Button("Redo") {
+                controller.redo()
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(editor.isReadOnly)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -114,23 +133,16 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
 
     private var leading: some View {
         HStack(spacing: 2) {
-            ToolbarIconButton("Library", systemImage: "chevron.backward", action: onBack)
-            ToolbarIconButton(
-                showsThumbnails ? "Hide Pages" : "Show Pages",
-                systemImage: showsThumbnails ? "rectangle.bottomthird.inset.filled" : "rectangle"
-            ) {
-                withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
+            ToolbarIconButton(backLabel, systemImage: "chevron.backward", action: onBack)
+            if showsPageControls {
+                ToolbarIconButton(
+                    showsThumbnails ? "Hide Pages" : "Show Pages",
+                    systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing",
+                    isSelected: showsThumbnails
+                ) {
+                    withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
+                }
             }
-            ToolbarIconButton("Undo", systemImage: "arrow.uturn.backward") {
-                controller.undo()
-            }
-            .disabled(!controller.canUndo || editor.isReadOnly)
-            .keyboardShortcut("z", modifiers: .command)
-            ToolbarIconButton("Redo", systemImage: "arrow.uturn.forward") {
-                controller.redo()
-            }
-            .disabled(!controller.canRedo || editor.isReadOnly)
-            .keyboardShortcut("z", modifiers: [.command, .shift])
         }
     }
 
@@ -297,6 +309,11 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             Menu(item.title, systemImage: item.systemImage) { favoritePensMenuItems }
         case .ruler:
             Toggle(item.title, systemImage: item.systemImage, isOn: $isRulerActive)
+        case .undo, .redo:
+            Button(item.title, systemImage: item.systemImage) {
+                activate(item)
+            }
+            .disabled(editor.isReadOnly || !isHistoryStepAvailable(item))
         default:
             Button(item.title, systemImage: item.systemImage) {
                 activate(item)
@@ -333,15 +350,21 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         case .lasso:
             lassoButton
         case .elements:
-            elementsButton
+            if showsElementTool {
+                elementsButton
+            }
         case .insert:
             insertButton
         case .laser:
             laserButton
         case .zoomView:
-            zoomViewButton
+            if showsPageControls {
+                zoomViewButton
+            }
         case .followLinks:
-            followLinksButton
+            if showsPageControls {
+                followLinksButton
+            }
         case .ruler:
             rulerButton
         case .shapes:
@@ -352,7 +375,25 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             stickyNoteButton
         case .favoritePens:
             favoritePensButton
+        case .undo, .redo:
+            historyButton(item)
         }
+    }
+
+    /// Undo and Redo are opt-in toolbar items: plain buttons, not tool choices.
+    private func historyButton(_ item: ToolbarItemID) -> some View {
+        ToolbarIconButton(item.title, systemImage: item.systemImage, help: item.title) {
+            if item == .undo {
+                controller.undo()
+            } else {
+                controller.redo()
+            }
+        }
+        .disabled(editor.isReadOnly || !isHistoryStepAvailable(item))
+    }
+
+    private func isHistoryStepAvailable(_ item: ToolbarItemID) -> Bool {
+        item == .undo ? controller.canUndo : controller.canRedo
     }
 
     /// Runs the item's existing action; used by the overflow menu too.
@@ -376,6 +417,10 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             isRulerActive.toggle()
         case .textBox, .image, .addPage, .search:
             onItemAction(item)
+        case .undo:
+            controller.undo()
+        case .redo:
+            controller.redo()
         case .insert, .shapes, .stickyNote, .favoritePens:
             break
         }
@@ -1275,11 +1320,11 @@ private struct ToolbarDivider: View {
 /// A view of its own: the elapsed time ticks twice a second, and reading it in
 /// the toolbar's body redrew the whole editor pane at that rate.
 private struct RecordingLabelButton: View {
-    let audio: NotebookAudio
+    let audio: NotebookAudio?
     let onStop: () -> Void
 
     var body: some View {
-        if audio.isRecording {
+        if let audio, audio.isRecording {
             let label = Self.label(for: audio.elapsed)
             Button(action: onStop) {
                 HStack(spacing: 5) {
