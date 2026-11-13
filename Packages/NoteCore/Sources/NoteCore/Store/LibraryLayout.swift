@@ -37,6 +37,19 @@ struct LibraryLayout: Sendable {
         pagesDirectory(notebookID).appendingPathComponent(pageID.diskName + ".page")
     }
 
+    /// The SHA-256 recorded for a page file after it was written. It sits beside
+    /// the page and is not part of the page format.
+    func pageChecksumFile(_ pageID: UUID, in notebookID: UUID) -> URL {
+        pagesDirectory(notebookID).appendingPathComponent(pageID.diskName + ".sha256")
+    }
+
+    /// Where page files that failed to decode are kept, so nothing is thrown away.
+    func quarantinedPagesDirectory(_ notebookID: UUID) -> URL {
+        cacheDirectory
+            .appendingPathComponent("corrupt", isDirectory: true)
+            .appendingPathComponent(notebookID.diskName, isDirectory: true)
+    }
+
     func trashedNotebookDirectory(_ notebookID: UUID) -> URL {
         trashDirectory.appendingPathComponent(notebookID.diskName)
     }

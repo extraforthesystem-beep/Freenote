@@ -29,6 +29,7 @@ enum AppSettings {
         static let pageScrollMode = "noteapp.settings.pageScrollMode"
         static let rememberLastTool = "noteapp.settings.rememberLastTool"
         static let hideStatusBar = "noteapp.settings.hideStatusBar"
+        static let keepScreenAwake = "noteapp.settings.keepScreenAwake"
         static let zoomAutoAdvance = "noteapp.settings.zoomAutoAdvance"
         static let zoomMagnification = "noteapp.settings.zoomMagnification"
         static let zoomPanelFraction = "noteapp.settings.zoomPanelFraction"
