@@ -6,35 +6,49 @@ import Observation
 
 /// Forwards `AVAudioPlayer` completion to the owning model on the main actor.
 ///
-/// `AVAudioPlayer` requires an `NSObject` delegate and calls it from its own
-/// queue, so this small box is deliberately nonisolated; the handler it forwards
-/// to is main-actor bound.
+/// `AVAudioPlayer` calls its delegate from its own thread, so this box hops to
+/// the main actor and delivers **exactly once**: the same player can report both
+/// "finished" and a decode error, and a player that was already replaced must not
+/// stop the new one. Each playback creates a fresh delegate carrying its own
+/// generation; ``NotebookAudio`` ignores callbacks from an older generation.
 private nonisolated final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
-    /// Set on the main actor before playback starts, read from the callback.
-    nonisolated(unsafe) var onFinish: (@MainActor @Sendable () -> Void)?
+    /// Guards ``handler``, the only mutable state touched off the main actor.
+    private let lock = NSLock()
+    private var handler: (@MainActor @Sendable () -> Void)?
+
+    init(handler: @escaping @MainActor @Sendable () -> Void) {
+        self.handler = handler
+    }
 
     nonisolated func audioPlayerDidFinishPlaying(
         _ player: AVAudioPlayer,
         successfully flag: Bool
     ) {
-        Task { @MainActor in
-            onFinish?()
-        }
+        deliver()
     }
 
     nonisolated func audioPlayerDecodeErrorDidOccur(
         _ player: AVAudioPlayer,
         error: (any Error)?
     ) {
-        Task { @MainActor in
-            onFinish?()
-        }
+        deliver()
+    }
+
+    /// Takes the handler under the lock, so the first callback wins and the
+    /// second finds nothing to run.
+    private nonisolated func deliver() {
+        lock.lock()
+        let handler = self.handler
+        self.handler = nil
+        lock.unlock()
+        guard let handler else { return }
+        Task { @MainActor in handler() }
     }
 }
 
 /// Recording, replay and playback for one notebook. Audio files are immutable
-/// assets; clip metadata and transcripts sit in the notebook's private `audio/`
-/// folder.
+/// assets; clip metadata, the in-progress recording and transcripts sit in the
+/// notebook's private `audio/` folder.
 @MainActor
 @Observable
 final class NotebookAudio {
@@ -43,15 +57,27 @@ final class NotebookAudio {
 
     private let clipStore: AudioClipStore
     private let transcriptStore: TranscriptStore
+    /// Durable home of the recording that is in progress, or left by a crash.
+    private let pendingStore: PendingRecordingStore
     private let recorder = AVFoundationAudioRecorder()
     private let transcriber = SpeechAnalyzerTranscriber()
-    private let playbackDelegate = AudioPlaybackDelegate()
     /// Maps a clip's playhead to the stroke that was being written then.
     private let playback = PlaybackController()
     private var player: AVAudioPlayer?
-    private var recordingURL: URL?
+    /// Strong owner of `player.delegate`; `AVAudioPlayer` only holds it weakly.
+    private var playbackDelegate: AudioPlaybackDelegate?
+    /// Invalidates callbacks from a player that has already been replaced.
+    private var playbackGeneration: UInt64 = 0
+    /// The recording currently being written, if any.
+    private var pendingRecording: PendingRecording?
     private var timerTask: Task<Void, Never>?
     private var playheadTask: Task<Void, Never>?
+    /// Serialises ``load()``; the notebook and the audio sheet both call it.
+    private var isLoading = false
+    #if os(iOS)
+    /// Listening only while a recording runs, so an interruption can finalise it.
+    private var interruptionObserver: (any NSObjectProtocol)?
+    #endif
     /// The page on screen while a clip plays; replay seeks on its ink only.
     private var replayStrokes: [StrokeRecord] = []
 
@@ -81,6 +107,9 @@ final class NotebookAudio {
         transcriptStore = TranscriptStore(
             rootURL: audioRoot.appendingPathComponent("transcripts", isDirectory: true)
         )
+        pendingStore = PendingRecordingStore(
+            rootURL: audioRoot.appendingPathComponent("pending", isDirectory: true)
+        )
     }
 
     /// The folder holding a notebook's clip metadata and transcripts.
@@ -98,6 +127,13 @@ final class NotebookAudio {
     var hasActiveClip: Bool { playingClipID != nil }
 
     func load() async {
+        // Both the notebook and the audio sheet call this; a second pass cannot
+        // recover the same pending file twice.
+        guard !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+
+        await recoverPendingRecordings()
         do {
             clips = try await clipStore.list()
             let stored = try await transcriptStore.list()
@@ -113,20 +149,57 @@ final class NotebookAudio {
     }
 
     func startRecording() async {
-        guard !isRecording, !isBusy else { return }
+        guard !isRecording, !isBusy, !isLoading else { return }
         // Playback and capture share the audio session; a playing clip would be
         // recorded into the new file.
         stopPlayback()
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString).m4a", isDirectory: false)
+        isBusy = true
+        defer { isBusy = false }
+
+        let number = clips.count + 1
+        let clipID = UUID()
+        let title = "Recording \(number)"
+
+        // The pending folder is the recording's durable home. If it cannot be
+        // created, do not start: a file in a folder that is not there is lost.
         do {
-            _ = try await recorder.start(writingTo: url)
-            recordingURL = url
-            elapsed = 0
-            isRecording = true
-            startTimer()
+            try pendingStore.prepare()
         } catch {
             errorText = error.localizedDescription
+            return
+        }
+
+        let start: AudioRecordingStart
+        do {
+            start = try await recorder.start(writingTo: pendingStore.audioURL(for: clipID))
+        } catch {
+            try? pendingStore.remove(id: clipID)
+            errorText = error.localizedDescription
+            return
+        }
+
+        let sidecar = PendingRecording(
+            id: clipID,
+            startedAt: start.startedAt,
+            monotonicAnchorSeconds: start.monotonicAnchorSeconds,
+            title: title,
+            number: number
+        )
+        pendingRecording = sidecar
+        elapsed = 0
+        isRecording = true
+        #if os(iOS)
+        beginInterruptionObserving()
+        #endif
+        startTimer()
+
+        // A crash between recorder start and this write still keeps the audio;
+        // only the metadata shortcut is at risk, so this is not fatal.
+        do {
+            try pendingStore.begin(sidecar)
+        } catch {
+            errorText = "Recording started, but its recovery details could not be saved: "
+                + error.localizedDescription
         }
     }
 
@@ -138,34 +211,150 @@ final class NotebookAudio {
         elapsed = 0
         isBusy = true
         defer { isBusy = false }
+        #if os(iOS)
+        endInterruptionObserving()
+        #endif
 
+        let recording = pendingRecording
+        pendingRecording = nil
         do {
             let result = try await recorder.stop()
-            recordingURL = result.fileURL
-            // The finished file can be several minutes long: read it off the
-            // main actor so the UI keeps drawing while it is copied.
-            let data = try await Task.detached(priority: .userInitiated) { () throws -> Data in
-                try Data(contentsOf: result.fileURL)
-            }.value
-            let assetName = try await store.addAsset(data, fileExtension: "m4a", to: notebookID)
-            let clip = AudioClip(
-                assetName: assetName,
+            let fileURL = recording.map { pendingStore.audioURL(for: $0.id) } ?? result.fileURL
+            let duration = await Self.durationSeconds(of: fileURL, reported: result.durationSeconds)
+            try await finalize(
+                fileURL: fileURL,
+                clipID: recording?.id ?? UUID(),
+                title: recording?.title ?? "Recording \(clips.count + 1)",
                 startedAt: result.startedAt,
                 monotonicAnchorSeconds: result.monotonicAnchorSeconds,
-                durationSeconds: result.durationSeconds,
-                title: "Recording \(clips.count + 1)"
+                durationSeconds: duration
             )
-            try await clipStore.save(clip)
-            clips.append(clip)
-            try? FileManager.default.removeItem(at: result.fileURL)
-            recordingURL = nil
         } catch {
-            if let recordingURL {
-                try? FileManager.default.removeItem(at: recordingURL)
-            }
-            recordingURL = nil
+            // The pending file and sidecar stay on disk: the next load recovers
+            // the recording instead of losing the lecture.
             errorText = error.localizedDescription
         }
+    }
+
+    /// Copies a finished recording into the notebook's assets, saves its clip and
+    /// only then removes the pending copy.
+    private func finalize(
+        fileURL: URL,
+        clipID: UUID,
+        title: String,
+        startedAt: Date,
+        monotonicAnchorSeconds: TimeInterval,
+        durationSeconds: TimeInterval
+    ) async throws {
+        // A finished file can be several minutes long: read it off the main actor
+        // so the UI keeps drawing while it is copied.
+        let data = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+            try Data(contentsOf: fileURL)
+        }.value
+        let assetName = try await store.addAsset(data, fileExtension: "m4a", to: notebookID)
+        let clip = AudioClip(
+            id: clipID,
+            assetName: assetName,
+            startedAt: startedAt,
+            monotonicAnchorSeconds: monotonicAnchorSeconds,
+            durationSeconds: durationSeconds,
+            title: title
+        )
+        try await clipStore.save(clip)
+        insert(clip)
+        if let error = removePending(id: clipID) {
+            errorText = error
+        }
+    }
+
+    /// Recovers recordings a crash (or a failed finalise) left in the pending
+    /// folder. The audio is added to the notebook's assets and the pending copy is
+    /// removed only after its clip has been saved.
+    private func recoverPendingRecordings() async {
+        // A start or finalise owns the pending folder while `isBusy`; scanning a
+        // half-finalised file would race the copy that is about to finish it.
+        guard !isRecording, !isBusy else { return }
+        let files: [PendingRecordingFile]
+        do {
+            files = try pendingStore.files()
+        } catch {
+            errorText = "Recordings left by an earlier session could not be checked: "
+                + error.localizedDescription
+            return
+        }
+        guard !files.isEmpty else { return }
+
+        for file in files {
+            // Zero bytes means the recorder never wrote a frame: there is no audio
+            // to keep. Any other failure keeps the file for the next attempt.
+            if file.isEmpty {
+                if let error = removePending(id: file.id) {
+                    errorText = error
+                }
+                continue
+            }
+            // The clip may already be saved and only its pending copy left behind
+            // by a crash between the two writes.
+            if clips.contains(where: { $0.id == file.id }) {
+                if let error = removePending(id: file.id) {
+                    errorText = error
+                }
+                continue
+            }
+
+            do {
+                let duration = await AudioFileDuration.seconds(of: file.audioURL) ?? 0
+                let data = try await Task.detached(priority: .userInitiated) {
+                    () throws -> Data in
+                    try Data(contentsOf: file.audioURL)
+                }.value
+                let assetName = try await store.addAsset(data, fileExtension: "m4a", to: notebookID)
+                let clip = file.recoveredClip(
+                    assetName: assetName,
+                    durationSeconds: duration,
+                    fallbackTitle: "Recording \(clips.count + 1)"
+                )
+                try await clipStore.save(clip)
+                insert(clip)
+                if let error = removePending(id: file.id) {
+                    errorText = error
+                }
+            } catch {
+                errorText = "A recording from an earlier session could not be recovered: "
+                    + error.localizedDescription
+            }
+        }
+    }
+
+    /// Appends a clip while keeping the list in the same order the store uses.
+    private func insert(_ clip: AudioClip) {
+        guard !clips.contains(where: { $0.id == clip.id }) else { return }
+        clips.append(clip)
+        clips.sort { lhs, rhs in
+            if lhs.startedAt != rhs.startedAt { return lhs.startedAt < rhs.startedAt }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
+    /// Removes a pending copy, returning a message instead of throwing so callers
+    /// can continue with the remaining files.
+    private func removePending(id: UUID) -> String? {
+        do {
+            try pendingStore.remove(id: id)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// The recorder's `currentTime` is authoritative, but an interruption can
+    /// report zero for a file that still has audio.
+    private static func durationSeconds(
+        of url: URL,
+        reported: TimeInterval
+    ) async -> TimeInterval {
+        if reported.isFinite, reported > 0 { return reported }
+        return await AudioFileDuration.seconds(of: url) ?? 0
     }
 
     /// Plays or pauses `clip`. A new clip starts at the beginning.
@@ -244,9 +433,11 @@ final class NotebookAudio {
     }
 
     func stopPlayback() {
+        playbackGeneration &+= 1
         player?.stop()
         player?.delegate = nil
         player = nil
+        playbackDelegate = nil
         playingClipID = nil
         isPlaying = false
         playheadSeconds = 0
@@ -257,14 +448,23 @@ final class NotebookAudio {
 
     /// Clears the playing row once the player reaches the end of its file.
     private func finishPlayback() {
+        playbackGeneration &+= 1
         player?.delegate = nil
         player = nil
+        playbackDelegate = nil
         playingClipID = nil
         isPlaying = false
         playheadSeconds = 0
         activeStrokeID = nil
         playheadTask?.cancel()
         playheadTask = nil
+    }
+
+    /// Finishes playback only when the callback belongs to the current player, so
+    /// a late delegate message cannot stop a clip that just started.
+    private func finishPlayback(generation: UInt64) {
+        guard generation == playbackGeneration, playingClipID != nil else { return }
+        finishPlayback()
     }
 
     /// Builds a player for `clip` without starting it.
@@ -282,10 +482,16 @@ final class NotebookAudio {
         #endif
         do {
             let player = try AVAudioPlayer(contentsOf: url)
-            player.delegate = playbackDelegate
-            playbackDelegate.onFinish = { [weak self] in
-                self?.finishPlayback()
+            // One delegate per player: its completion carries this generation, so a
+            // stale callback from an earlier player is ignored instead of stopping
+            // the current one.
+            playbackGeneration &+= 1
+            let generation = playbackGeneration
+            let delegate = AudioPlaybackDelegate { [weak self] in
+                self?.finishPlayback(generation: generation)
             }
+            playbackDelegate = delegate
+            player.delegate = delegate
             player.prepareToPlay()
             self.player = player
             return true
@@ -391,4 +597,42 @@ final class NotebookAudio {
             }
         }
     }
+
+    // MARK: - Audio session interruptions
+
+    #if os(iOS)
+    /// Watches for phone calls, Siri and other apps taking the microphone. The
+    /// observer only lives while a recording runs.
+    private func beginInterruptionObserving() {
+        guard interruptionObserver == nil else { return }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.didBecomeInactiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleSessionDeactivation()
+            }
+        }
+    }
+
+    private func endInterruptionObserving() {
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        interruptionObserver = nil
+    }
+
+    /// The session was deactivated by the system, so the recorder has already
+    /// stopped writing: finalise the file now instead of leaving `isRecording`
+    /// stuck. Nothing resumes automatically; the user asked to record once, not to
+    /// keep re-arming the microphone.
+    private func handleSessionDeactivation() {
+        guard isRecording else { return }
+        errorText = "Recording stopped because another app took the microphone."
+        Task { [weak self] in
+            await self?.stopRecording()
+        }
+    }
+    #endif
 }
