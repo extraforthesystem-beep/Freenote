@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.newNotebookOrientation) private var orientation: PageOrientation = .portrait
     @AppStorage(AppSettings.Key.newNotebookTemplateID) private var templateID = AppSettings.defaultTemplateID
     @AppStorage(AppSettings.Key.handwritingRecognitionEnabled) private var handwritingRecognition = true
+    @AppStorage(AppSettings.Key.spotlightIndexingEnabled) private var spotlightIndexing = true
     @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
     @AppStorage(AppSettings.Key.drawWithFinger) private var drawWithFinger = false
     @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
@@ -172,10 +173,14 @@ struct SettingsView: View {
     private var handwritingRecognitionSection: some View {
         Section {
             Toggle("Index Handwritten Notes", isOn: $handwritingRecognition)
+            Toggle("Show Notes in System Search", isOn: $spotlightIndexing)
+                .onChange(of: spotlightIndexing) { _, enabled in
+                    Task { await model.search.updateSpotlight(enabled: enabled) }
+                }
         } header: {
             Text("Handwriting Recognition")
         } footer: {
-            Text("Notebooks will be searchable when enabled. Recognition runs on this device.")
+            Text("Notebooks will be searchable when enabled. Recognition runs on this device. System Search adds page text to Spotlight on this iPad only; no note leaves the device.")
         }
     }
 

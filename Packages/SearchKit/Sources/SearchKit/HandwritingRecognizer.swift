@@ -8,8 +8,21 @@ public protocol HandwritingRecognizing: Sendable {
     /// Changes whenever the system recogniser would produce different text for the same ink.
     var recognitionVersion: Int { get }
 
-    /// The text in `strokes`, or nil when there is nothing recognisable.
+    /// The text in `strokes` for the search index, or nil when there is nothing
+    /// recognisable. May concatenate several candidate readings.
     func text(for strokes: [StrokeRecord]) async -> String?
+
+    /// The single best reading of `strokes`, or nil when there is nothing
+    /// recognisable. Prose readers such as the AI panel use this instead of the
+    /// index text, which can contain alternatives ("101\nlol").
+    func recognizedText(for strokes: [StrokeRecord]) async -> String?
+}
+
+extension HandwritingRecognizing {
+    /// A recogniser with no separate best reading falls back to its index text.
+    public func recognizedText(for strokes: [StrokeRecord]) async -> String? {
+        await text(for: strokes)
+    }
 }
 
 /// Apple's on-device handwriting recogniser. PencilKit stays inside this file.
@@ -36,6 +49,11 @@ public struct PencilKitRecognizer: HandwritingRecognizing {
 
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    public func recognizedText(for strokes: [StrokeRecord]) async -> String? {
+        guard !strokes.isEmpty else { return nil }
+        return await text(in: StrokeCodec.drawing(from: strokes))
     }
 }
 

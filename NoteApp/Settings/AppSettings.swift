@@ -18,6 +18,7 @@ enum AppSettings {
         static let newNotebookOrientation = "noteapp.settings.newNotebookOrientation"
         static let newNotebookTemplateID = "noteapp.settings.newNotebookTemplateID"
         static let handwritingRecognitionEnabled = "noteapp.settings.handwritingRecognitionEnabled"
+        static let spotlightIndexingEnabled = "noteapp.settings.spotlightIndexingEnabled"
         static let holdToDrawShapes = "noteapp.settings.holdToDrawShapes"
         static let drawWithFinger = "noteapp.settings.drawWithFinger"
         static let twoFingerDoubleTapUndo = "noteapp.settings.twoFingerDoubleTapUndo"
@@ -121,6 +122,12 @@ enum AppSettings {
 
     static var handwritingRecognitionEnabled: Bool {
         bool(Key.handwritingRecognitionEnabled, default: true)
+    }
+
+    /// When on, indexed page text is published to system search (Spotlight).
+    /// Everything stays on this device; turning it off withdraws the entries.
+    static var spotlightIndexingEnabled: Bool {
+        bool(Key.spotlightIndexingEnabled, default: true)
     }
 
     // MARK: - Writing

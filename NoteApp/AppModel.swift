@@ -164,6 +164,9 @@ final class AppModel {
             }
             Task {
                 await search.indexAll(notebooks: notebooks, store: store)
+                if let message = search.takeRecognitionNotice() {
+                    notice = Notice(title: "Handwriting re-read", message: message)
+                }
                 await search.search(searchText)
             }
         } catch {
