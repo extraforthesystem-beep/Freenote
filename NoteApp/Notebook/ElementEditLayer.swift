@@ -157,8 +157,10 @@ struct ElementEditLayer: View {
                 }
                 guard let origin = resizeOrigin?.frame else { return }
                 var updated = origin
-                updated.width = min(max(44, origin.width + value.translation.width), page.width - origin.x)
-                updated.height = min(max(32, origin.height + value.translation.height), page.height - origin.y)
+                // An element left past the edge by a page resize keeps the minimum
+                // size rather than taking a negative bound.
+                updated.width = min(max(44, origin.width + value.translation.width), max(44, page.width - origin.x))
+                updated.height = min(max(32, origin.height + value.translation.height), max(32, page.height - origin.y))
                 previewFrames[element.id] = updated
             }
             .onEnded { _ in

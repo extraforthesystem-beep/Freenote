@@ -128,7 +128,7 @@ struct VectorPDFExportTests {
         #expect((document.documentAttributes?[PDFDocumentAttribute.creatorAttribute] as? String) == "NoteApp")
     }
 
-    @Test("Editable export writes one ink annotation per stroke")
+    @Test("Editable export writes one ink annotation per opaque stroke")
     func editable() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -136,26 +136,31 @@ struct VectorPDFExportTests {
 
         let document = try #require(PDFDocument(url: url))
         let pdfPage = try #require(document.page(at: 0))
+        let opaque = fixture.page.renderStrokes.filter { !VectorPDFAnnotations.isTranslucent($0) }
+        let translucent = fixture.page.renderStrokes.filter(VectorPDFAnnotations.isTranslucent)
+        // The 70 % pen and the highlighter cannot keep their opacity as
+        // annotations, so they are flattened instead (see the test below).
+        #expect(translucent.count == 2)
+        #expect(opaque.count + translucent.count == fixture.strokeCount)
+
         let added = VectorPDFAnnotations.addInkAnnotations(
             for: fixture.page.renderStrokes,
             to: pdfPage,
             pageHeight: Self.pageSize.height
         )
-        #expect(added == fixture.strokeCount)
+        #expect(added == opaque.count)
         let data = try #require(document.dataRepresentation())
 
         let reread = try #require(PDFDocument(data: data))
         let page = try #require(reread.page(at: 0))
         let inks = page.annotations.filter { $0.type == "Ink" }
-        #expect(inks.count == fixture.strokeCount)
+        #expect(inks.count == opaque.count)
         for ink in inks {
             #expect(!(ink.paths ?? []).isEmpty)
             #expect(ink.border?.lineWidth ?? 0 > 0)
         }
-        // The highlighter's translucency survives in its appearance stream.
-        let raw = String(decoding: data, as: UTF8.self)
-        #expect(raw.contains("/CA 0."))
         // No author name stamped on the annotations.
+        let raw = String(decoding: data, as: UTF8.self)
         #expect(!raw.contains("/T ("))
         #expect((reread.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String) == "Test Notebook")
         // Paths land on the strokes: every annotation's path, offset by its
@@ -170,6 +175,54 @@ struct VectorPDFExportTests {
         #expect(text.contains(Self.typedText))
         #expect(reread.outlineRoot?.numberOfChildren == 1)
         #expect(reread.outlineRoot?.child(at: 0)?.label == "Intro")
+    }
+
+    @Test("Translucent ink is flattened at its opacity, never exported as an annotation")
+    func translucentInkIsFlattened() throws {
+        // PDFKit writes an ink annotation's colour as /C, which has no alpha,
+        // and refuses to set the constant opacity /CA, so an annotated
+        // highlighter would come out solid. Such ink is drawn into the page.
+        let layerID = UUID()
+        let record = try #require(
+            PDFImportConversion.strokeRecords(
+                for: [
+                    PDFInkStroke(
+                        color: RGBAColor(r: 0, g: 0, b: 0, a: 0.35),
+                        width: 40,
+                        points: [CGPoint(x: 100, y: 200), CGPoint(x: 400, y: 200)]
+                    ),
+                ],
+                layerID: layerID
+            ).first
+        )
+        #expect(VectorPDFAnnotations.isTranslucent(record))
+        var page = Page(
+            id: UUID(),
+            width: Self.pageSize.width,
+            height: Self.pageSize.height,
+            template: PageTemplate(kind: "blank", spacing: 0, lineColor: .white, paperColor: .white),
+            layers: [Page.Layer(id: layerID, name: "Layer 1")]
+        )
+        page.strokes = [record]
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let writer = try #require(VectorPDFWriter(url: url, title: nil, creator: nil))
+        writer.addPage(page, assetsDirectory: nil, includeInk: true)
+        writer.close()
+
+        let document = try #require(PDFDocument(url: url))
+        let pdfPage = try #require(document.page(at: 0))
+        #expect(pdfPage.annotations.isEmpty)
+        let ref = try #require(pdfPage.pageRef)
+        #expect(imageXObjectCount(in: ref) == 0)
+
+        // 35 % black over white paper is a grey, never solid black: the ink is
+        // in the page at its own opacity.
+        let darkest = try darkestChannel(of: pdfPage, size: Self.pageSize)
+        #expect(darkest > 140, "ink came out solid: \(darkest)")
+        #expect(darkest < 200, "the ink was not drawn at its opacity: \(darkest)")
     }
 
     @Test("Vector ink matches PencilKit's bitmap closely")
@@ -310,6 +363,32 @@ struct VectorPDFExportTests {
         try coverage(size: size) { context in
             context.draw(image, in: CGRect(origin: .zero, size: size))
         }
+    }
+
+    /// The darkest red channel of the page drawn over white paper, 0...255.
+    private func darkestChannel(of page: PDFPage, size: CGSize) throws -> Int {
+        let width = Int(size.width), height = Int(size.height)
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn: Bool = data.withUnsafeMutableBytes { buffer in
+            guard let base = buffer.baseAddress,
+                  let context = CGContext(
+                      data: base,
+                      width: width,
+                      height: height,
+                      bitsPerComponent: 8,
+                      bytesPerRow: width * 4,
+                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ),
+                  let pageRef = page.pageRef
+            else { return false }
+            context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            context.drawPDFPage(pageRef)
+            return true
+        }
+        guard drawn else { return 255 }
+        return stride(from: 0, to: data.count, by: 4).reduce(255) { min($0, Int(data[$1])) }
     }
 
     /// Alpha coverage (> 30%) of what `draw` paints into a 1× bitmap.

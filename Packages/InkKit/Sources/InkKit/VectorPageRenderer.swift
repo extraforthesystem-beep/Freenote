@@ -32,8 +32,8 @@ public enum VectorPageRenderer {
     /// at the bottom-left, y up, one unit per page point.
     ///
     /// `includeTemplate` off paints plain white paper instead of the template.
-    /// `includeInk` off skips the strokes (they are written as annotations
-    /// instead).
+    /// `includeInk` off skips the strokes (the opaque ones are written as
+    /// annotations instead).
     public static func draw(
         page: Page,
         in context: CGContext,

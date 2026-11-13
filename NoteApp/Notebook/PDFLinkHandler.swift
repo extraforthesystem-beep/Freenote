@@ -12,6 +12,12 @@ enum PDFLinkTarget: Equatable {
 /// element is drawn aspect-fit inside its frame; this reverses that mapping.
 @MainActor
 enum PDFLinkHandler {
+    /// The last document opened here, with the URL it came from. A tap on a
+    /// PDF page would otherwise parse the whole file again (0.2 ms for a
+    /// synthetic page, over a millisecond for a 1,000-page book) for one
+    /// annotation lookup, on the main actor.
+    private static var lastDocument: (url: URL, document: PDFDocument)?
+
     static func target(
         at point: CGPoint,
         page: Page,
@@ -31,7 +37,7 @@ enum PDFLinkHandler {
             guard frameRect.contains(point) else { continue }
 
             let url = assetsDirectory.appendingPathComponent(assetName)
-            guard let document = PDFDocument(url: url),
+            guard let document = document(at: url),
                   let pdfPage = document.page(at: pageIndex)
             else { continue }
 
@@ -83,5 +89,15 @@ enum PDFLinkHandler {
             }
         }
         return nil
+    }
+
+    /// The document at `url`, reused when it is the one last opened here.
+    private static func document(at url: URL) -> PDFDocument? {
+        if let lastDocument, lastDocument.url == url {
+            return lastDocument.document
+        }
+        guard let document = PDFDocument(url: url) else { return nil }
+        lastDocument = (url, document)
+        return document
     }
 }

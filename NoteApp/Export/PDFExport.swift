@@ -91,7 +91,9 @@ nonisolated struct PDFExportOptions: Sendable, Equatable {
     enum Ink: String, Sendable, CaseIterable, Identifiable {
         /// Ink drawn into the page as vector outlines.
         case flattened
-        /// Ink written as PDF ink annotations other apps can edit.
+        /// Ink written as PDF ink annotations other apps can edit. Translucent
+        /// ink (highlighters) is drawn into the page instead: PDFKit cannot
+        /// store an annotation's opacity, so it would come out solid.
         case editable
 
         var id: String { rawValue }
@@ -123,44 +125,35 @@ nonisolated struct PDFExportOptions: Sendable, Equatable {
 enum NotebookExporter {
     /// Renders one page at print resolution and returns PNG bytes.
     ///
-    /// Always rendered in the light appearance: PencilKit draws ink for the
-    /// current appearance, and an export must not come out with dark-mode
-    /// (inverted) ink.
+    /// Drawn and encoded off the main actor: a scanned PDF page takes tens of
+    /// milliseconds to draw at 2×, and encoding a page-sized PNG costs as much
+    /// again, both of which stalled the editor when they ran inline. Ink is
+    /// always drawn as stored — `PageRenderer` forces the light appearance for
+    /// it — so a dark-mode export never comes out inverted.
     static func pngData(
         page: Page,
         assetsDirectory: URL?,
         scale: CGFloat = 2
-    ) -> Data? {
-        var image: InkImage?
-        let render = {
-            image = PageRenderer.image(
+    ) async -> Data? {
+        await Task.detached(priority: .userInitiated) { () -> Data? in
+            guard let image = PageRenderer.image(
                 strokes: page.renderStrokes,
                 pageSize: CGSize(width: page.width, height: page.height),
                 template: page.template,
                 elements: page.visibleElements,
                 assetsDirectory: assetsDirectory,
                 scale: scale
-            )
-        }
-        #if os(iOS)
-        UITraitCollection(userInterfaceStyle: .light).performAsCurrent(render)
-        #else
-        if let light = NSAppearance(named: .aqua) {
-            light.performAsCurrentDrawingAppearance(render)
-        } else {
-            render()
-        }
-        #endif
-        guard let image else { return nil }
+            ) else { return nil }
 
-        #if os(iOS)
-        return image.pngData()
-        #else
-        guard let tiff = image.tiffRepresentation,
-              let representation = NSBitmapImageRep(data: tiff)
-        else { return nil }
-        return representation.representation(using: .png, properties: [:])
-        #endif
+            #if os(iOS)
+            return image.pngData()
+            #else
+            guard let tiff = image.tiffRepresentation,
+                  let representation = NSBitmapImageRep(data: tiff)
+            else { return nil }
+            return representation.representation(using: .png, properties: [:])
+            #endif
+        }.value
     }
 
     /// Exports the pages `options` selects as one vector PDF, one PDF page per
@@ -169,9 +162,11 @@ enum NotebookExporter {
     /// Pages are loaded and drawn one at a time off the main actor, straight
     /// into a temporary file, so a long notebook neither blocks the UI nor
     /// holds more than one page in memory. Editable exports then reopen the
-    /// file with PDFKit and add each page's ink as annotations, again one page
-    /// at a time. `outlineTitles` maps page IDs to outline entries.
-    /// `progress` is called on the main actor after each page.
+    /// file with PDFKit and add each page's opaque ink as annotations, again
+    /// one page at a time; translucent ink was drawn into the page, because an
+    /// annotation cannot carry its opacity (see `VectorPDFAnnotations`).
+    /// `outlineTitles` maps page IDs to outline entries. `progress` is called
+    /// on the main actor after each page.
     static func pdfData(
         session: NotebookSession,
         options: PDFExportOptions = PDFExportOptions(),
@@ -211,11 +206,21 @@ enum NotebookExporter {
                 } catch {
                     throw NotebookExportError.couldNotRenderPage(indices[index] + 1)
                 }
+                // An editable export writes only opaque ink as annotations;
+                // translucent ink (highlighters) is drawn into the page, since
+                // PDFKit cannot store an annotation's opacity and would export
+                // it solid. See `VectorPDFAnnotations.isTranslucent`.
+                var drawnPage = page
+                var includeInk = options.ink == .flattened
+                if options.ink == .editable {
+                    drawnPage.strokes = page.renderStrokes.filter(VectorPDFAnnotations.isTranslucent)
+                    includeInk = !drawnPage.strokes.isEmpty
+                }
                 writer.addPage(
-                    page,
+                    drawnPage,
                     assetsDirectory: assetsDirectory,
                     includeTemplate: options.includeTemplate,
-                    includeInk: options.ink == .flattened
+                    includeInk: includeInk
                 )
                 if let progress {
                     await progress(PDFExportProgress(pagesCompleted: index + 1, pageCount: pageCount))
@@ -240,6 +245,9 @@ enum NotebookExporter {
                     throw NotebookExportError.couldNotRenderPage(indices[index] + 1)
                 }
                 if let pdfPage = document.page(at: index) {
+                    // Opaque ink only: translucent ink was drawn into the page
+                    // above, because PDFKit cannot store an ink annotation's
+                    // opacity (see `VectorPDFAnnotations.isTranslucent`).
                     VectorPDFAnnotations.addInkAnnotations(
                         for: page.renderStrokes,
                         to: pdfPage,

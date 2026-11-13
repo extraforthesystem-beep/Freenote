@@ -335,12 +335,17 @@ final class AppModel {
         return folderTree.folder(withID: folderID)?.name
     }
 
+    /// The deepest folder level the library shows or offers in a move menu. A
+    /// folder at `maxFolderDepth - 1` cannot take a child, or the child would be
+    /// created where no UI can show it.
+    static let maxFolderDepth = 12
+
     /// Every folder as an indented full path, siblings sorted by name, so a move
     /// menu shows two "Notes" folders with their parents.
     var folderPaths: [FolderPath] {
         var result: [FolderPath] = []
         func walk(parent: UUID?, depth: Int, prefix: String) {
-            guard depth < 12 else { return }
+            guard depth < Self.maxFolderDepth else { return }
             let children = folderTree.folders
                 .filter { $0.parentID == parent }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -510,6 +515,14 @@ final class AppModel {
         for (pageID, title) in result.titles {
             outline.setTitle(title, notebookID: result.manifest.id, pageID: pageID)
         }
+        // File it where the user is looking, as createNotebook does.
+        if case .folder(let folderID) = selectedLocation {
+            try? await store.setFolder(folderID, forNotebook: result.manifest.id)
+        }
+        // Index in the background, so its printed text is searchable before
+        // the tab closes without holding up opening it.
+        let manifest = result.manifest
+        Task { await search.index(notebook: manifest, store: store) }
         await reload()
         if let notebook = notebooks.first(where: { $0.id == result.manifest.id }) {
             await open(notebook)

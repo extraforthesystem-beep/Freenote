@@ -68,6 +68,8 @@ public enum PDFImportConversion {
     /// the PDF and keep rendering as part of the page.
     public static func isConvertibleInk(_ annotation: PDFAnnotation) -> Bool {
         guard isInkType(annotation.type) else { return false }
+        // Hidden ink stays in the PDF, hidden, rather than becoming visible strokes.
+        guard annotation.shouldDisplay else { return false }
         guard let paths = annotation.paths, !paths.isEmpty else { return false }
         return paths.contains { !$0.cgPath.isEmpty }
     }
@@ -81,26 +83,121 @@ public enum PDFImportConversion {
         return name.caseInsensitiveCompare("Ink") == .orderedSame
     }
 
+    /// The constant opacity (`/CA`) each annotation on `page` is drawn with,
+    /// keyed by its bounds (see `rectKey`). An annotation without one, or with
+    /// a fully opaque one, is left out.
+    ///
+    /// PDFKit has no accessor for `/CA`: it reads the name as a widget's
+    /// caption string, so a numeric value never reaches
+    /// `value(forAnnotationKey:)`. The values come from the PDF page itself and
+    /// are matched to the `PDFAnnotation` objects by their bounds.
+    static func constantOpacities(in page: PDFPage) -> [String: Double] {
+        guard let dictionary = page.pageRef?.dictionary else { return [:] }
+        var annots: CGPDFArrayRef?
+        guard CGPDFDictionaryGetArray(dictionary, "Annots", &annots), let annots else {
+            return [:]
+        }
+
+        var result: [String: Double] = [:]
+        let count = CGPDFArrayGetCount(annots)
+        for index in 0..<count {
+            var object: CGPDFObjectRef?
+            guard CGPDFArrayGetObject(annots, index, &object),
+                  let object,
+                  CGPDFObjectGetType(object) == .dictionary
+            else { continue }
+            var annotation: CGPDFDictionaryRef?
+            guard CGPDFObjectGetValue(object, .dictionary, &annotation),
+                  let annotation
+            else { continue }
+
+            var opacity: CGPDFReal = 1
+            guard CGPDFDictionaryGetNumber(annotation, "CA", &opacity),
+                  opacity < 1,
+                  let bounds = bounds(of: annotation)
+            else { continue }
+            result[rectKey(bounds)] = Double(max(0, opacity))
+        }
+        return result
+    }
+
+    /// Bounds as a lookup key, to a hundredth of a point: PDFKit's bounds and
+    /// the PDF's own `/Rect` are the same numbers.
+    static func rectKey(_ rect: CGRect) -> String {
+        String(
+            format: "%.2f,%.2f,%.2f,%.2f",
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height
+        )
+    }
+
+    /// An annotation's `/Rect` as a rectangle, or nil when it is not four
+    /// numbers.
+    static func bounds(of annotation: CGPDFDictionaryRef) -> CGRect? {
+        var rects: CGPDFArrayRef?
+        guard CGPDFDictionaryGetArray(annotation, "Rect", &rects),
+              let rects,
+              CGPDFArrayGetCount(rects) == 4
+        else { return nil }
+
+        var values: [CGFloat] = []
+        for index in 0..<4 {
+            var object: CGPDFObjectRef?
+            guard CGPDFArrayGetObject(rects, index, &object), let object else { return nil }
+            var real: CGPDFReal = 0
+            var integer: CGPDFInteger = 0
+            if CGPDFObjectGetValue(object, .real, &real) {
+                values.append(CGFloat(real))
+            } else if CGPDFObjectGetValue(object, .integer, &integer) {
+                values.append(CGFloat(integer))
+            } else {
+                return nil
+            }
+        }
+        return CGRect(
+            x: values[0],
+            y: values[1],
+            width: values[2] - values[0],
+            height: values[3] - values[1]
+        )
+    }
+
     /// Every ink annotation path on `page`, mapped into page space.
     ///
     /// A path with several subpaths becomes one `PDFInkStroke` per subpath, so
-    /// separate pen lifts are never joined by one stroke.
+    /// separate pen lifts are never joined by one stroke. An annotation's
+    /// constant opacity (`/CA`), which other apps write for translucent ink,
+    /// is folded into the colour's alpha.
     public static func inkStrokes(in page: PDFPage, pageSize: CGSize) -> [PDFInkStroke] {
         guard pageSize.width > 0, pageSize.height > 0 else { return [] }
         let transform = drawingTransform(for: page, pageSize: pageSize)
         let widthScale = widthScale(of: transform)
+        let opacities = constantOpacities(in: page)
 
         var strokes: [PDFInkStroke] = []
         for annotation in page.annotations where isConvertibleInk(annotation) {
-            let color = RGBAColor(srgb: annotation.color) ?? .black
+            var color = RGBAColor(srgb: annotation.color) ?? .black
+            if let opacity = opacities[rectKey(annotation.bounds)] {
+                color.a = min(1, max(0, color.a * opacity))
+            }
             let lineWidth = annotation.border?.lineWidth ?? 0
             let baseWidth = lineWidth > 0 ? Double(lineWidth) : defaultInkWidth
             let width = min(max(baseWidth * widthScale, minimumWidth), maximumWidth)
+            // PDFKit gives ink paths read from a file relative to the
+            // annotation's bounds origin. Paths added in memory come back as
+            // they were given, so call this on parsed documents only.
+            let origin = annotation.bounds.origin
 
             for path in annotation.paths ?? [] {
                 for polyline in polylines(from: path.cgPath) {
                     let points = polyline.compactMap {
-                        pagePoint($0, transform: transform, pageHeight: Double(pageSize.height))
+                        pagePoint(
+                            CGPoint(x: $0.x + origin.x, y: $0.y + origin.y),
+                            transform: transform,
+                            pageHeight: Double(pageSize.height)
+                        )
                     }
                     guard !points.isEmpty else { continue }
                     strokes.append(PDFInkStroke(color: color, width: width, points: points))

@@ -2,10 +2,12 @@ import NoteCore
 import SearchKit
 import SwiftUI
 
-/// What a page should mark for a search: the query and the sources it searched.
+/// What a page should mark for a search: the query, the sources it searched and
+/// the edit-date window, so the panel can adopt the same search.
 struct SearchHighlight: Hashable {
     var query: String
     var sources: Set<PageTextSource> = Set(PageTextSource.allCases)
+    var dateRange: SearchDateRange = .anyTime
 }
 
 /// Source checkboxes and an edit-date choice for a search. Turning every source
@@ -219,7 +221,15 @@ struct SearchHighlightOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: taskKey) {
-            marks = await search.pageMarks(for: highlight, page: page, strokes: strokes, assetsDirectory: assetsDirectory)
+            // Each stroke restarts this task; recognise only once writing pauses.
+            if !marks.isEmpty {
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled else { return }
+            }
+            let found = await search.pageMarks(for: highlight, page: page, strokes: strokes, assetsDirectory: assetsDirectory)
+            // A page flip cancels this pass; its marks belong to the old page.
+            guard !Task.isCancelled else { return }
+            marks = found
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

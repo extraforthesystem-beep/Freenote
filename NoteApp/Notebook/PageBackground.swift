@@ -192,9 +192,12 @@ extension RGBAColor {
 /// The full page background — paper and elements — drawn by InkKit. The ink is
 /// left to the canvas on top.
 ///
-/// A 2× bitmap is drawn at once so the page never appears blank. When the page
-/// is zoomed in, a sharper bitmap for the settled zoom is rendered off the main
-/// actor and replaces it.
+/// A cached 2× bitmap is shown at once when there is one. When there is not,
+/// the previous image (or the page's paper colour) stays up while the new one
+/// renders off the main actor: drawing a PDF page or photo takes tens of
+/// milliseconds, and doing that in a view body hitched every element drag.
+/// When the page is zoomed in, a sharper bitmap for the settled zoom is
+/// rendered off the main actor and replaces it.
 struct PaperBackground: View {
     let page: Page
     let assetsDirectory: URL?
@@ -204,6 +207,7 @@ struct PaperBackground: View {
     var usesDarkPaper: Bool = false
 
     @Environment(\.displayScale) private var displayScale
+    @State private var base: (key: String, image: InkImage)?
     @State private var sharp: (key: String, image: InkImage)?
 
     private var baseKey: String {
@@ -214,6 +218,12 @@ struct PaperBackground: View {
         )
     }
 
+    /// The page's own identity, without its elements: while an element drag
+    /// invalidates the image, the last one for this page stays up.
+    private var pageKey: String {
+        "\(page.id.uuidString)-\(page.width)x\(page.height)-\(page.template)"
+    }
+
     private var targetScale: CGFloat {
         PageBackgroundCache.bucket(zoomScale * displayScale)
     }
@@ -221,15 +231,7 @@ struct PaperBackground: View {
     var body: some View {
         let key = baseKey
         Group {
-            if let sharp, sharp.key == key {
-                Image(inkImage: sharp.image)
-                    .resizable()
-                    .interpolation(.high)
-            } else if let image = PageBackgroundCache.image(
-                for: page,
-                assetsDirectory: assetsDirectory,
-                usesDarkPaper: usesDarkPaper
-            ) {
+            if let image = image(for: key) {
                 Image(inkImage: image)
                     .resizable()
                     .interpolation(.high)
@@ -239,8 +241,48 @@ struct PaperBackground: View {
             }
         }
         .task(id: "\(key)@\(targetScale)") {
+            await renderBase(key: key)
             await renderSharp(key: key, scale: targetScale)
         }
+    }
+
+    /// The image to draw now. A cache hit is instant; a miss returns the last
+    /// image of this page, and this view never renders one itself.
+    private func image(for key: String) -> InkImage? {
+        if let sharp, sharp.key == key { return sharp.image }
+        if let base, base.key == key { return base.image }
+        if let cached = PageBackgroundCache.cached(key: key, scale: PageBackgroundCache.baseScale) {
+            return cached
+        }
+        if let sharp, sharp.key.hasPrefix(pageKey) { return sharp.image }
+        if let base, base.key.hasPrefix(pageKey) { return base.image }
+        return nil
+    }
+
+    private func renderBase(key: String) async {
+        guard base?.key != key else { return }
+        let scale = PageBackgroundCache.baseScale
+        if let cached = PageBackgroundCache.cached(key: key, scale: scale) {
+            base = (key, cached)
+            return
+        }
+        let page = page
+        let assetsDirectory = assetsDirectory
+        let usesDarkPaper = usesDarkPaper
+        let rendered = await Task.detached(priority: .userInitiated) {
+            PaperAppearance.image(
+                strokes: [],
+                pageSize: CGSize(width: page.width, height: page.height),
+                template: page.template,
+                elements: page.visibleElements,
+                assetsDirectory: assetsDirectory,
+                scale: scale,
+                usesDarkPaper: usesDarkPaper
+            )
+        }.value
+        guard !Task.isCancelled, let rendered else { return }
+        PageBackgroundCache.store(rendered, key: key, scale: scale, page: page)
+        base = (key, rendered)
     }
 
     private func renderSharp(key: String, scale: CGFloat) async {
@@ -308,40 +350,18 @@ enum PageBackgroundCache {
         return min(max(stepped, baseScale), maximumScale)
     }
 
-    /// The 2× background, rendered synchronously when it is not cached.
-    static func image(for page: Page, assetsDirectory: URL?, usesDarkPaper: Bool = false) -> InkImage? {
-        let key = baseKey(for: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
-        if let cached = cached(key: key, scale: baseScale) {
-            return cached
-        }
-
-        guard let image = PaperAppearance.image(
-            strokes: [],
-            pageSize: CGSize(width: page.width, height: page.height),
-            template: page.template,
-            elements: page.visibleElements,
-            assetsDirectory: assetsDirectory,
-            scale: baseScale,
-            usesDarkPaper: usesDarkPaper
-        ) else { return nil }
-
-        store(image, key: key, scale: baseScale, page: page)
-        return image
-    }
-
     static func removeAll() {
         cache.removeAllObjects()
     }
 
     /// Renders the 2× paper of a page the user is likely to open next, off
-    /// the main actor, so `image(for:)` finds it cached.
+    /// the main actor, so the page's `PaperBackground` finds it cached.
     ///
-    /// Opening a page draws its paper synchronously on the main actor when it
-    /// is not cached. That is cheap for templates, but a PDF page or photo
-    /// costs tens of milliseconds (a scanned PDF page: ~77 ms at 2× on an
-    /// M-class Mac, release; more on a base iPad), a visible stall just as
-    /// the page activates. Only such pages are pre-rendered; `page` is the
-    /// page as drawn (`withoutTape`).
+    /// An uncached page is rendered off the main actor when it activates, so a
+    /// PDF page or photo (tens of milliseconds at 2×: a scanned PDF page is
+    /// ~77 ms on an M-class Mac, release, more on a base iPad) would otherwise
+    /// show plain paper until its image arrived. Only such pages are
+    /// pre-rendered; `page` is the page as drawn (`withoutTape`).
     static func prewarm(_ page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) async {
         let isCostly = page.visibleElements.contains { element in
             switch element.content {

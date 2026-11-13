@@ -11,6 +11,8 @@ enum PDFImportError: LocalizedError {
     case passwordRequired
     case wrongPassword
     case insertFailed
+    /// Some, or all, of the chosen pages were written before the import stopped.
+    case partialInsert(added: Int, total: Int)
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +22,10 @@ enum PDFImportError: LocalizedError {
         case .passwordRequired: "This PDF is protected. Enter its password to import it."
         case .wrongPassword: "That password did not work. Try again."
         case .insertFailed: "The PDF pages could not be added to this notebook."
+        case let .partialInsert(added, total):
+            added >= total
+                ? "All \(total) pages were added, but the notebook could not be updated. Close this sheet instead of importing again."
+                : "\(added) of \(total) pages were added before the import stopped. Those pages are already in the notebook, so close this sheet instead of importing again."
         }
     }
 }
@@ -188,7 +194,15 @@ enum PDFImporter {
         let inserted = await session.insertPages(pages, at: index) { written, total in
             onProgress?(0.8 + 0.2 * Double(written) / Double(max(total, 1)))
         }
-        guard inserted == pages.count else { throw PDFImportError.insertFailed }
+        guard inserted == pages.count else {
+            // The pages written before the failure are on disk and already in the
+            // notebook, so say how many landed instead of a bare failure the user
+            // would retry and duplicate.
+            let insertedIDs = Set(pages.map(\.id))
+            let added = session.manifest.pageOrder.filter(insertedIDs.contains).count
+            guard added > 0 else { throw PDFImportError.insertFailed }
+            throw PDFImportError.partialInsert(added: added, total: pages.count)
+        }
         onProgress?(1)
 
         return PDFPageInsertResult(

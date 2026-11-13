@@ -90,13 +90,24 @@ public final class VectorPDFWriter {
 
 /// PDFKit additions to an exported PDF: editable ink annotations.
 public enum VectorPDFAnnotations {
-    /// Adds one PDF ink annotation per stroke of `strokes` to `pdfPage`, so
-    /// other apps can select, move, recolour or erase each stroke.
+    /// True when a stroke's ink is see-through. Its opacity cannot survive as
+    /// an annotation — PDFKit writes an ink annotation's colour as `/C`, which
+    /// has no alpha component, and refuses to set the constant opacity `/CA`
+    /// (PDFKit reads that name as a widget's caption) — so such strokes are
+    /// drawn into the page as vectors instead of becoming annotations.
+    public static func isTranslucent(_ record: StrokeRecord) -> Bool {
+        record.tool.color.a < 1
+    }
+
+    /// Adds one PDF ink annotation per opaque stroke of `strokes` to
+    /// `pdfPage`, so other apps can select, move, recolour or erase each
+    /// stroke.
     ///
     /// `strokes` are in page points with y down (as stored); `pageHeight` flips
-    /// them into PDF space. The border width is the stroke's median ink width
-    /// and the colour carries the stroke's opacity; a highlighter keeps its
-    /// translucent colour.
+    /// them into PDF space. The border width is the stroke's median ink width.
+    /// Translucent strokes — highlighters, and anything drawn with a
+    /// see-through colour, see `isTranslucent` — are skipped: an annotation
+    /// would come out opaque, so the caller flattens them into the page.
     @discardableResult
     public static func addInkAnnotations(
         for strokes: [StrokeRecord],
@@ -105,6 +116,7 @@ public enum VectorPDFAnnotations {
     ) -> Int {
         var added = 0
         for record in strokes {
+            guard !isTranslucent(record) else { continue }
             guard let line = VectorPageRenderer.centreLine(for: record) else { continue }
             var points = StrokeOutline.simplified(
                 line.points.map { CGPoint(x: $0.x, y: pageHeight - $0.y) },

@@ -110,6 +110,21 @@ final class ZoomViewState {
 
 // MARK: - Panel
 
+/// The writing area's last reported size. A reference type, so recording a
+/// new size does not invalidate the panel.
+private final class SizeReport {
+    private var size: CGSize = .zero
+
+    /// True when `newSize` differs from the recorded one by more than a point,
+    /// and records it.
+    func record(_ newSize: CGSize) -> Bool {
+        guard abs(newSize.width - size.width) > 1 || abs(newSize.height - size.height) > 1
+        else { return false }
+        size = newSize
+        return true
+    }
+}
+
 /// The panel under the page: a bar with the band buttons (its top edge
 /// resizes the panel), then the magnified band with the canvas on top.
 struct ZoomWindowPanel<Canvas: View>: View {
@@ -133,6 +148,11 @@ struct ZoomWindowPanel<Canvas: View>: View {
 
     static var barHeight: CGFloat { 40 }
     @State private var dragStartHeight: CGFloat?
+    /// The writing area last reported. Dragging the panel's edge lays the
+    /// panel out every frame; writing the parent's state again for a size it
+    /// already has would redraw the whole editor each frame, so a report is
+    /// only sent when the size really changed.
+    @State private var reportedSize = SizeReport()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -242,7 +262,10 @@ struct ZoomWindowPanel<Canvas: View>: View {
             // Tape outside the band is clipped away; keep its taps in too.
             .contentShape(Rectangle())
         }
-        .onGeometryChange(for: CGSize.self, of: { $0.size }, action: onWritingSizeChange)
+        .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
+            guard reportedSize.record(size) else { return }
+            onWritingSizeChange(size)
+        }
     }
 
     /// The right part of the band: a stroke that ends here moves the band on.

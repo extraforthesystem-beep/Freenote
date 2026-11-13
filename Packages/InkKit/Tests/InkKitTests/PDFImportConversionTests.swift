@@ -65,6 +65,75 @@ struct PDFImportConversionTests {
         #expect(abs(stroke.width - 3) < 0.01)
     }
 
+    @Test("An annotation's constant opacity becomes the stroke's alpha")
+    func constantOpacity() throws {
+        // PDFKit reads /CA as a widget caption, so a translucent ink
+        // annotation from another app carries its opacity in the PDF itself
+        // and PDFKit drops it from its own accessors. The annotation is given
+        // the value under a throwaway name, then the saved bytes are renamed:
+        // same length, so the file stays valid.
+        let document = try makeDocument()
+        let page = try #require(document.page(at: 0))
+        addInk(to: page, subpaths: [[CGPoint(x: 10, y: 10), CGPoint(x: 40, y: 10)]])
+        let annotation = try #require(page.annotations.first)
+        annotation.setValue(
+            NSNumber(value: 0.4),
+            forAnnotationKey: PDFAnnotationKey(rawValue: "/CX")
+        )
+        var saved = try #require(document.dataRepresentation())
+        let placeholder = Data("/CX 0.4".utf8)
+        let opacity = Data("/CA 0.4".utf8)
+        #expect(placeholder.count == opacity.count)
+        var searchStart = saved.startIndex
+        var replaced = 0
+        while let range = saved.range(of: placeholder, in: searchStart..<saved.endIndex) {
+            saved.replaceSubrange(range, with: opacity)
+            searchStart = range.lowerBound + opacity.count
+            replaced += 1
+        }
+        #expect(replaced > 0)
+
+        let reopened = try #require(PDFDocument(data: saved)?.page(at: 0))
+        let stroke = try #require(
+            PDFImportConversion.inkStrokes(in: reopened, pageSize: Self.pageSize).first
+        )
+        #expect(abs(stroke.color.a - 0.4) < 0.01)
+        // The colour itself is unchanged: only the alpha carries the opacity.
+        #expect(stroke.color.r > 0.9)
+        #expect(stroke.color.g < 0.1)
+    }
+
+    @Test("Ink exported as annotations comes back where it was after a save")
+    func exportedInkRoundTripsThroughFile() throws {
+        let document = try makeDocument()
+        let page = try #require(document.page(at: 0))
+        let stroke = PDFImportConversion.strokeRecords(
+            for: [PDFInkStroke(
+                color: .black,
+                width: 3,
+                points: [CGPoint(x: 40, y: 50), CGPoint(x: 150, y: 260)]
+            )],
+            layerID: UUID()
+        )
+        let added = VectorPDFAnnotations.addInkAnnotations(
+            for: stroke,
+            to: page,
+            pageHeight: Self.pageSize.height
+        )
+        #expect(added == 1)
+
+        let saved = try #require(document.dataRepresentation())
+        let reopened = try #require(PDFDocument(data: saved)?.page(at: 0))
+        let strokes = PDFImportConversion.inkStrokes(in: reopened, pageSize: Self.pageSize)
+
+        let points = try #require(strokes.first?.points)
+        let xs = points.map(\.x), ys = points.map(\.y)
+        #expect(abs((xs.min() ?? 0) - 40) < 1)
+        #expect(abs((xs.max() ?? 0) - 150) < 1)
+        #expect(abs((ys.min() ?? 0) - 50) < 1)
+        #expect(abs((ys.max() ?? 0) - 260) < 1)
+    }
+
     @Test("Each subpath of one annotation is its own stroke")
     func keepsSubpathsApart() throws {
         let document = try makeDocument()
@@ -342,9 +411,13 @@ struct PDFImportConversionTests {
         subpaths: [[CGPoint]],
         lineWidth: CGFloat? = 3
     ) {
-        let path = platformPath(subpaths)
+        // PDFKit ink paths are relative to the annotation's bounds origin.
+        let bounds = platformPath(subpaths).bounds.insetBy(dx: -2, dy: -2)
+        let path = platformPath(subpaths.map { subpath in
+            subpath.map { CGPoint(x: $0.x - bounds.minX, y: $0.y - bounds.minY) }
+        })
         let annotation = PDFAnnotation(
-            bounds: path.bounds,
+            bounds: bounds,
             forType: .ink,
             withProperties: nil
         )

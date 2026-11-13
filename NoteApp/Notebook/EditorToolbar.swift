@@ -13,8 +13,9 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     @Bindable var editor: EditorToolState
     let controller: PencilCanvasController
     @Binding var showsThumbnails: Bool
-    let isRecording: Bool
-    let recordingLabel: String
+    /// The notebook's recording state and elapsed time. A view of its own
+    /// reads it, so the 2 Hz timer redraws only the recording label.
+    let audio: NotebookAudio
     let onBack: () -> Void
     let onStopRecording: () -> Void
     /// Opens the notebook's Clear Page confirmation.
@@ -119,20 +120,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View>: View {
     private var trailing: some View {
         HStack(spacing: 2) {
             readOnlyButton
-            if isRecording {
-                Button(action: onStopRecording) {
-                    HStack(spacing: 5) {
-                        Circle().fill(.red).frame(width: 8, height: 8)
-                        Text(recordingLabel)
-                            .font(.caption.monospacedDigit())
-                    }
-                    .padding(.horizontal, 8)
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Stop recording, \(recordingLabel)")
-            }
+            RecordingLabelButton(audio: audio, onStop: onStopRecording)
             Menu {
                 moreMenu()
             } label: {
@@ -863,6 +851,39 @@ private struct ToolbarDivider: View {
         Divider()
             .frame(height: 24)
             .padding(.horizontal, 4)
+    }
+}
+
+/// The toolbar's recording button with its elapsed time.
+///
+/// A view of its own: the elapsed time ticks twice a second, and reading it in
+/// the toolbar's body redrew the whole editor pane at that rate.
+private struct RecordingLabelButton: View {
+    let audio: NotebookAudio
+    let onStop: () -> Void
+
+    var body: some View {
+        if audio.isRecording {
+            let label = Self.label(for: audio.elapsed)
+            Button(action: onStop) {
+                HStack(spacing: 5) {
+                    Circle().fill(.red).frame(width: 8, height: 8)
+                    Text(label)
+                        .font(.caption.monospacedDigit())
+                }
+                .padding(.horizontal, 8)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop recording, \(label)")
+        }
+    }
+
+    /// Elapsed time as minutes and seconds.
+    static func label(for elapsed: TimeInterval) -> String {
+        let total = max(0, Int(elapsed))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 

@@ -815,8 +815,11 @@ final class NotebookSession: Identifiable {
     /// from the in-memory page so hiding a layer never deletes its ink, and
     /// known strokes keep their place so the stacking never reshuffles.
     /// Strokes that disappear are tombstoned so a merge cannot bring them back.
-    func strokesChanged(_ strokes: [StrokeRecord]) {
+    /// - Parameter pageID: the page the canvas was showing. A report that lands
+    ///   after a page change is dropped, or it would overwrite the new page.
+    func strokesChanged(_ strokes: [StrokeRecord], onPage pageID: UUID? = nil) {
         guard var updated = page else { return }
+        if let pageID, pageID != updated.id { return }
         let shown = Set(updated.layers.filter(\.isVisible).map(\.id))
         let notShown = Set(updated.strokes.map(\.layerID)).subtracting(shown)
         let merge = StrokeOrder.merge(

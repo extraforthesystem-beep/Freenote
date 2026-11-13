@@ -25,6 +25,8 @@ struct LibraryView: View {
     @State private var isSearchPresented = false
     @State private var showsEmptyTrashAlert = false
     @State private var showsSettings = false
+    /// Hits grouped once per search, instead of on every body pass.
+    @State private var searchGroups: [NotebookSearchGroup] = []
 
     /// The library search's source filter; a change searches again.
     private var searchSources: Binding<Set<PageTextSource>> {
@@ -75,6 +77,9 @@ struct LibraryView: View {
             // A query belongs to the screen it was typed on.
             model.clearSearch()
         }
+        .onChange(of: model.search.hits) { _, hits in
+            searchGroups = groupedSearchHits(hits)
+        }
         .background(AppColor.groupedBackground)
         .background(alignment: .topLeading) { newNotebookShortcut }
         .alert("Rename notebook", isPresented: renameAlert) {
@@ -91,9 +96,13 @@ struct LibraryView: View {
             TextField("Folder name", text: $newFolderName)
             Button("Cancel", role: .cancel) { newFolderName = "" }
             Button("Create") {
-                Task { await model.createFolder(named: newFolderName, parentID: newFolderParent) }
+                // Read the name now: the task runs after the field is cleared.
+                let name = newFolderName
+                let parent = newFolderParent
+                Task { await model.createFolder(named: name, parentID: parent) }
                 newFolderName = ""
             }
+            .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .alert("Rename folder", isPresented: renameFolderAlert) {
             TextField("Folder name", text: $renameFolderText)
@@ -227,7 +236,7 @@ struct LibraryView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     OutlineGroup(folderNodes, children: \.children) { node in
-                        folderRow(node.folder)
+                        folderRow(node.folder, depth: node.depth)
                     }
                 }
             }
@@ -254,10 +263,11 @@ struct LibraryView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    beginCreatingFolder(parent: nil)
+                    beginCreatingFolder(parent: newFolderParentForLocation())
                 } label: {
                     Label("New Folder", systemImage: "folder.badge.plus")
                 }
+                .disabled(!canAddFolderAtSelection)
             }
         }
     }
@@ -279,6 +289,7 @@ struct LibraryView: View {
 
     private struct FolderNode: Identifiable {
         let folder: Folder
+        let depth: Int
         let children: [FolderNode]?
         var id: UUID { folder.id }
     }
@@ -290,17 +301,17 @@ struct LibraryView: View {
     private func folderNodes(parent: UUID?, depth: Int) -> [FolderNode] {
         // A hand-edited folders.json could contain a cycle; stop descending instead
         // of recursing forever.
-        guard depth < 12 else { return [] }
+        guard depth < AppModel.maxFolderDepth else { return [] }
         return model.folderTree.folders
             .filter { $0.parentID == parent }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             .map { folder in
                 let children = folderNodes(parent: folder.id, depth: depth + 1)
-                return FolderNode(folder: folder, children: children.isEmpty ? nil : children)
+                return FolderNode(folder: folder, depth: depth, children: children.isEmpty ? nil : children)
             }
     }
 
-    private func folderRow(_ folder: Folder) -> some View {
+    private func folderRow(_ folder: Folder, depth: Int) -> some View {
         Label {
             Text(folder.name)
         } icon: {
@@ -309,7 +320,7 @@ struct LibraryView: View {
         }
         .badge(model.notebookCount(inFolder: folder.id))
         .tag(AppModel.Location.folder(folder.id))
-        .contextMenu { folderMenu(folder) }
+        .contextMenu { folderMenu(folder, depth: depth) }
         .dropDestination(for: String.self) { items, _ in
             guard let text = items.first, let notebookID = UUID(uuidString: text) else { return false }
             Task { await model.moveNotebook(withID: notebookID, to: folder.id) }
@@ -317,10 +328,17 @@ struct LibraryView: View {
         }
     }
 
+    /// True when a folder one level down would still be shown by the tree.
+    private func canAddSubfolder(at depth: Int) -> Bool {
+        depth + 1 < AppModel.maxFolderDepth
+    }
+
     @ViewBuilder
-    private func folderMenu(_ folder: Folder) -> some View {
-        Button("New Subfolder", systemImage: "folder.badge.plus") {
-            beginCreatingFolder(parent: folder.id)
+    private func folderMenu(_ folder: Folder, depth: Int) -> some View {
+        if canAddSubfolder(at: depth) {
+            Button("New Subfolder", systemImage: "folder.badge.plus") {
+                beginCreatingFolder(parent: folder.id)
+            }
         }
         Button("Rename", systemImage: "pencil") {
             renameFolderTarget = folder
@@ -369,10 +387,13 @@ struct LibraryView: View {
         }
     }
 
-    /// Every folder a folder may move into: not itself, not its descendants.
+    /// Every folder a folder may move into: not itself, not its descendants, and
+    /// not one so deep that the moved folder would leave the visible tree.
     private func folderMoveTargets(for folder: Folder) -> [AppModel.FolderPath] {
         let excluded = model.descendantFolderIDs(of: folder.id)
-        return model.folderPaths.filter { !excluded.contains($0.id) }
+        return model.folderPaths.filter {
+            !excluded.contains($0.id) && canAddSubfolder(at: $0.depth)
+        }
     }
 
     private var folderColors: [FolderColorOption] {
@@ -463,14 +484,15 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var notebookLibrary: some View {
+        let visibleNotebooks = model.visibleNotebooks
         if let loadError = model.loadError {
             loadErrorView(loadError)
         } else if model.isSearching {
-            searchResults
-        } else if model.visibleNotebooks.isEmpty {
+            searchResults(visibleNotebooks)
+        } else if visibleNotebooks.isEmpty {
             emptyState
         } else {
-            notebookGrid
+            notebookGrid(visibleNotebooks)
         }
     }
 
@@ -555,6 +577,7 @@ struct LibraryView: View {
             Button("New Folder", systemImage: "folder.badge.plus") {
                 beginCreatingFolder(parent: newFolderParentForLocation())
             }
+            .disabled(!canAddFolderAtSelection)
         } label: {
             Label("New", systemImage: "plus")
         }
@@ -578,6 +601,14 @@ struct LibraryView: View {
     private func newFolderParentForLocation() -> UUID? {
         if case .folder(let folderID) = model.selectedLocation { return folderID }
         return nil
+    }
+
+    /// The selected folder cannot take a subfolder once it is at the depth limit.
+    private var canAddFolderAtSelection: Bool {
+        guard case .folder(let folderID) = model.selectedLocation,
+              let depth = model.folderPaths.first(where: { $0.id == folderID })?.depth
+        else { return true }
+        return canAddSubfolder(at: depth)
     }
 
     private func loadErrorView(_ message: String) -> some View {
@@ -612,12 +643,22 @@ struct LibraryView: View {
 
     /// Search hits grouped under the notebook they came from. Sections inside a
     /// notebook follow the order "Written Notes", "Text", "PDFs".
-    private var searchGroups: [NotebookSearchGroup] {
-        let byNotebook = Dictionary(grouping: model.search.hits) { $0.notebookID }
-        return byNotebook.compactMap { notebookID, hits in
+    ///
+    /// Runs when the hits change, not on every render: the library's body reads
+    /// this list for its sections and chips.
+    private func groupedSearchHits(_ hits: [SearchKit.SearchHit]) -> [NotebookSearchGroup] {
+        let byNotebook = Dictionary(grouping: hits) { $0.notebookID }
+        return byNotebook.compactMap { notebookID, hits -> NotebookSearchGroup? in
             guard let notebook = model.notebook(withID: notebookID) else { return nil }
-            // A hit whose page has been deleted is stale.
-            let live = hits.filter { model.pageNumber(notebookID: notebookID, pageID: $0.pageID) != nil }
+            // A hit whose page has been deleted is stale. Older records have no
+            // page number, so it comes from the manifest while grouping here.
+            let live = hits.compactMap { hit -> SearchKit.SearchHit? in
+                guard let index = notebook.pageOrder.firstIndex(of: hit.pageID) else { return nil }
+                guard hit.pageIndex == 0 else { return hit }
+                var resolved = hit
+                resolved.pageIndex = index + 1
+                return resolved
+            }
             guard !live.isEmpty else { return nil }
             let sorted = live.sorted { lhs, rhs in
                 if lhs.pageIndex != rhs.pageIndex { return lhs.pageIndex < rhs.pageIndex }
@@ -637,16 +678,16 @@ struct LibraryView: View {
 
     /// A search runs over the whole library, so every notebook with a matching title
     /// is listed here regardless of the selected sidebar row.
-    private var searchResults: some View {
+    private func searchResults(_ visibleNotebooks: [NotebookManifest]) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 if let error = model.search.lastError {
                     searchErrorRow(error)
                 }
 
-                if !model.visibleNotebooks.isEmpty {
+                if !visibleNotebooks.isEmpty {
                     resultSection("Notebooks") {
-                        ForEach(model.visibleNotebooks, id: \.id) { notebook in
+                        ForEach(visibleNotebooks, id: \.id) { notebook in
                             Button {
                                 Task { await model.open(notebook) }
                             } label: {
@@ -662,7 +703,7 @@ struct LibraryView: View {
                     notebookSearchGroupView(group)
                 }
 
-                if model.visibleNotebooks.isEmpty && searchGroups.isEmpty {
+                if visibleNotebooks.isEmpty && searchGroups.isEmpty {
                     if model.search.isIndexing {
                         HStack(spacing: 10) {
                             ProgressView()
@@ -752,14 +793,15 @@ struct LibraryView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(alignment: .top, spacing: 10) {
                                 ForEach(sourceHits) { hit in
-                                    SearchHitChip(hit: hit, pageLabel: pageLabel(for: hit)) {
+                                    SearchHitChip(hit: hit, pageLabel: hit.pageLabel) {
                                         Task {
                                             await model.open(
                                                 group.notebook,
                                                 pageID: hit.pageID,
                                                 highlighting: SearchHighlight(
                                                     query: model.searchText,
-                                                    sources: model.search.filter.sources
+                                                    sources: model.search.filter.sources,
+                                                    dateRange: model.search.dateRange
                                                 )
                                             )
                                         }
@@ -785,24 +827,15 @@ struct LibraryView: View {
         return "\(matches) match\(matches == 1 ? "" : "es") in \(pages) page\(pages == 1 ? "" : "s")"
     }
 
-    /// The index knows the number; the library is the fallback for older records.
-    private func pageLabel(for hit: SearchKit.SearchHit) -> String {
-        if hit.pageIndex > 0 { return "p.\(hit.pageIndex)" }
-        if let number = model.pageNumber(notebookID: hit.notebookID, pageID: hit.pageID) {
-            return "p.\(number)"
-        }
-        return "Page"
-    }
-
     // MARK: - Grid
 
-    private var notebookGrid: some View {
+    private func notebookGrid(_ visibleNotebooks: [NotebookManifest]) -> some View {
         ScrollView {
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: 20)],
                 spacing: 24
             ) {
-                ForEach(model.visibleNotebooks, id: \.id) { notebook in
+                ForEach(visibleNotebooks, id: \.id) { notebook in
                     NotebookCard(
                         notebook: notebook,
                         store: model.store,
@@ -933,8 +966,9 @@ struct LibraryView: View {
     // MARK: - Trash
 
     private var trashList: some View {
-        List {
-            ForEach(model.visibleNotebooks, id: \.id) { notebook in
+        let visibleNotebooks = model.visibleNotebooks
+        return List {
+            ForEach(visibleNotebooks, id: \.id) { notebook in
                 HStack(spacing: 14) {
                     Image(systemName: "book.closed")
                         .font(.title3)
@@ -967,7 +1001,7 @@ struct LibraryView: View {
             }
         }
         .overlay {
-            if model.visibleNotebooks.isEmpty {
+            if visibleNotebooks.isEmpty {
                 ContentUnavailableView(
                     "No Deleted Notebooks",
                     systemImage: "trash",

@@ -142,6 +142,7 @@ struct NotebookPane: View {
     @State private var exportDocument: PDFExportDocument?
     @State private var pngDocument: PNGExportDocument?
     @State private var isExporting = false
+    @State private var isExportingPNG = false
     @State private var exportProgress: PDFExportProgress?
     @State private var showsExportOptions = false
     @State private var showExporter = false
@@ -201,8 +202,7 @@ struct NotebookPane: View {
                 editor: editor,
                 controller: controller,
                 showsThumbnails: $showsThumbnails,
-                isRecording: session.audio.isRecording,
-                recordingLabel: elapsedLabel,
+                audio: session.audio,
                 onBack: { model.showLibrary() },
                 onStopRecording: { Task { await session.audio.stopRecording() } },
                 onClearPage: { showsClearPageConfirmation = true },
@@ -222,9 +222,15 @@ struct NotebookPane: View {
                     .padding(.bottom, 12)
                 }
             #if os(iOS)
-            if showsZoomView, let page = session.page {
-                zoomPanel(page)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            if showsZoomView {
+                // `session.page` changes with every stroke, so the panel is
+                // hosted in its own view: reading the page here would redraw
+                // this body — the toolbar, both menus and every modifier —
+                // once per stroke.
+                ZoomViewSection(session: session) { page in
+                    zoomPanel(page)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             #endif
             if showsThumbnails {
@@ -242,6 +248,11 @@ struct NotebookPane: View {
         .animation(.easeInOut(duration: 0.2), value: bannerState)
         .onAppear {
             Task { await session.audio.load() }
+            // Opened from a search: show its results beside the marked pages.
+            if session.searchHighlight != nil { showsSearch = true }
+        }
+        .onChange(of: session.searchHighlight) { _, highlight in
+            if highlight != nil { showsSearch = true }
         }
         .onDisappear {
             session.audio.stopPlayback()
@@ -404,11 +415,15 @@ struct NotebookPane: View {
             NotebookSearchPanel(
                 notebookID: session.notebookID,
                 search: model.search,
+                activeHighlight: session.searchHighlight,
+                initialPageID: session.currentPageID,
                 onHighlight: { session.searchHighlight = $0 }
             ) { pageID in
                 guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
                 Task { await session.goToPage(index) }
             }
+            // A new panel per notebook, so one notebook's results never list in another.
+            .id(session.notebookID)
             .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
         }
         .sheet(isPresented: $showsAudio) {
@@ -478,7 +493,7 @@ struct NotebookPane: View {
         if session.errorMessage != nil { state.append("error") }
         if hasLayerBlock { state.append("layer") }
         if showsLassoHint { state.append("lasso") }
-        if isExporting { state.append("export") }
+        if isExporting || isExportingPNG { state.append("export") }
         return state
     }
 
@@ -537,19 +552,18 @@ struct NotebookPane: View {
             case nil:
                 EmptyView()
             }
-            if isExporting {
+            if isExporting || isExportingPNG {
                 EditorBanner(
                     systemImage: "square.and.arrow.up",
-                    message: exportProgress.map {
-                        "\($0.isAddingAnnotations ? "Adding ink to" : "Exporting") page \(min($0.pagesCompleted + 1, $0.pageCount)) of \($0.pageCount)…"
-                    }
-                        ?? "Preparing the PDF…",
+                    message: exportBannerMessage,
                     tint: .accentColor
                 )
                 .overlay(alignment: .bottom) {
-                    ProgressView(value: exportProgress?.fraction ?? 0)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 4)
+                    if let exportProgress {
+                        ProgressView(value: exportProgress.fraction)
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 4)
+                    }
                 }
             }
             if showsLassoHint, !hasLayerBlock {
@@ -562,6 +576,17 @@ struct NotebookPane: View {
             }
         }
         .padding(.top, 10)
+    }
+
+    /// What the export banner says: page progress for a PDF export, or which
+    /// file is being prepared before the first page reports.
+    private var exportBannerMessage: String {
+        guard let exportProgress else {
+            return isExportingPNG ? "Preparing the PNG…" : "Preparing the PDF…"
+        }
+        let verb = exportProgress.isAddingAnnotations ? "Adding ink to" : "Exporting"
+        let page = min(exportProgress.pagesCompleted + 1, exportProgress.pageCount)
+        return "\(verb) page \(page) of \(exportProgress.pageCount)…"
     }
 
     // MARK: - Menus
@@ -750,7 +775,7 @@ struct NotebookPane: View {
             Button("Export Page as PNG…", systemImage: "photo") {
                 exportPNG()
             }
-            .disabled(session.currentPageID == nil)
+            .disabled(session.currentPageID == nil || isExportingPNG)
         }
     }
 
@@ -822,18 +847,27 @@ struct NotebookPane: View {
     }
 
     private func exportPNG() {
-        guard let page = session.page,
-              let data = NotebookExporter.pngData(
-                  page: page,
-                  assetsDirectory: session.assetsDirectory
-              )
-        else {
+        guard let page = session.page else {
             exportError = "The page could not be rendered."
             return
         }
-        pngDocument = PNGExportDocument(data: data)
-        pngFilename = "\(exportFilename) - Page \(session.currentPageNumber)"
-        showPNGExporter = true
+        let filename = "\(exportFilename) - Page \(session.currentPageNumber)"
+        Task {
+            isExportingPNG = true
+            defer { isExportingPNG = false }
+            // Rendered off the main actor: a page-sized PNG takes long enough
+            // to draw and encode to freeze the editor.
+            guard let data = await NotebookExporter.pngData(
+                page: page,
+                assetsDirectory: session.assetsDirectory
+            ) else {
+                exportError = "The page could not be rendered."
+                return
+            }
+            pngDocument = PNGExportDocument(data: data)
+            pngFilename = filename
+            showPNGExporter = true
+        }
     }
 
     #if os(macOS)
@@ -932,11 +966,6 @@ struct NotebookPane: View {
             .map { allowed.contains($0) ? Character($0) : "-" }
         let name = String(cleaned).trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? "Notebook" : name
-    }
-
-    private var elapsedLabel: String {
-        let total = max(0, Int(session.audio.elapsed))
-        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     // MARK: - Page
@@ -1079,7 +1108,7 @@ struct NotebookPane: View {
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
                 eraseHighlighterOnly: eraserHighlighterOnly,
                 usesDarkPaper: usesDarkPaper,
-                onStrokesChanged: { session.strokesChanged($0) }
+                onStrokesChanged: { [pageID = page.id] in session.strokesChanged($0, onPage: pageID) }
             )
             .id(page.id)
 
@@ -1263,7 +1292,7 @@ struct NotebookPane: View {
     /// ends in the advance area moves the band on once the Pencil stays up.
     private func zoomStrokesChanged(_ records: [StrokeRecord], on page: Page) {
         let known = Set(session.visibleStrokes.map(\.id))
-        session.strokesChanged(records)
+        session.strokesChanged(records, onPage: page.id)
         guard zoomAutoAdvance, editor.tool.drawsInk,
               let band = zoomBand(page),
               let newest = records.last(where: { !known.contains($0.id) }),
@@ -1324,3 +1353,22 @@ struct NotebookPane: View {
         }
     }
 }
+
+#if os(iOS)
+/// Hosts the Zoom View panel below the page.
+///
+/// The panel is drawn for the active page, and `session.page` changes with
+/// every stroke. Reading it in this small view's body keeps the redraw to the
+/// panel and leaves the pane's own body — the toolbar, both menus and its
+/// modifiers — alone.
+private struct ZoomViewSection<Panel: View>: View {
+    let session: NotebookSession
+    @ViewBuilder let panel: (Page) -> Panel
+
+    var body: some View {
+        if let page = session.page {
+            panel(page)
+        }
+    }
+}
+#endif

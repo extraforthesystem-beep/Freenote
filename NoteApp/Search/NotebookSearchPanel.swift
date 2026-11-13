@@ -11,29 +11,39 @@ struct NotebookSearchPanel: View {
     private let search: HandwritingSearch
     private let onSelectPage: (UUID) -> Void
     private let onHighlight: (SearchHighlight?) -> Void
+    /// The search the pages already mark, e.g. from the library search.
+    private let activeHighlight: SearchHighlight?
 
     @State private var query = ""
     @State private var sources = Set(PageTextSource.allCases)
     @State private var dateRange = SearchDateRange.anyTime
     @State private var hits: [SearchKit.SearchHit] = []
     @State private var selectedPageID: UUID?
+    /// Consumed by the first search, so later searches start at the first result.
+    @State private var pendingInitialPageID: UUID?
     @State private var searchTask: Task<Void, Never>?
 
     /// - Parameters:
     ///   - notebookID: the notebook to search; the index is scoped to it.
     ///   - search: the app's shared `HandwritingSearch`, which owns the index.
+    ///   - activeHighlight: the search the pages already mark; the panel adopts it.
+    ///   - initialPageID: the page the first search should land on, when it has a match.
     ///   - onHighlight: called with the query the page should mark, or nil to clear the marks.
     ///   - onSelectPage: called with the page ID of the chosen result.
     init(
         notebookID: UUID,
         search: HandwritingSearch,
+        activeHighlight: SearchHighlight? = nil,
+        initialPageID: UUID? = nil,
         onHighlight: @escaping (SearchHighlight?) -> Void = { _ in },
         onSelectPage: @escaping (UUID) -> Void
     ) {
         self.notebookID = notebookID
         self.search = search
         self.onHighlight = onHighlight
+        self.activeHighlight = activeHighlight
         self.onSelectPage = onSelectPage
+        _pendingInitialPageID = State(initialValue: initialPageID)
     }
 
     var body: some View {
@@ -54,6 +64,10 @@ struct NotebookSearchPanel: View {
         }
         .onChange(of: dateRange) { _, _ in
             scheduleSearch(query)
+        }
+        .onAppear { adopt(activeHighlight) }
+        .onChange(of: activeHighlight) { _, highlight in
+            adopt(highlight)
         }
         .onDisappear {
             searchTask?.cancel()
@@ -243,9 +257,30 @@ struct NotebookSearchPanel: View {
             let found = await search.search(trimmed, in: notebookID, sources: sources, dateRange: dateRange)
             guard !Task.isCancelled else { return }
             hits = found
-            onHighlight(SearchHighlight(query: trimmed, sources: sources))
-            selectedPageID = pageResults.first?.pageID
+            onHighlight(SearchHighlight(query: trimmed, sources: sources, dateRange: dateRange))
+            // The first search lands on the page a search hit asked for; every
+            // later search starts at the first result.
+            let requested = pendingInitialPageID
+            pendingInitialPageID = nil
+            if let requested, pageResults.contains(where: { $0.pageID == requested }) {
+                selectedPageID = requested
+            } else {
+                selectedPageID = pageResults.first?.pageID
+            }
         }
+    }
+
+    /// Shows the results of a search started outside the panel, so the list
+    /// matches the marks already on the pages.
+    private func adopt(_ highlight: SearchHighlight?) {
+        guard let highlight,
+              highlight.query != query.trimmingCharacters(in: .whitespacesAndNewlines)
+                || highlight.sources != sources
+                || highlight.dateRange != dateRange
+        else { return }
+        sources = highlight.sources
+        dateRange = highlight.dateRange
+        query = highlight.query
     }
 
     private func select(_ result: PageResult) {
