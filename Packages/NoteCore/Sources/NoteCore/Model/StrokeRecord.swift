@@ -68,7 +68,8 @@ public struct StrokeRecord: Codable, Hashable, Sendable, Identifiable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let transform = try container.decode([Double].self, forKey: .transform)
+        let transform = try container.decodeIfPresent([Double].self, forKey: .transform)
+            ?? StrokeRecord.identityTransform
         guard transform.count == StrokeRecord.transformElementCount else {
             throw DecodingError.dataCorruptedError(
                 forKey: .transform,

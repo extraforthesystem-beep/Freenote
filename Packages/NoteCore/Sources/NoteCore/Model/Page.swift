@@ -60,6 +60,18 @@ public struct Page: Sendable, Hashable, Codable {
             self.isVisible = isVisible
             self.isLocked = isLocked
         }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, isVisible, isLocked
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            isVisible = try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true
+            isLocked = try container.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
+        }
     }
 
     /// Builds a new, empty page with its required single layer.
@@ -78,17 +90,23 @@ public struct Page: Sendable, Hashable, Codable {
         case deletedStrokeIDs, deletedElementIDs
     }
 
+    /// `id`, `width` and `height` were part of the first format, so a file
+    /// without them is not a page. Everything else may be absent: a file written
+    /// before a field existed decodes with the same default its initialiser
+    /// gives, and a file that has the field round-trips it exactly.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+            ?? SchemaVersion.initial
         id = try container.decode(UUID.self, forKey: .id)
         width = try container.decode(Double.self, forKey: .width)
         height = try container.decode(Double.self, forKey: .height)
-        template = try container.decode(PageTemplate.self, forKey: .template)
-        layers = try container.decode([Layer].self, forKey: .layers)
-        strokes = try container.decode([StrokeRecord].self, forKey: .strokes)
-        elements = try container.decode([PageElement].self, forKey: .elements)
-        let identifiers = try container.decode([String].self, forKey: .deletedStrokeIDs)
+        template = try container.decodeIfPresent(PageTemplate.self, forKey: .template) ?? .blank
+        layers = try container.decodeIfPresent([Layer].self, forKey: .layers)
+            ?? [Layer(id: UUID(), name: "Layer 1")]
+        strokes = try container.decodeIfPresent([StrokeRecord].self, forKey: .strokes) ?? []
+        elements = try container.decodeIfPresent([PageElement].self, forKey: .elements) ?? []
+        let identifiers = try container.decodeIfPresent([String].self, forKey: .deletedStrokeIDs) ?? []
         var deleted = Set<UUID>()
         for identifier in identifiers {
             guard let uuid = UUID(uuidString: identifier) else {

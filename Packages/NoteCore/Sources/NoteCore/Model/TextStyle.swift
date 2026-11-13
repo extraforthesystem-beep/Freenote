@@ -30,5 +30,20 @@ public struct TextStyle: Codable, Hashable, Sendable {
         self.lineSpacing = lineSpacing
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case isBold, isItalic, isUnderline, alignment, lineSpacing
+    }
+
+    /// Every field has a model default, so a style written by a build that only
+    /// knew some of them still reads as a complete style.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isBold = try container.decodeIfPresent(Bool.self, forKey: .isBold) ?? false
+        isItalic = try container.decodeIfPresent(Bool.self, forKey: .isItalic) ?? false
+        isUnderline = try container.decodeIfPresent(Bool.self, forKey: .isUnderline) ?? false
+        alignment = try container.decodeIfPresent(Alignment.self, forKey: .alignment) ?? .leading
+        lineSpacing = try container.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? 2
+    }
+
     public static let regular = TextStyle()
 }

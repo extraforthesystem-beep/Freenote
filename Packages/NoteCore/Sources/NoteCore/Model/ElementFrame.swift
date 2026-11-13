@@ -16,4 +16,17 @@ public struct ElementFrame: Codable, Hashable, Sendable {
         self.height = height
         self.rotation = rotation
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case x, y, width, height, rotation
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        x = try container.decode(Double.self, forKey: .x)
+        y = try container.decode(Double.self, forKey: .y)
+        width = try container.decode(Double.self, forKey: .width)
+        height = try container.decode(Double.self, forKey: .height)
+        rotation = try container.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
+    }
 }
