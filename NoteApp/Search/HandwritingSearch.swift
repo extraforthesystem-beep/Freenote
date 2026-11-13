@@ -1,3 +1,4 @@
+import AudioKit
 import Foundation
 import NoteCore
 import Observation
@@ -73,6 +74,7 @@ final class HandwritingSearch {
         var reReadAfterUpdate = 0
         var published: [PageSearchRecord] = []
         pages: for notebook in notebooks {
+            let audio = await audioTranscripts(for: notebook.id, store: store)
             for (offset, pageID) in notebook.pageOrder.enumerated() {
                 if Task.isCancelled { break pages }
                 if let page = try? await store.loadPage(pageID, in: notebook.id) {
@@ -87,6 +89,11 @@ final class HandwritingSearch {
                             page: page,
                             in: notebook.id,
                             pageIndex: offset + 1,
+                            transcriptText: AudioTranscriptIndex.text(
+                                for: page,
+                                clips: audio.clips,
+                                transcripts: audio.transcripts
+                            ),
                             using: recognizer,
                             assetsDirectory: store.assetsDirectoryURL(for: notebook.id)
                         ) {
@@ -169,6 +176,7 @@ final class HandwritingSearch {
         let batch = index
         await batch.beginDeferringWrites()
         var published: [PageSearchRecord] = []
+        let audio = await audioTranscripts(for: notebook.id, store: store)
         for (offset, pageID) in notebook.pageOrder.enumerated() {
             if Task.isCancelled { break }
             guard let page = try? await store.loadPage(pageID, in: notebook.id) else { continue }
@@ -176,6 +184,11 @@ final class HandwritingSearch {
                 page: page,
                 in: notebook.id,
                 pageIndex: offset + 1,
+                transcriptText: AudioTranscriptIndex.text(
+                    for: page,
+                    clips: audio.clips,
+                    transcripts: audio.transcripts
+                ),
                 using: recognizer,
                 assetsDirectory: store.assetsDirectoryURL(for: notebook.id)
             ) {
@@ -187,6 +200,26 @@ final class HandwritingSearch {
         }
         await endDeferringWrites(of: batch)
         await publish(published)
+    }
+
+    /// The clips and saved transcripts of one notebook, for adding spoken words
+    /// to the pages that were written during a recording.
+    private func audioTranscripts(
+        for notebookID: UUID,
+        store: LibraryStore
+    ) async -> (clips: [AudioClip], transcripts: [UUID: Transcript]) {
+        let root = NotebookAudio.audioDirectory(for: store, notebookID: notebookID)
+        let clips = (try? await AudioClipStore(rootURL: root).list()) ?? []
+        let stored = (try? await TranscriptStore(
+            rootURL: root.appendingPathComponent("transcripts", isDirectory: true)
+        ).list()) ?? []
+        let transcripts = Dictionary(
+            stored.compactMap { transcript in
+                transcript.clipID.map { ($0, transcript) }
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        return (clips, transcripts)
     }
 
     func search(_ query: String) async {

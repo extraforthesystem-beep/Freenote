@@ -1,3 +1,4 @@
+import AudioKit
 import InkKit
 import NoteCore
 import SwiftUI
@@ -262,6 +263,12 @@ struct NotebookPane: View {
                                     .transition(.move(edge: .bottom).combined(with: .opacity))
                                 }
                                 #endif
+                                #if os(iOS)
+                                if session.audio.hasActiveClip {
+                                    NowPlayingBar(audio: session.audio)
+                                        .padding(.horizontal, 12)
+                                }
+                                #endif
                                 // Reading Mode is one clean page: no page chrome.
                                 if !editor.isReadingMode {
                                     PageCounterPill(session: session) { index in
@@ -306,8 +313,16 @@ struct NotebookPane: View {
         .animation(.easeInOut(duration: 0.2), value: bannerState)
         .onAppear {
             Task { await session.audio.load() }
+            session.audio.replayPageChanged(session.visibleStrokes)
             // Opened from a search: show its results beside the marked pages.
             if session.searchHighlight != nil { showsSearch = true }
+        }
+        .onChange(of: session.currentPageID) { _, _ in
+            // Replay seeks wait on the ink of the page in view.
+            session.audio.replayPageChanged(session.visibleStrokes)
+        }
+        .onChange(of: session.audio.playingClipID) { _, _ in
+            session.audio.replayPageChanged(session.visibleStrokes)
         }
         .onChange(of: session.searchHighlight) { _, highlight in
             if highlight != nil { showsSearch = true }
@@ -519,7 +534,11 @@ struct NotebookPane: View {
         }
         #endif
         .sheet(isPresented: $showsAudio) {
-            AudioRecordingsView(session: session)
+            AudioRecordingsView(session: session) {
+                // Spoken words become searchable as soon as they are recognised,
+                // not only when the notebook closes.
+                Task { await model.search.index(notebook: session.manifest, store: session.store) }
+            }
         }
         .sheet(isPresented: $showsAI) {
             NoteAIPanel(
@@ -1418,8 +1437,72 @@ struct NotebookPane: View {
         )
     }
 
+    // MARK: - Audio replay
+
+    /// The stroke time the audio playhead stands at, when Follow is on and this
+    /// page has ink from the recording. Ink written after it is faded.
+    private func replayCutoff() -> Date? {
+        guard session.audio.followsPlayhead, let clip = session.audio.activeClip else {
+            return nil
+        }
+        let strokes = session.visibleStrokes
+        guard strokes.contains(where: { clip.contains($0.createdAt) }) else { return nil }
+        if let active = strokes.first(where: { $0.id == session.audio.activeStrokeID }) {
+            return active.createdAt
+        }
+        // Before the first stroke of the clip, everything from it is still ahead.
+        return clip.startedAt
+    }
+
+    /// Where the now-playing marker sits: the end of the stroke the recording
+    /// has reached.
+    private func activeReplayPoint() -> CGPoint? {
+        guard let strokeID = session.audio.activeStrokeID,
+              let stroke = session.visibleStrokes.first(where: { $0.id == strokeID })
+        else { return nil }
+        return ZoomBand.endPoint(of: stroke)
+    }
+
+    /// A finger tap on ink plays the recording from the moment that ink was
+    /// written. Taps on blank paper, and ink from outside a recording, do
+    /// nothing. The lasso and element tools keep their own taps.
+    ///
+    /// The interaction is always installed, so the canvas's tap recogniser
+    /// exists before the reader's first tap; the tool check lives in
+    /// ``replayInk(at:)``.
+    private var replayFingerInteraction: CanvasFingerInteraction {
+        #if targetEnvironment(simulator)
+        // PencilKit draws with any input on the simulator, so a finger tap would
+        // ink a dot as well as seek. There, replay is driven from the transcript
+        // and the now-playing bar instead.
+        return CanvasFingerInteraction()
+        #else
+        return CanvasFingerInteraction(onTap: { point in
+            replayInk(at: point)
+        })
+        #endif
+    }
+
+    private func replayInk(at point: CGPoint) {
+        // With finger drawing on, the tap inks first; it is not a seek.
+        guard !editor.isReadOnly, !drawWithFinger else { return }
+        switch editor.tool {
+        case .pen, .highlighter, .eraser: break
+        case .lasso, .laser, .elements, .links: return
+        }
+        let strokes = session.visibleStrokes
+        guard let stroke = ReplayTarget.nearestStroke(to: point, in: strokes) else { return }
+        session.audio.replay(from: stroke, strokes: strokes)
+    }
+
     private func pageContent(_ page: Page) -> some View {
-        ZStack(alignment: .topLeading) {
+        // While a recording plays with Follow on, ink it has not reached yet is
+        // faded, and the canvas takes no ink so the two views cannot disagree.
+        let cutoff = replayCutoff()
+        let shownStrokes = cutoff.map {
+            ReplayInk.fading(session.visibleStrokes, after: $0)
+        } ?? session.visibleStrokes
+        return ZStack(alignment: .topLeading) {
             // Tape is drawn by `TapeOverlay` above the ink so it can hide and
             // reveal it; leaving it in the background would show through.
             PaperBackground(
@@ -1441,12 +1524,12 @@ struct NotebookPane: View {
             }
 
             PencilCanvasView(
-                strokes: session.visibleStrokes,
+                strokes: shownStrokes,
                 pageSize: CGSize(width: page.width, height: page.height),
                 tool: editor.inkTool,
-                mode: canvasMode,
+                mode: cutoff == nil ? canvasMode : .disabled,
                 activeLayerID: session.activeLayerID ?? page.layers.first?.id ?? UUID(),
-                isEditable: canvasIsEditable,
+                isEditable: canvasIsEditable && cutoff == nil,
                 isRulerActive: isRulerActive,
                 controller: controller,
                 drawsWithFinger: drawWithFinger,
@@ -1473,7 +1556,14 @@ struct NotebookPane: View {
                     guard editor.tool == .lasso, !ids.isEmpty else { return }
                     selection.strokeIDs = Set(ids)
                 },
-                onStrokesChanged: { [pageID = page.id] in session.strokesChanged($0, onPage: pageID) }
+                fingerInteraction: replayFingerInteraction,
+                onStrokesChanged: { records in
+                    // Follow mode hands the canvas faded copies of the page's
+                    // ink. The canvas takes no input then, so any report (an
+                    // undo from the toolbar) must not write those copies back.
+                    guard cutoff == nil else { return }
+                    session.strokesChanged(records, onPage: page.id)
+                }
             )
             .id(page.id)
 
@@ -1494,6 +1584,10 @@ struct NotebookPane: View {
                 allowsHitTesting: editor.tool != .elements && editor.tool != .laser,
                 onTap: { session.toggleTapeRevealed($0) }
             )
+
+            if let point = activeReplayPoint() {
+                NowPlayingMarker(point: point)
+            }
 
             if showsZoomView, let band = zoomBand(page) {
                 ZoomFrameOverlay(
