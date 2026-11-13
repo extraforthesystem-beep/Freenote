@@ -61,6 +61,12 @@ public enum PenStyle: String, CaseIterable, Codable, Hashable, Sendable {
     public var defaultWidth: Double {
         Double(inkType.defaultWidth)
     }
+
+    /// The widths PencilKit accepts for this ink, in points.
+    public var widthRange: ClosedRange<Double> {
+        let range = inkType.validWidthRange
+        return Double(range.lowerBound)...Double(range.upperBound)
+    }
 }
 
 // MARK: - InkTool
@@ -96,6 +102,13 @@ public struct InkTool: Codable, Hashable, Sendable {
     )
 
     public var inkType: PKInk.InkType { isHighlighter ? .marker : style.inkType }
+
+    /// The widths PencilKit accepts for this tool. A highlighter is a marker,
+    /// so it shares the marker's range.
+    public var widthRange: ClosedRange<Double> {
+        let range = inkType.validWidthRange
+        return Double(range.lowerBound)...Double(range.upperBound)
+    }
 
     /// The PencilKit tool for this pen. A highlighter is a marker with the
     /// stored translucent colour; a normal pen keeps its exact colour.
