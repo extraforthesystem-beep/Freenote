@@ -110,6 +110,10 @@ final class EditorToolState {
     private(set) var penWidthPresets: WidthPresets
     /// The three width slots the highlighter shows in the toolbar.
     private(set) var highlighterWidthPresets: WidthPresets
+    /// Stroke stabilisation, 0...100, for new pen strokes.
+    private(set) var penSmoothing: Int
+    /// Stroke stabilisation, 0...100, for new highlighter strokes.
+    private(set) var highlighterSmoothing: Int
     /// Saved pens: style, colour and width. Owns its own persistence.
     let favoritePens: FavoritePens
     /// Bumped when the Apple Pencil asks for the colour palette. The toolbar
@@ -121,6 +125,9 @@ final class EditorToolState {
 
     static let eraserWidths: [Double] = [6, 12, 24, 48]
     static let highlighterAlpha = 0.35
+    /// The default stabilisation of each ink tool. PencilKit smooths its own
+    /// live ink; this is the extra pass over what is stored.
+    static let defaultSmoothing = 25
     /// Shared with the eraser popover's `@AppStorage` toggle.
     static let eraserAutoDeselectKey = "eraserAutoDeselect"
 
@@ -134,6 +141,8 @@ final class EditorToolState {
         static let highlighterFavorites = "noteapp.editor.highlighterFavorites.v1"
         static let penWidthPresets = "noteapp.editor.penWidthPresets.v1"
         static let highlighterWidthPresets = "noteapp.editor.highlighterWidthPresets.v1"
+        static let penSmoothing = "noteapp.editor.penSmoothing"
+        static let highlighterSmoothing = "noteapp.editor.highlighterSmoothing"
         static let recentColors = "noteapp.editor.recentColors.v1"
         /// The pre-palette list of five recent colours, migrated once.
         static let legacySwatches = "noteapp.editor.swatches.v1"
@@ -189,9 +198,19 @@ final class EditorToolState {
             highlighterWidthPresets = WidthPresets(WidthPresetDefaults.highlighter)
         }
 
+        penSmoothing = Self.storedSmoothing(defaults, key: Keys.penSmoothing)
+        highlighterSmoothing = Self.storedSmoothing(defaults, key: Keys.highlighterSmoothing)
+
         tool = Self.restoredTool(in: defaults)
         if tool.drawsInk { lastInkTool = tool }
         previousTool = tool.drawsInk ? tool : .pen
+    }
+
+    /// A stored stabilisation, or the default when the key has never been
+    /// written. Clamped to 0...100 so a bad stored value cannot escape.
+    private static func storedSmoothing(_ defaults: UserDefaults, key: String) -> Int {
+        guard defaults.object(forKey: key) != nil else { return defaultSmoothing }
+        return min(max(defaults.integer(forKey: key), 0), 100)
     }
 
     /// The tool a newly opened notebook starts with. Remembering is a setting;
@@ -238,6 +257,16 @@ final class EditorToolState {
     /// The ink tool shown on the canvas and edited by colour and width.
     var inkTool: InkTool {
         activeInkTool == .highlighter ? highlighterTool : penTool
+    }
+
+    /// The stabilisation of the active ink tool, 0...100.
+    var smoothing: Int {
+        activeInkTool == .highlighter ? highlighterSmoothing : penSmoothing
+    }
+
+    /// The active pen's line style; a highlighter is always solid.
+    var lineStyle: PenLineStyle {
+        inkTool.isHighlighter ? .solid : inkTool.lineStyle
     }
 
     #if os(iOS)
@@ -452,6 +481,28 @@ final class EditorToolState {
         scheduleSave()
     }
 
+    // MARK: - Smoothing and line style
+
+    /// Sets the active ink tool's stabilisation, 0...100.
+    func setSmoothing(_ value: Int) {
+        let clamped = min(max(value, 0), 100)
+        if activeInkTool == .highlighter {
+            highlighterSmoothing = clamped
+        } else {
+            penSmoothing = clamped
+        }
+        scheduleSave()
+    }
+
+    /// Sets the pen's dash pattern. Highlighters keep solid ink.
+    func setLineStyle(_ style: PenLineStyle) {
+        guard !inkTool.isHighlighter else { return }
+        var updated = inkTool
+        updated.lineStyle = style
+        presets.update(updated)
+        scheduleSave()
+    }
+
     // MARK: - Persistence
 
     private func scheduleSave() {
@@ -476,6 +527,8 @@ final class EditorToolState {
         defaults.set(eraserKind.rawValue, forKey: Keys.eraserKind)
         defaults.set(eraserWidth, forKey: Keys.eraserWidth)
         defaults.set(laserMode.rawValue, forKey: Keys.laserMode)
+        defaults.set(penSmoothing, forKey: Keys.penSmoothing)
+        defaults.set(highlighterSmoothing, forKey: Keys.highlighterSmoothing)
         if let data = try? JSONEncoder().encode(penFavorites) {
             defaults.set(data, forKey: Keys.penFavorites)
         }

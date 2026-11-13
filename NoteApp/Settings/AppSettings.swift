@@ -1,4 +1,5 @@
 import Foundation
+import InkKit
 import NoteCore
 
 /// The app's preferences, stored in `UserDefaults`.
@@ -25,6 +26,9 @@ enum AppSettings {
         static let threeFingerDoubleTapRedo = "noteapp.settings.threeFingerDoubleTapRedo"
         static let pencilDoubleTapAction = "noteapp.settings.pencilDoubleTapAction"
         static let eraserHighlighterOnly = "noteapp.settings.eraserHighlighterOnly"
+        static let eraserFilter = "noteapp.settings.eraserFilter"
+        static let scratchOutToErase = "noteapp.settings.scratchOutToErase"
+        static let highlighterStraightLines = "noteapp.settings.highlighterStraightLines"
         static let boardDotGrid = "noteapp.settings.boardDotGrid"
         static let pageScrollMode = "noteapp.settings.pageScrollMode"
         static let rememberLastTool = "noteapp.settings.rememberLastTool"
@@ -117,6 +121,16 @@ enum AppSettings {
     /// stays where it is.
     static var eraserHighlighterOnly: Bool {
         bool(Key.eraserHighlighterOnly, default: false)
+    }
+
+    /// The stored raw value that means "never chosen": a build before the
+    /// filter only had "Erase Highlighter Only".
+    static let eraserFilterUnset = -1
+
+    /// The filter for a stored raw value, migrating the old switch.
+    static func eraserFilter(rawValue: Int) -> EraserFilter {
+        guard rawValue >= 0 else { return eraserHighlighterOnly ? .highlighter : .all }
+        return EraserFilter(rawValue: rawValue)
     }
 
     // MARK: - Handwriting recognition

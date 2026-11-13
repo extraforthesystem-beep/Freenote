@@ -5,14 +5,23 @@ import Foundation
 public enum RecognizedShape: Equatable, Sendable {
     /// A straight line from the first point to the second.
     case line(CGPoint, CGPoint)
+    /// A line with an arrowhead at `tip`.
+    case arrow(tail: CGPoint, tip: CGPoint)
     /// An open path of two to four straight segments through these vertices.
     case polyline([CGPoint])
     /// A closed triangle through three corners.
     case triangle(CGPoint, CGPoint, CGPoint)
     /// A closed four-sided shape, corners in drawing order. A rectangle (axis
     /// aligned or rotated) when the drawn corners were close to right angles,
-    /// otherwise the drawn quadrilateral with straightened sides.
+    /// a rhombus when all four sides are about equal, otherwise the drawn
+    /// quadrilateral with straightened sides.
     case rectangle([CGPoint])
+    /// A closed four-sided diamond: equal sides, corners in drawing order.
+    case rhombus([CGPoint])
+    /// A closed five-sided shape, corners in drawing order.
+    case pentagon([CGPoint])
+    /// A closed six-sided shape, corners in drawing order.
+    case hexagon([CGPoint])
     /// An ellipse; a circle when the radii are equal. `rotation` is the angle
     /// of the x radius in radians.
     case ellipse(center: CGPoint, radiusX: CGFloat, radiusY: CGFloat, rotation: CGFloat)
@@ -49,6 +58,7 @@ public struct ShapeRecognizer: Sendable {
         let length = Self.pathLength(Self.simplify(points, epsilon: max(1.5, 0.015 * diagonal)))
         guard length > 0 else { return nil }
 
+        if let arrow = recognizeArrow(points, diagonal: diagonal) { return arrow }
         if let line = recognizeLine(points, length: length) { return line }
 
         let gap = Self.distance(points[0], points[points.count - 1])
@@ -56,6 +66,43 @@ public struct ShapeRecognizer: Sendable {
             if let closed = recognizeClosed(points, diagonal: diagonal) { return closed }
         }
         return recognizeOpenPolyline(points, diagonal: diagonal)
+    }
+
+    // MARK: Arrow
+
+    /// A stroke that runs out to a tip and comes back with two short barbs on
+    /// opposite sides of the shaft. The tail may be drawn as a V or as a
+    /// pigtail that passes the tip again.
+    private func recognizeArrow(_ points: [CGPoint], diagonal: CGFloat) -> RecognizedShape? {
+        guard points.count >= 4 else { return nil }
+        // The tip is the point farthest from where the stroke started.
+        guard let tipIndex = points.indices.max(by: {
+            Self.distance(points[0], points[$0]) < Self.distance(points[0], points[$1])
+        }), tipIndex >= 2, tipIndex <= points.count - 3 else { return nil }
+
+        let tail = points[0]
+        let tip = points[tipIndex]
+        let shaft = Self.distance(tail, tip)
+        guard shaft >= minimumSize else { return nil }
+
+        let head = Array(points[tipIndex...])
+        let barbs = Self.simplify(head, epsilon: max(1.5, 0.03 * shaft))
+        guard barbs.count >= 3 else { return nil }
+
+        let shaftX = tip.x - tail.x, shaftY = tip.y - tail.y
+        var left: CGFloat = 0, right: CGFloat = 0
+        var reach: CGFloat = 0
+        for point in barbs.dropFirst() {
+            let dx = point.x - tip.x, dy = point.y - tip.y
+            reach = max(reach, hypot(dx, dy))
+            let lateral = (shaftX * dy - shaftY * dx) / shaft
+            if lateral > left { left = lateral }
+            if -lateral > right { right = -lateral }
+        }
+        // Both barbs must be present, of a believable size, and near the tip.
+        guard left > 0.07 * shaft, right > 0.07 * shaft, reach < 0.5 * shaft else { return nil }
+        guard left < 0.6 * shaft, right < 0.6 * shaft else { return nil }
+        return .arrow(tail: tail, tip: snappedLineEnd(from: tail, to: tip))
     }
 
     // MARK: Line
@@ -104,7 +151,9 @@ public struct ShapeRecognizer: Sendable {
     private func recognizeClosed(_ input: [CGPoint], diagonal: CGFloat) -> RecognizedShape? {
         let points = Self.trimmedOvershoot(input)
         guard points.count >= 4 else { return nil }
-        let tolerance = max(2, 0.05 * diagonal)
+        // Tight enough that a polygon's corners survive the simplification:
+        // with a looser tolerance a long edge swallows its corner.
+        let tolerance = max(2, 0.035 * diagonal)
 
         // Split at the point farthest from the start so both halves are open
         // paths, simplify them, then join into one loop.
@@ -116,23 +165,111 @@ public struct ShapeRecognizer: Sendable {
             loop = Self.mergeCollinear(loop, closed: true, minimumTurn: 28 * .pi / 180)
             loop = Self.dropShortSegments(loop, closed: true, minimumLength: 0.07 * Self.pathLength(points))
             loop = Self.mergeCollinear(loop, closed: true, minimumTurn: 28 * .pi / 180)
-            if (3...4).contains(loop.count),
+            if (3...6).contains(loop.count),
                Self.maxDeviation(points, from: loop, closed: true) <= tolerance * 1.6 {
-                if loop.count == 3 { return .triangle(loop[0], loop[1], loop[2]) }
-                return .rectangle(regularizedQuad(loop))
+                switch loop.count {
+                case 3:
+                    return .triangle(loop[0], loop[1], loop[2])
+                case 4:
+                    if isNearlyRightAngled(loop) {
+                        return .rectangle(regularizedQuad(loop))
+                    }
+                    if isRhombus(loop) {
+                        return .rhombus(regularizedRhombus(loop))
+                    }
+                    return .rectangle(regularizedQuad(loop))
+                case 5:
+                    if isPolygon(loop) { return .pentagon(loop) }
+                case 6:
+                    if isPolygon(loop) { return .hexagon(loop) }
+                default:
+                    break
+                }
             }
         }
         return fitEllipse(points)
     }
 
+    /// Every corner turns the same way by about the angle a regular polygon
+    /// needs, the sides are of similar length and the corners sit at a similar
+    /// distance from the centre. A simplified ellipse fails all three: its
+    /// turns and sides vary with the radius.
+    private func isPolygon(_ loop: [CGPoint]) -> Bool {
+        let n = CGFloat(loop.count)
+        guard n >= 5 else { return false }
+        let turns = (0..<loop.count).map { index in
+            Self.turn(loop[(index + loop.count - 1) % loop.count], loop[index], loop[(index + 1) % loop.count])
+        }
+        let clockwise = turns.allSatisfy { $0 > 0 }
+        let counterClockwise = turns.allSatisfy { $0 < 0 }
+        guard clockwise || counterClockwise else { return false }
+        let swept = turns.reduce(0, +)
+        guard abs(abs(swept) - 2 * .pi) < 0.3 * .pi else { return false }
+
+        let expected = 2 * .pi / n
+        guard turns.allSatisfy({ abs(abs($0) - expected) < 0.45 * expected }) else { return false }
+
+        let sides = (0..<loop.count).map { Self.distance(loop[$0], loop[($0 + 1) % loop.count]) }
+        guard let shortest = sides.min(), let longest = sides.max(), shortest > 0,
+              longest / shortest < 2.2
+        else { return false }
+
+        let center = CGPoint(
+            x: loop.map(\.x).reduce(0, +) / n,
+            y: loop.map(\.y).reduce(0, +) / n
+        )
+        let radii = loop.map { Self.distance($0, center) }
+        guard let nearest = radii.min(), let farthest = radii.max(), nearest > 0,
+              farthest / nearest < 1.6
+        else { return false }
+        return true
+    }
+
+    /// A quad whose corners are all near 90°.
+    private func isNearlyRightAngled(_ quad: [CGPoint]) -> Bool {
+        (0..<4).allSatisfy { index in
+            let turn = abs(Self.turn(quad[(index + 3) % 4], quad[index], quad[(index + 1) % 4]))
+            return abs(turn - .pi / 2) < 22 * .pi / 180
+        }
+    }
+
+    /// A quad with four sides of about equal length and no right angles: a
+    /// diamond rather than a rectangle or a general parallelogram.
+    private func isRhombus(_ quad: [CGPoint]) -> Bool {
+        let sides = (0..<4).map { Self.distance(quad[$0], quad[($0 + 1) % 4]) }
+        guard let shortest = sides.min(), let longest = sides.max(), shortest > 0 else { return false }
+        return longest / shortest < 1.28
+    }
+
+    /// A rhombus with perpendicular diagonals, keeping the drawn position,
+    /// orientation and roughly the drawn proportions.
+    private func regularizedRhombus(_ quad: [CGPoint]) -> [CGPoint] {
+        let center = CGPoint(
+            x: quad.map(\.x).reduce(0, +) / 4,
+            y: quad.map(\.y).reduce(0, +) / 4
+        )
+        let first = CGPoint(x: quad[2].x - quad[0].x, y: quad[2].y - quad[0].y)
+        let second = CGPoint(x: quad[3].x - quad[1].x, y: quad[3].y - quad[1].y)
+        let firstLength = hypot(first.x, first.y)
+        guard firstLength > 0 else { return quad }
+        let direction = CGPoint(x: first.x / firstLength, y: first.y / firstLength)
+        // The part of the second diagonal across the first: a real rhombus has
+        // perpendicular diagonals.
+        let across = abs((second.x * -direction.y + second.y * direction.x))
+        let secondLength = across > firstLength * 0.15 ? across : hypot(second.x, second.y)
+        let normal = CGPoint(x: -direction.y, y: direction.x)
+        return [
+            CGPoint(x: center.x - direction.x * firstLength / 2, y: center.y - direction.y * firstLength / 2),
+            CGPoint(x: center.x + normal.x * secondLength / 2, y: center.y + normal.y * secondLength / 2),
+            CGPoint(x: center.x + direction.x * firstLength / 2, y: center.y + direction.y * firstLength / 2),
+            CGPoint(x: center.x - normal.x * secondLength / 2, y: center.y - normal.y * secondLength / 2),
+        ]
+    }
+
     /// A quad whose corners are all near 90° becomes an exact rectangle,
     /// axis aligned when its sides are close to horizontal and vertical.
     private func regularizedQuad(_ quad: [CGPoint]) -> [CGPoint] {
-        let nearRight = (0..<4).allSatisfy { i in
-            let turn = abs(Self.turn(quad[(i + 3) % 4], quad[i], quad[(i + 1) % 4]))
-            return abs(turn - .pi / 2) < 22 * .pi / 180
-        }
-        guard nearRight else { return quad }
+        guard isNearlyRightAngled(quad) else { return quad }
 
         // Average side direction, folded into [-45°, 45°).
         var sumX: CGFloat = 0, sumY: CGFloat = 0
@@ -233,11 +370,14 @@ public struct ShapeRecognizer: Sendable {
         switch shape {
         case let .line(a, b):
             return resample(polyline: [a, b], spacing: spacing)
+        case let .arrow(tail, tip):
+            return resample(polyline: arrowPolyline(tail: tail, tip: tip), spacing: spacing)
         case let .polyline(vertices):
             return resample(polyline: vertices, spacing: spacing)
         case let .triangle(a, b, c):
             return resample(polyline: [a, b, c, a], spacing: spacing)
-        case let .rectangle(corners):
+        case let .rectangle(corners), let .rhombus(corners),
+             let .pentagon(corners), let .hexagon(corners):
             guard let first = corners.first else { return [] }
             return resample(polyline: corners + [first], spacing: spacing)
         case let .ellipse(center, rx, ry, rotation):
@@ -259,6 +399,25 @@ public struct ShapeRecognizer: Sendable {
             if let last = points.last, distance(last, outline[0]) > 0.01 { points.append(outline[0]) }
             return points
         }
+    }
+
+    /// One stroke through the shaft and both barbs: out to the tip, back to
+    /// one barb, through the tip again and out to the other.
+    static func arrowPolyline(tail: CGPoint, tip: CGPoint) -> [CGPoint] {
+        let shaft = distance(tail, tip)
+        guard shaft > 0 else { return [tail, tip] }
+        let back = CGPoint(x: (tail.x - tip.x) / shaft, y: (tail.y - tip.y) / shaft)
+        let barbLength = 0.3 * shaft
+        let spread = 35 * CGFloat.pi / 180
+        let first = CGPoint(
+            x: tip.x + (back.x * cos(spread) - back.y * sin(spread)) * barbLength,
+            y: tip.y + (back.x * sin(spread) + back.y * cos(spread)) * barbLength
+        )
+        let second = CGPoint(
+            x: tip.x + (back.x * cos(-spread) - back.y * sin(-spread)) * barbLength,
+            y: tip.y + (back.x * sin(-spread) + back.y * cos(-spread)) * barbLength
+        )
+        return [tail, tip, first, tip, second]
     }
 
     /// Points every `spacing` along each segment, keeping every vertex.

@@ -17,6 +17,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.handwritingRecognitionEnabled) private var handwritingRecognition = true
     @AppStorage(AppSettings.Key.spotlightIndexingEnabled) private var spotlightIndexing = true
     @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
+    @AppStorage(AppSettings.Key.scratchOutToErase) private var scratchOutToErase = false
     @AppStorage(AppSettings.Key.drawWithFinger) private var drawWithFinger = false
     @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
@@ -106,6 +107,7 @@ struct SettingsView: View {
             #if os(iOS)
             Toggle("Draw with Finger", isOn: $drawWithFinger)
             Toggle("Hold to Draw Shapes", isOn: $holdToDrawShapes)
+            Toggle("Scratch to Erase", isOn: $scratchOutToErase)
             Toggle("Two-Finger Double-Tap to Undo", isOn: $twoFingerDoubleTapUndo)
             Toggle("Three-Finger Double-Tap to Redo", isOn: $threeFingerDoubleTapRedo)
             Toggle("Hide Status Bar in Notebooks", isOn: $hideStatusBar)
@@ -119,7 +121,7 @@ struct SettingsView: View {
             Text("Writing")
         } footer: {
             #if os(iOS)
-            Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last. With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, rectangle, triangle or ellipse. Keep iPad Awake stops the screen dimming while NoteApp is open. The status bar stays visible in the library.")
+            Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last. With Draw with Finger off, one finger scrolls the page and only Apple Pencil draws. Hold to Draw Shapes: pause at the end of a stroke before lifting to turn it into a straight line, arrow, triangle, rectangle, rhombus, pentagon, hexagon or ellipse. Scratch to Erase: scribble over ink with the pen to delete it. Keep iPad Awake stops the screen dimming while NoteApp is open. The status bar stays visible in the library.")
             #else
             Text("Remember Last Tool: a notebook opens with the tool, pen or highlighter you used last.")
             #endif

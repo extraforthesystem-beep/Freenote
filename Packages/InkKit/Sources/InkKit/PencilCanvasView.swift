@@ -326,6 +326,19 @@ public struct PencilCanvasView: UIViewRepresentable {
     /// Only stroke erasing uses this: highlighter strokes disappear, pen ink
     /// stays where it is.
     public var eraseHighlighterOnly: Bool
+    /// Smooths a new stroke's centre line before it is stored. 0 is off, 100
+    /// the strongest; per ink tool in the editor.
+    public var smoothing: Double
+    /// Dashed or dotted new pen strokes.
+    public var lineStyle: PenLineStyle
+    /// A highlighter strokes straight from where the Pencil landed to where it
+    /// lifted, instead of following the hand.
+    public var highlighterStraightLines: Bool
+    /// A pen scribble drawn over ink deletes the ink it covers.
+    public var scratchOutToErase: Bool
+    /// Which ink the whole-stroke eraser may remove. `eraseHighlighterOnly`
+    /// still wins when it is on, for callers that predate this filter.
+    public var eraserFilter: EraserFilter
     /// When set, the canvas shows only this rectangle of the page (page
     /// points), scaled to fill its width: a second, magnified view of the
     /// page such as Zoom View. Its strokes are still in page points. A
@@ -372,6 +385,11 @@ public struct PencilCanvasView: UIViewRepresentable {
         holdToDrawShapes: Bool = true,
         onPencilDoubleTap: ((PencilDoubleTapAction) -> Void)? = nil,
         eraseHighlighterOnly: Bool = false,
+        smoothing: Double = 0,
+        lineStyle: PenLineStyle = .solid,
+        highlighterStraightLines: Bool = false,
+        scratchOutToErase: Bool = false,
+        eraserFilter: EraserFilter = .all,
         viewport: CGRect? = nil,
         usesDarkPaper: Bool = false,
         onToolGestureBegan: (() -> Void)? = nil,
@@ -398,6 +416,11 @@ public struct PencilCanvasView: UIViewRepresentable {
         self.holdToDrawShapes = holdToDrawShapes
         self.onPencilDoubleTap = onPencilDoubleTap
         self.eraseHighlighterOnly = eraseHighlighterOnly
+        self.smoothing = smoothing
+        self.lineStyle = lineStyle
+        self.highlighterStraightLines = highlighterStraightLines
+        self.scratchOutToErase = scratchOutToErase
+        self.eraserFilter = eraserFilter
         self.viewport = viewport
         self.usesDarkPaper = usesDarkPaper
         self.onToolGestureBegan = onToolGestureBegan
@@ -893,14 +916,76 @@ public struct PencilCanvasView: UIViewRepresentable {
 
         public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingInput, !isApplyingShape else { return }
-            if parent.eraseHighlighterOnly {
-                keepNonHighlighterStrokes(in: canvasView)
+            // An undo or redo is not an eraser pass: never put back a stroke
+            // that undo itself just removed.
+            let undo = canvasView.undoManager
+            let isUndoOrRedo = undo?.isUndoing == true || undo?.isRedoing == true
+            if effectiveEraserFilter != .all, !isUndoOrRedo {
+                keepStrokesOutsideFilter(in: canvasView)
             }
             if captureHeldStroke(in: canvasView) {
                 baselineStrokes = canvasView.drawing.strokes
                 return
             }
+            if applyScratchOut(in: canvasView) {
+                baselineStrokes = canvasView.drawing.strokes
+                reportDrawingChange(canvasView)
+                return
+            }
+            decorateNewStrokes(in: canvasView)
             reportDrawingChange(canvasView)
+        }
+
+        /// The filter the stroke eraser actually uses. `eraseHighlighterOnly`
+        /// predates it and still means "highlighters only".
+        var effectiveEraserFilter: EraserFilter {
+            parent.eraseHighlighterOnly ? .highlighter : parent.eraserFilter
+        }
+
+        /// Smooths every stroke that landed in this change and applies the
+        /// pen's dash pattern, so what is on screen is what will be stored.
+        ///
+        /// The rewrite registers no undo of its own: PencilKit's "add stroke"
+        /// step still removes the stroke by id, so one undo still removes it.
+        private func decorateNewStrokes(in canvas: PKCanvasView) {
+            guard case .ink = parent.mode else { return }
+            let current = canvas.drawing.strokes
+            let known = Set(baselineStrokes.map(\.id))
+            var changed = false
+            var result: [PKStroke] = []
+            result.reserveCapacity(current.count)
+            for stroke in current {
+                guard !known.contains(stroke.id) else {
+                    result.append(stroke)
+                    continue
+                }
+                if let replacement = decorated(stroke) {
+                    changed = true
+                    result.append(replacement)
+                } else {
+                    result.append(stroke)
+                }
+            }
+            guard changed else { return }
+            canvas.undoManager?.disableUndoRegistration()
+            isApplyingInput = true
+            canvas.drawing = PKDrawing(strokes: result)
+            isApplyingInput = false
+            canvas.undoManager?.enableUndoRegistration()
+        }
+
+        /// A new stroke as the editor's settings want it stored, or nil when
+        /// nothing changes.
+        private func decorated(_ stroke: PKStroke) -> PKStroke? {
+            let isHighlighter = StrokeClassifier.isHighlighter(stroke)
+            if parent.highlighterStraightLines, isHighlighter {
+                return ShapeStrokeBuilder.straightened(stroke)
+            }
+            var result = StrokeSmoothing.smoothed(stroke, strength: parent.smoothing)
+            if parent.lineStyle != .solid, !isHighlighter {
+                result = StrokeDash.masked(result ?? stroke, style: parent.lineStyle)
+            }
+            return result
         }
 
         func reportDrawingChange(_ canvasView: PKCanvasView) {
@@ -928,16 +1013,17 @@ public struct PencilCanvasView: UIViewRepresentable {
             parent.onStrokesChanged(records)
         }
 
-        /// With "Erase Highlighter Only" on, a stroke eraser pass may only
-        /// remove highlighters: every other stroke it took goes back at its
-        /// old index. The restore is not registered with the canvas's undo
-        /// manager, so one undo still restores the whole erase.
-        private func keepNonHighlighterStrokes(in canvas: PKCanvasView) {
+        /// With a filter on, a stroke eraser pass may only remove the inks it
+        /// names: every other stroke it took goes back at its old index. The
+        /// restore is not registered with the canvas's undo manager, so one
+        /// undo still restores the whole erase.
+        private func keepStrokesOutsideFilter(in canvas: PKCanvasView) {
             guard case let .eraser(kind, _) = parent.mode, kind == .stroke else { return }
+            let filter = effectiveEraserFilter
             let current = canvas.drawing.strokes
             let currentIDs = Set(current.map(\.id))
             let removed = baselineStrokes.filter { !currentIDs.contains($0.id) }
-            guard removed.contains(where: { !Self.isHighlighter($0) }) else { return }
+            guard removed.contains(where: { !filter.allows(StrokeClassifier.kind(of: $0)) }) else { return }
 
             var live: [UUID: PKStroke] = [:]
             for stroke in current { live[stroke.id] = stroke }
@@ -948,7 +1034,7 @@ public struct PencilCanvasView: UIViewRepresentable {
                 if let stroke = live[stroke.id] {
                     restored.append(stroke)
                     keptIDs.insert(stroke.id)
-                } else if !Self.isHighlighter(stroke) {
+                } else if !filter.allows(StrokeClassifier.kind(of: stroke)) {
                     restored.append(stroke)
                     keptIDs.insert(stroke.id)
                 }
@@ -963,12 +1049,6 @@ public struct PencilCanvasView: UIViewRepresentable {
             canvas.drawing = PKDrawing(strokes: restored)
             isApplyingInput = false
             canvas.undoManager?.enableUndoRegistration()
-        }
-
-        /// A highlighter is a translucent marker, the same rule the stroke
-        /// codec uses when it stores `StrokeTool.isHighlighter`.
-        private static func isHighlighter(_ stroke: PKStroke) -> Bool {
-            stroke.ink.inkType == .marker && stroke.ink.color.cgColor.alpha < 0.99
         }
     }
 }

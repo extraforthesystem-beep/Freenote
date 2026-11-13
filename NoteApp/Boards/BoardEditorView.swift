@@ -71,7 +71,9 @@ struct BoardEditorView: View {
     @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
-    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
+    @AppStorage(AppSettings.Key.eraserFilter) private var eraserFilterRaw = AppSettings.eraserFilterUnset
+    @AppStorage(AppSettings.Key.scratchOutToErase) private var scratchOutToErase = false
+    @AppStorage(AppSettings.Key.highlighterStraightLines) private var highlighterStraightLines = false
     @AppStorage(AppSettings.Key.boardDotGrid) private var showsDotGrid = true
     #endif
 
@@ -194,7 +196,11 @@ struct BoardEditorView: View {
                 onToolGestureEnded: { editor.didEndToolGesture() },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
-                eraseHighlighterOnly: eraserHighlighterOnly,
+                smoothing: Double(editor.smoothing),
+                lineStyle: editor.lineStyle,
+                highlighterStraightLines: highlighterStraightLines,
+                scratchOutToErase: scratchOutToErase,
+                eraserFilter: AppSettings.eraserFilter(rawValue: eraserFilterRaw),
                 freeZoom: Self.zoomRange,
                 onViewportChange: { rect, zoom in
                     viewport.update(visibleRect: rect, zoom: zoom)

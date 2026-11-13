@@ -193,7 +193,9 @@ struct NotebookPane: View {
     @AppStorage(AppSettings.Key.twoFingerDoubleTapUndo) private var twoFingerDoubleTapUndo = true
     @AppStorage(AppSettings.Key.threeFingerDoubleTapRedo) private var threeFingerDoubleTapRedo = true
     @AppStorage(AppSettings.Key.pencilDoubleTapAction) private var pencilDoubleTapAction: PencilDoubleTapAction = .system
-    @AppStorage(AppSettings.Key.eraserHighlighterOnly) private var eraserHighlighterOnly = false
+    @AppStorage(AppSettings.Key.eraserFilter) private var eraserFilterRaw = AppSettings.eraserFilterUnset
+    @AppStorage(AppSettings.Key.scratchOutToErase) private var scratchOutToErase = false
+    @AppStorage(AppSettings.Key.highlighterStraightLines) private var highlighterStraightLines = false
     @State private var zoomView = ZoomViewState()
     @State private var editorHeight: CGFloat = 0
     @AppStorage(AppSettings.Key.zoomAutoAdvance) private var zoomAutoAdvance = true
@@ -1391,6 +1393,12 @@ struct NotebookPane: View {
         editor.isReadOnly ? .links : editor.canvasMode
     }
 
+    /// Which ink the stroke eraser may remove, with the old "Erase Highlighter
+    /// Only" switch migrated until a filter is chosen.
+    private var eraserFilter: EraserFilter {
+        AppSettings.eraserFilter(rawValue: eraserFilterRaw)
+    }
+
     /// Fingers needed to scroll or page. With Pencil-only drawing one finger
     /// scrolls; tools that drag with a finger (items, laser) and finger
     /// drawing (the simulator) keep it at two. The Pencil never scrolls.
@@ -1555,7 +1563,11 @@ struct NotebookPane: View {
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
-                eraseHighlighterOnly: eraserHighlighterOnly,
+                smoothing: Double(editor.smoothing),
+                lineStyle: editor.lineStyle,
+                highlighterStraightLines: highlighterStraightLines,
+                scratchOutToErase: scratchOutToErase,
+                eraserFilter: eraserFilter,
                 usesDarkPaper: usesDarkPaper,
                 fingerInteraction: replayFingerInteraction,
                 onSelectionChanged: { ids in
@@ -1746,7 +1758,11 @@ struct NotebookPane: View {
                 // The page's canvas answers the Pencil's double-tap; two
                 // answers would switch the tool and straight back.
                 onPencilDoubleTap: nil,
-                eraseHighlighterOnly: eraserHighlighterOnly,
+                smoothing: Double(editor.smoothing),
+                lineStyle: editor.lineStyle,
+                highlighterStraightLines: highlighterStraightLines,
+                scratchOutToErase: scratchOutToErase,
+                eraserFilter: eraserFilter,
                 viewport: band.rect,
                 usesDarkPaper: usesDarkPaper,
                 onToolGestureBegan: { zoomView.cancelAdvance() },
