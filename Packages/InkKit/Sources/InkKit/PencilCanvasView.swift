@@ -66,6 +66,9 @@ public final class InkCanvasView: PKCanvasView {
     /// notebook's locked fit zoom. See `PencilCanvasView.freeZoom`.
     var freeZoom: ClosedRange<CGFloat>?
     var onViewportChange: ((CGRect, CGFloat) -> Void)?
+    /// The part of the page the canvas renders when `InkCanvasHost` sizes it
+    /// for the zoom it is seen at; nil fits the whole page.
+    var renderViewport: CGRect?
     private var appliedViewport: (rect: CGRect, bounds: CGSize, page: CGSize)?
     private var didCenterFreeCanvas = false
     private var didReportFreeViewport = false
@@ -86,7 +89,7 @@ public final class InkCanvasView: PKCanvasView {
         guard pageSize.width > 0, pageSize.height > 0,
               bounds.width > 0, bounds.height > 0
         else { return }
-        if let viewport {
+        if let viewport = viewport ?? renderViewport {
             showViewport(viewport)
             return
         }
@@ -186,6 +189,14 @@ public final class InkCanvasView: PKCanvasView {
             ),
             scale
         )
+    }
+
+    /// A stroke, erase or lasso is under way.
+    var isDrawingInProgress: Bool {
+        switch drawingGestureRecognizer.state {
+        case .began, .changed: true
+        default: false
+        }
     }
 }
 
@@ -382,8 +393,9 @@ public struct PencilCanvasView: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    public func makeUIView(context: Context) -> InkCanvasView {
-        let canvas = InkCanvasView()
+    public func makeUIView(context: Context) -> InkCanvasHost {
+        let host = InkCanvasHost()
+        let canvas = host.canvas
         canvas.delegate = context.coordinator
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
@@ -397,12 +409,11 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.viewport = viewport
         canvas.freeZoom = freeZoom
         canvas.onViewportChange = onViewportChange
-        if viewport == nil {
-            canvas.contentSize = pageSize
-        } else {
-            // The panel sits above the home indicator; insets would shift ink.
-            canvas.contentInsetAdjustmentBehavior = .never
-        }
+        host.pageSize = pageSize
+        // A Zoom View canvas is already magnified by its own viewport, and a
+        // free canvas zooms itself, so PencilKit renders it sharp on its own.
+        host.managesRenderScale = viewport == nil && freeZoom == nil
+        context.coordinator.host = host
         configureFreeScroll(canvas)
         applyDrawingPolicy(to: canvas)
         canvas.tool = canvasTool(for: mode)
@@ -454,7 +465,7 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.addInteraction(pencil)
 
         context.coordinator.apply(strokes, to: canvas)
-        return canvas
+        return host
     }
 
     /// Lets the canvas itself pan and zoom, with the free range, instead of
@@ -505,10 +516,12 @@ public struct PencilCanvasView: UIViewRepresentable {
         #endif
     }
 
-    public func updateUIView(_ canvas: InkCanvasView, context: Context) {
+    public func updateUIView(_ host: InkCanvasHost, context: Context) {
+        let canvas = host.canvas
         let coordinator = context.coordinator
         coordinator.parent = self
         coordinator.canvas = canvas
+        coordinator.host = host
         if viewport == nil {
             controller?.canvas = canvas
         }
@@ -526,17 +539,13 @@ public struct PencilCanvasView: UIViewRepresentable {
             fingerInteraction?.onDragBegan != nil && !drawsWithFinger
         coordinator.undoDoubleTap?.isEnabled = undoOnTwoFingerDoubleTap
         coordinator.redoDoubleTap?.isEnabled = redoOnThreeFingerDoubleTap
-        if viewport == nil {
-            if freeZoom == nil {
-                canvas.contentSize = pageSize
-            } else if canvas.pageSize != pageSize {
-                // A zoomed canvas keeps its scroll size scaled by the zoom;
-                // resetting it to the raw page size would shrink the world.
-                canvas.contentSize = CGSize(
-                    width: pageSize.width * canvas.zoomScale,
-                    height: pageSize.height * canvas.zoomScale
-                )
-            }
+        if viewport == nil, freeZoom != nil, canvas.pageSize != pageSize {
+            // A zoomed canvas keeps its scroll size scaled by the zoom;
+            // resetting it to the raw page size would shrink the world.
+            canvas.contentSize = CGSize(
+                width: pageSize.width * canvas.zoomScale,
+                height: pageSize.height * canvas.zoomScale
+            )
         }
         if canvas.pageSize != pageSize {
             canvas.pageSize = pageSize
@@ -545,15 +554,19 @@ public struct PencilCanvasView: UIViewRepresentable {
         canvas.freeZoom = freeZoom
         canvas.onViewportChange = onViewportChange
         configureFreeScroll(canvas)
+        host.pageSize = pageSize
+        host.managesRenderScale = viewport == nil && freeZoom == nil
 
         coordinator.apply(strokes, to: canvas)
         canvas.fitPageIfNeeded()
+        host.refresh()
     }
 
     @MainActor
     public final class Coordinator: NSObject, PKCanvasViewDelegate, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
         var parent: PencilCanvasView
         weak var canvas: InkCanvasView?
+        weak var host: InkCanvasHost?
         weak var tapRecognizer: UITapGestureRecognizer?
         weak var fingerTap: UITapGestureRecognizer?
         weak var fingerPan: UIPanGestureRecognizer?
@@ -734,10 +747,12 @@ public struct PencilCanvasView: UIViewRepresentable {
             } else if parent.controller?.lastUsedCanvas != nil {
                 parent.controller?.lastUsedCanvas = nil
             }
+            host?.isToolActive = true
             parent.onToolGestureBegan?()
         }
 
         public func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            host?.isToolActive = false
             parent.onToolGestureEnded?()
         }
 
