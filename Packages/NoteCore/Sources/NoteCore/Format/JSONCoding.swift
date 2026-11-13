@@ -102,7 +102,8 @@ enum Zlib {
 /// else in the file is decoded.
 enum VersionGate {
     private struct Probe: Decodable {
-        let schemaVersion: Int
+        /// Absent on files written before the format carried a version.
+        let schemaVersion: Int?
     }
 
     static func check(_ data: Data, path: String) throws {
@@ -112,9 +113,10 @@ enum VersionGate {
         } catch {
             throw NoteCoreError.corruptFile(path: path)
         }
-        guard probe.schemaVersion <= SchemaVersion.current else {
+        let version = probe.schemaVersion ?? SchemaVersion.initial
+        guard version <= SchemaVersion.current else {
             throw NoteCoreError.unsupportedSchemaVersion(
-                found: probe.schemaVersion,
+                found: version,
                 supported: SchemaVersion.current
             )
         }

@@ -38,8 +38,10 @@ enum StudyScope: Hashable {
 /// the four FSRS grades.
 ///
 /// The pass is captured when the view appears, so "N due" and the queue agree
-/// even if the clock moves. A card that reaches its fourth lapse offers a
-/// rewrite instead of letting the same card keep failing.
+/// even if the clock moves. An Again grade keeps the card in the pass and shows
+/// it again a few cards later; the Again button says so while the card can
+/// still return. A card that reaches its fourth lapse offers a rewrite instead
+/// of letting the same card keep failing.
 struct StudyReviewView: View {
     @Bindable var study: StudyModel
     let scope: StudyScope
@@ -280,7 +282,10 @@ struct StudyReviewView: View {
             VStack(spacing: 2) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                Text(intervalLabel(days))
+                // An Again card comes back inside this pass until its
+                // requeues run out; only then is the FSRS interval the useful
+                // second line.
+                Text(quality < 3 && pass.canRequeue(item) ? "this pass" : intervalLabel(days))
                     .font(.caption2)
                     .opacity(0.8)
             }

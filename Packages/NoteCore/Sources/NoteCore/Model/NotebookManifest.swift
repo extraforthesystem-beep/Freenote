@@ -48,4 +48,27 @@ public struct NotebookManifest: Sendable, Hashable, Codable {
         self.pageScrollMode = pageScrollMode
         self.lastOpenedAt = lastOpenedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, title, coverName, pageOrder, createdAt, updatedAt
+        case deletedAt, pageScrollMode, lastOpenedAt
+    }
+
+    /// `id`, `title`, `createdAt` and `updatedAt` identify the notebook and were
+    /// part of the first manifest format. The rest may be absent: defaults match
+    /// the initialiser, and a manifest that has them round-trips them exactly.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+            ?? SchemaVersion.initial
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        coverName = try container.decodeIfPresent(String.self, forKey: .coverName)
+        pageOrder = try container.decodeIfPresent([UUID].self, forKey: .pageOrder) ?? []
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        pageScrollMode = try container.decodeIfPresent(PageScrollMode.self, forKey: .pageScrollMode)
+        lastOpenedAt = try container.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
+    }
 }

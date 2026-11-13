@@ -45,4 +45,27 @@ public struct StrokePoint: Codable, Hashable, Sendable {
         self.threshold = threshold
         self.lateralJitter = lateralJitter
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case x, y, timeOffset, width, height, opacity, force, azimuth, altitude
+        case secondaryScale, threshold, lateralJitter
+    }
+
+    /// Position and stylus state are content; Apple's shading fields are new
+    /// enough that files written before them carry no key.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        x = try container.decode(Double.self, forKey: .x)
+        y = try container.decode(Double.self, forKey: .y)
+        timeOffset = try container.decode(Double.self, forKey: .timeOffset)
+        width = try container.decode(Double.self, forKey: .width)
+        height = try container.decode(Double.self, forKey: .height)
+        opacity = try container.decode(Double.self, forKey: .opacity)
+        force = try container.decode(Double.self, forKey: .force)
+        azimuth = try container.decode(Double.self, forKey: .azimuth)
+        altitude = try container.decode(Double.self, forKey: .altitude)
+        secondaryScale = try container.decode(Double.self, forKey: .secondaryScale)
+        threshold = try container.decodeIfPresent(Double.self, forKey: .threshold) ?? 0
+        lateralJitter = try container.decodeIfPresent(Double.self, forKey: .lateralJitter) ?? 0
+    }
 }
