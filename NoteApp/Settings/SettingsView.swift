@@ -42,6 +42,7 @@ struct SettingsView: View {
             Form {
                 appearance
                 documentEditing
+                tabs
                 writing
                 #if os(iOS)
                 zoomView
@@ -89,7 +90,6 @@ struct SettingsView: View {
     private var documentEditing: some View {
         Section {
             Toggle("Show Page Number", isOn: $showPageNumber)
-            Toggle("Open Documents as New Tabs", isOn: $openDocumentsAsNewTabs)
             Picker("Page Scrolling", selection: $pageScrollMode) {
                 Text("Vertical (Seamless)").tag(PageScrollMode.vertical)
                 Text("Horizontal (Single Page)").tag(PageScrollMode.horizontal)
@@ -97,7 +97,19 @@ struct SettingsView: View {
         } header: {
             Text("Document Editing")
         } footer: {
-            Text("When off, opening a notebook replaces the current tab. A notebook can choose its own scrolling from its More menu.")
+            Text("A notebook can override its scrolling from its own More menu.")
+        }
+    }
+
+    /// Sits directly under the toggle it explains, so the sentence about
+    /// replacing the current tab no longer reads as a note on scrolling.
+    private var tabs: some View {
+        Section {
+            Toggle("Open Documents as New Tabs", isOn: $openDocumentsAsNewTabs)
+        } header: {
+            Text("Tabs")
+        } footer: {
+            Text("When off, opening a notebook replaces the tab you are reading instead of opening another.")
         }
     }
 
