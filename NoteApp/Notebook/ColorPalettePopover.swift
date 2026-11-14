@@ -14,6 +14,9 @@ struct ColorPalettePopover: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var hexText = ""
+    /// The text the field itself last put there. Anything else is the user's
+    /// own typing, which is the only value closing the popover applies.
+    @State private var hexBaseline = ""
     @State private var hexIsInvalid = false
     @FocusState private var isHexFocused: Bool
 
@@ -72,11 +75,11 @@ struct ColorPalettePopover: View {
         .padding(AppSpacing.l)
         .frame(width: 320)
         .onAppear {
-            hexText = ColorHex.string(from: shownColor)
+            showHex(of: shownColor)
         }
         .onDisappear {
-            // Closed without submitting: the typed value still counts.
-            applyTypedHex()
+            // Closed without submitting: a value the user typed still counts.
+            applyTypedHexOnClose()
         }
     }
 
@@ -196,9 +199,9 @@ struct ColorPalettePopover: View {
             selection: Binding(
                 get: { Color(shownColor) },
                 set: { color in
-                    select(RGBAColor(color))
-                    hexText = ColorHex.string(from: shownColor)
-                    hexIsInvalid = false
+                    let updated = RGBAColor(color)
+                    select(updated)
+                    showHex(of: updated)
                 }
             ),
             supportsOpacity: false
@@ -209,6 +212,14 @@ struct ColorPalettePopover: View {
     private func apply(_ color: RGBAColor) {
         select(color)
         dismissPopover()
+    }
+
+    /// Puts a colour in the field as its own baseline, so closing the popover
+    /// does not read it back as something the user typed.
+    private func showHex(of color: RGBAColor) {
+        hexText = ColorHex.string(from: color)
+        hexBaseline = hexText
+        hexIsInvalid = false
     }
 
     /// A favourite slot is replaced in place; otherwise the ink colour changes.
@@ -227,11 +238,16 @@ struct ColorPalettePopover: View {
             updateHexValidity(hexText)
             return
         }
-        hexText = ColorHex.string(from: color)
-        hexIsInvalid = false
+        showHex(of: color)
         if !isShown(color) {
             select(color)
         }
+    }
+
+    /// A value typed but never submitted, applied as the popover closes.
+    private func applyTypedHexOnClose() {
+        guard hexText != hexBaseline, let color = ColorHex.color(from: hexText) else { return }
+        select(color)
     }
 
     /// Keeps the invalid marker live while typing. Nothing else changes until
