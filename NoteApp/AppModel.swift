@@ -229,7 +229,7 @@ final class AppModel {
             notebooks = listing.manifests
             trashedNotebooks = trash.manifests
             pageRecents.prune(keepingNotebookIDs: Set((notebooks + trashedNotebooks).map(\.id)))
-            bookmarks.prepare(notebookIDs: notebooks.map(\.id))
+            await bookmarks.prepare(notebookIDs: notebooks.map(\.id))
             unreadableNotebookCount = listing.unreadableCount + trash.unreadableCount
             announceUnreadableIfNeeded()
         } catch {
