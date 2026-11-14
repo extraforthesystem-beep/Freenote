@@ -102,6 +102,9 @@ extension BackupArchive {
             } catch {
                 throw BackupError.ioFailure("could not restore \(folder.lastPathComponent): \(error)")
             }
+            // The manifest was written here, not through the store, so any cache
+            // entry for the id has to go.
+            await store.forgetCachedManifest(destinationID)
 
             guard storedManifest != nil else {
                 summary.unreadableNotebookCount += 1
