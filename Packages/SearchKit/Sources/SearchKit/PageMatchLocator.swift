@@ -42,12 +42,16 @@ public enum PageMatchLocator {
 
     /// Each occurrence of the query's words or phrases in the page's PDF text,
     /// mapped from the PDF page onto where it is drawn.
+    ///
+    /// Checks cancellation between elements and terms: a page flip with a search
+    /// open abandons the page no longer on screen.
     public static func pdfMarks(for query: SearchQuery, in page: Page, assetsDirectory: URL?) -> [PageMatchMark] {
         let terms = query.positiveTerms
-        guard !terms.isEmpty, let assetsDirectory else { return [] }
+        guard !terms.isEmpty, let assetsDirectory, !Task.isCancelled else { return [] }
 
         var marks: [PageMatchMark] = []
         for element in page.visibleElements {
+            guard !Task.isCancelled else { return marks }
             guard case let .pdfPage(assetName, pageIndex) = element.content,
                   pageIndex >= 0,
                   // Rotated PDF elements are not mapped, as for PDF links.
@@ -69,6 +73,7 @@ public enum PageMatchLocator {
             for term in terms {
                 var searchRange = NSRange(location: 0, length: text.length)
                 while searchRange.length > 0 {
+                    guard !Task.isCancelled else { return marks }
                     let found = text.range(of: term, options: options, range: searchRange)
                     guard found.location != NSNotFound, found.length > 0 else { break }
                     if let selection = pdfPage.selection(for: found) {
