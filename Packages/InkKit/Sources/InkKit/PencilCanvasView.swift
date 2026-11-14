@@ -7,26 +7,89 @@ import os
 
 /// Lets the app drive PencilKit's own undo stack from a toolbar or a menu.
 ///
-/// The canvas owns the stack; this object only forwards to it. `canUndo`
-/// and `canRedo` are read live, so re-read them when the canvas changes.
+/// The canvas owns the stack; this object forwards to it, and publishes
+/// whether a step is available so a toolbar button can disable itself. The
+/// published values are refreshed from the undo manager's own notifications,
+/// because nothing else notifies when its stack changes.
 @MainActor
 public final class PencilCanvasController: ObservableObject {
     public init() {}
 
     /// The canvas on screen; a new page gets a new canvas.
-    public internal(set) weak var canvas: InkCanvasView?
+    public internal(set) weak var canvas: InkCanvasView? {
+        didSet { observeUndoManager() }
+    }
     /// The canvas the Pencil touched last, when that is a second view of the
     /// page (Zoom View). It goes away with that view, and undo falls back to
     /// the page's canvas.
-    weak var lastUsedCanvas: InkCanvasView?
+    weak var lastUsedCanvas: InkCanvasView? {
+        didSet { observeUndoManager() }
+    }
 
     private var target: InkCanvasView? { lastUsedCanvas ?? canvas }
 
-    public var canUndo: Bool { target?.undoManager?.canUndo ?? false }
-    public var canRedo: Bool { target?.undoManager?.canRedo ?? false }
+    /// Whether `undo()` and `redo()` would change the target's drawing. Kept
+    /// current from the undo manager; assigned only when it changes.
+    @Published public private(set) var canUndo = false
+    @Published public private(set) var canRedo = false
 
-    public func undo() { target?.undoManager?.undo() }
-    public func redo() { target?.undoManager?.redo() }
+    /// Holds the undo manager observations and removes them with the
+    /// controller.
+    private final class UndoObservers {
+        var tokens: [NSObjectProtocol] = []
+
+        deinit {
+            for token in tokens {
+                NotificationCenter.default.removeObserver(token)
+            }
+        }
+    }
+
+    private let undoObservers = UndoObservers()
+
+    public func undo() {
+        target?.undoManager?.undo()
+        refreshUndoAvailability()
+    }
+
+    public func redo() {
+        target?.undoManager?.redo()
+        refreshUndoAvailability()
+    }
+
+    /// Watches the target's undo manager: every closed group, undo and redo
+    /// changes the stack, so each is a chance for the published value to move.
+    private func observeUndoManager() {
+        for token in undoObservers.tokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        undoObservers.tokens.removeAll()
+        if let undoManager = target?.undoManager {
+            let names: [Notification.Name] = [
+                .NSUndoManagerDidCloseUndoGroup,
+                .NSUndoManagerDidUndoChange,
+                .NSUndoManagerDidRedoChange,
+            ]
+            for name in names {
+                let token = NotificationCenter.default.addObserver(
+                    forName: name,
+                    object: undoManager,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refreshUndoAvailability() }
+                }
+                undoObservers.tokens.append(token)
+            }
+        }
+        refreshUndoAvailability()
+    }
+
+    private func refreshUndoAvailability() {
+        let undo = target?.undoManager?.canUndo ?? false
+        let redo = target?.undoManager?.canRedo ?? false
+        if canUndo != undo { canUndo = undo }
+        if canRedo != redo { canRedo = redo }
+    }
 
     /// Whether the canvas is on screen and the Pencil can draw on it now.
     public var acceptsInk: Bool {

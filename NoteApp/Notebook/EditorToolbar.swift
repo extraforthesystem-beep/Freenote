@@ -13,7 +13,9 @@ import UniformTypeIdentifiers
 /// menu. Reading a notebook hides the tools and shows a Read Only pill instead.
 struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     @Bindable var editor: EditorToolState
-    let controller: PencilCanvasController
+    /// Observed, so an Undo/Redo item added in Customise Toolbar follows the
+    /// canvas's undo stack instead of staying greyed until an unrelated redraw.
+    @ObservedObject var controller: PencilCanvasController
     @Binding var showsThumbnails: Bool
     /// The notebook's recording state and elapsed time. A view of its own
     /// reads it, so the 2 Hz timer redraws only the recording label. Nil on a
