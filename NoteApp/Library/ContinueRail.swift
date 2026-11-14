@@ -58,6 +58,11 @@ struct ContinueRail: View {
                                 tile(item)
                             }
                             .buttonStyle(.plain)
+                            .notebookContextActions(
+                                model: model,
+                                notebook: item.notebook,
+                                includesCover: false
+                            )
                             .accessibilityLabel(
                                 Text("Continue \(item.notebook.title), \(item.title)")
                             )

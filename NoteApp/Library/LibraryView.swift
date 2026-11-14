@@ -8,9 +8,6 @@ struct LibraryView: View {
     @Bindable var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var renameTarget: NotebookManifest?
-    @State private var renameText = ""
-    @State private var deleteTarget: NotebookManifest?
     @State private var purgeTarget: NotebookManifest?
     @State private var isCreatingFolder = false
     @State private var newFolderName = ""
@@ -20,9 +17,6 @@ struct LibraryView: View {
     @State private var deleteFolderTarget: Folder?
     @State private var showPDFImporter = false
     @State private var pdfImport: PDFImportFlow?
-    @State private var tagTarget: NotebookManifest?
-    @State private var tagsText = ""
-    @State private var coverTarget: CoverTarget?
     @State private var isSearchPresented = false
     @State private var showsEmptyTrashAlert = false
     @State private var showsSettings = false
@@ -115,16 +109,9 @@ struct LibraryView: View {
             refreshLibrary(inputs)
         }
         .background(AppColor.groupedBackground)
-        .background(alignment: .topLeading) { newNotebookShortcut }
-        .alert("Rename notebook", isPresented: renameAlert) {
-            TextField("Name", text: $renameText)
-            Button("Cancel", role: .cancel) { renameTarget = nil }
-            Button("Rename") {
-                if let target = renameTarget {
-                    Task { await model.rename(target, to: renameText) }
-                }
-                renameTarget = nil
-            }
+        .background(alignment: .topLeading) {
+            newNotebookShortcut
+            if !model.tabs.isEmpty { closeTabShortcut }
         }
         .alert("New folder", isPresented: $isCreatingFolder) {
             TextField("Folder name", text: $newFolderName)
@@ -148,17 +135,6 @@ struct LibraryView: View {
                 renameFolderTarget = nil
             }
         }
-        .alert("Move to Recently Deleted?", isPresented: deleteAlert) {
-            Button("Cancel", role: .cancel) { deleteTarget = nil }
-            Button("Delete", role: .destructive) {
-                if let target = deleteTarget {
-                    Task { await model.delete(target) }
-                }
-                deleteTarget = nil
-            }
-        } message: {
-            Text("The notebook can be restored from Recently Deleted for 30 days.")
-        }
         .alert("Delete permanently?", isPresented: purgeAlert) {
             Button("Cancel", role: .cancel) { purgeTarget = nil }
             Button("Delete", role: .destructive) {
@@ -178,19 +154,6 @@ struct LibraryView: View {
         } message: {
             Text("Every notebook in Recently Deleted is removed for good. This cannot be undone.")
         }
-        .alert("Tags", isPresented: tagAlert) {
-            TextField("Comma-separated tags", text: $tagsText)
-            Button("Cancel", role: .cancel) { tagTarget = nil }
-            Button("Save") {
-                if let target = tagTarget {
-                    let tags = tagsText.split(separator: ",").map(String.init)
-                    Task { await model.setTags(tags, for: target) }
-                }
-                tagTarget = nil
-            }
-        } message: {
-            Text("Tags belong to the library, not to the notebook file.")
-        }
         .alert("Delete this folder?", isPresented: deleteFolderAlert) {
             Button("Cancel", role: .cancel) { deleteFolderTarget = nil }
             Button("Delete", role: .destructive) {
@@ -201,12 +164,6 @@ struct LibraryView: View {
             }
         } message: {
             Text("Only the folder is removed. Its notebooks and subfolders move to the folder above it.")
-        }
-        .sheet(item: $coverTarget) { target in
-            NotebookCoverPicker(current: target.notebook.coverName) { name in
-                coverTarget = nil
-                Task { await model.setCover(name, for: target.notebook) }
-            }
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView(model: model)
@@ -243,6 +200,20 @@ struct LibraryView: View {
             Task { await model.createNotebook() }
         }
         .keyboardShortcut("n", modifiers: .command)
+        .opacity(0)
+        .frame(width: 1, height: 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// ⌘W closes the tab on screen, the library's counterpart of the editor's
+    /// Close. It exists only while a tab is open, so with no tabs the window
+    /// keeps the system's ⌘W.
+    private var closeTabShortcut: some View {
+        Button("Close Tab") {
+            if let active = model.session { model.closeTab(active) }
+        }
+        .keyboardShortcut("w", modifiers: .command)
         .opacity(0)
         .frame(width: 1, height: 1)
         .allowsHitTesting(false)
@@ -801,6 +772,13 @@ struct LibraryView: View {
                 }
             }
             Divider()
+            Menu("Close Tab", systemImage: "xmark") {
+                ForEach(model.tabs) { tab in
+                    Button(tab.manifest.title) {
+                        model.closeTab(tab)
+                    }
+                }
+            }
             Button("Close All Tabs", systemImage: "xmark.circle", role: .destructive) {
                 Task { await model.closeAllTabs() }
             }
@@ -950,6 +928,7 @@ struct LibraryView: View {
                                 notebookResultRow(notebook)
                             }
                             .buttonStyle(.plain)
+                            .notebookContextActions(model: model, notebook: notebook, includesCover: false)
                             Divider()
                         }
                     }
@@ -1132,7 +1111,7 @@ struct LibraryView: View {
                         ) {
                             Task { await model.open(notebook) }
                         }
-                        .contextMenu { cardMenu(notebook) }
+                        .notebookContextActions(model: model, notebook: notebook)
                         .draggable(notebook.id.uuidString)
                         .transition(cardTransition)
                     }
@@ -1174,70 +1153,6 @@ struct LibraryView: View {
                 .font(.caption)
                 .buttonStyle(.borderless)
             }
-        }
-    }
-
-    @ViewBuilder
-    private func cardMenu(_ notebook: NotebookManifest) -> some View {
-        Button("Open", systemImage: "book") {
-            Task { await model.open(notebook) }
-        }
-        Button("Duplicate", systemImage: "plus.square.on.square") {
-            Task { await model.duplicate(notebook) }
-        }
-        Menu("Cover", systemImage: "book.closed") {
-            Button("First Page") {
-                Task { await model.setCover(nil, for: notebook) }
-            }
-            ForEach(NotebookCoverStyle.allCases) { style in
-                Button {
-                    Task { await model.setCover(style.rawValue, for: notebook) }
-                } label: {
-                    if notebook.coverName == style.rawValue {
-                        Label(style.name, systemImage: "checkmark")
-                    } else {
-                        Text(style.name)
-                    }
-                }
-            }
-            Divider()
-            Button("Choose Cover…", systemImage: "square.grid.2x2") {
-                coverTarget = CoverTarget(notebook: notebook)
-            }
-        }
-        Button("Rename", systemImage: "pencil") {
-            renameText = notebook.title
-            renameTarget = notebook
-        }
-        Button("Tags…", systemImage: "tag") {
-            tagsText = model.tags(for: notebook.id).joined(separator: ", ")
-            tagTarget = notebook
-        }
-        Button(
-            model.isFavourite(notebook.id) ? "Remove from Favourites" : "Add to Favourites",
-            systemImage: model.isFavourite(notebook.id) ? "star.slash" : "star"
-        ) {
-            Task { await model.toggleFavourite(notebook) }
-        }
-        Menu("Move to Folder", systemImage: "folder") {
-            Button("Root") {
-                Task { await model.move(notebook, to: nil) }
-            }
-            ForEach(model.folderPaths) { path in
-                Button {
-                    Task { await model.move(notebook, to: path.id) }
-                } label: {
-                    if model.folderID(of: notebook) == path.id {
-                        Label(indented(path), systemImage: "checkmark")
-                    } else {
-                        Text(indented(path))
-                    }
-                }
-            }
-        }
-        Divider()
-        Button("Delete", systemImage: "trash", role: .destructive) {
-            deleteTarget = notebook
         }
     }
 
@@ -1367,16 +1282,8 @@ struct LibraryView: View {
 
     // MARK: - Alert bindings
 
-    private var renameAlert: Binding<Bool> {
-        Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
-    }
-
     private var renameFolderAlert: Binding<Bool> {
         Binding(get: { renameFolderTarget != nil }, set: { if !$0 { renameFolderTarget = nil } })
-    }
-
-    private var deleteAlert: Binding<Bool> {
-        Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
     }
 
     private var purgeAlert: Binding<Bool> {
@@ -1387,9 +1294,6 @@ struct LibraryView: View {
         Binding(get: { deleteFolderTarget != nil }, set: { if !$0 { deleteFolderTarget = nil } })
     }
 
-    private var tagAlert: Binding<Bool> {
-        Binding(get: { tagTarget != nil }, set: { if !$0 { tagTarget = nil } })
-    }
 }
 
 /// Everything the grid's derived lists read. A change here, and only a change
@@ -1404,11 +1308,6 @@ private struct LibraryInputs: Equatable {
     let dateRange: SearchDateRange
     let selectedTag: String?
     let folderTree: FolderTree
-}
-
-private struct CoverTarget: Identifiable {
-    let notebook: NotebookManifest
-    var id: UUID { notebook.id }
 }
 
 /// One tag, in the active-filter bar and on a notebook card. Both drew their
