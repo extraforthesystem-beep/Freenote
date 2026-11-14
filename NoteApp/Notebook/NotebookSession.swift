@@ -1306,10 +1306,12 @@ final class NotebookSession: Identifiable {
 
     /// Newest first. Notebook-level snapshots (`pageID == nil`) are included
     /// with the current page so a future whole-notebook history can use them.
-    func pageHistory() async -> [VersionSnapshot] {
+    /// Throws when the history could not be read, so a caller can tell a
+    /// failed read from an empty history.
+    func pageHistory() async throws -> [VersionSnapshot] {
         guard let page else { return [] }
         await snapshotChain?.value
-        let snapshots = (try? await history.list(notebookID: manifest.id)) ?? []
+        let snapshots = try await history.list(notebookID: manifest.id)
         return snapshots
             .filter { $0.pageID == page.id || $0.pageID == nil }
             .sorted { $0.createdAt > $1.createdAt }
