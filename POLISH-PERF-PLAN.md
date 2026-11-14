@@ -175,6 +175,10 @@ Decisions taken here:
   | Backup | 1 | 0 | 0 | 0 |
   | **Total** | **57** | **95** | **18** | **28** |
 
+- **Wave 0 + Wave 1 batch 1 merged** into `integrate/polish-perf` (`29b6c67`): E1 ink path, U1a, U2a, U3a, U4a, U5, and `BoardImageCache` wired into the memory-warning purge. On the merged base: all nine package suites pass; 89 app tests pass on macOS; iOS Simulator build succeeds. Lint total went from 57/95/18/28 to 36/56/12/12.
+- **E1 measured** (M1 Max, release, median of 5): one stroke appended to a 2,000-stroke page through the converter, 4.65 ms full path → 0.18 ms fast path. One PencilKit read per stroke end (was two). The invalidation test shows `currentPageID`, `activeLayer` and `manifest` do not fire on a stroke, so the pane chrome does not re-render per stroke.
+- **Wave 1 batch 2 running:** U1b, U2b, U3b, U4b, plus U6 (`polish/u6-session`) for the leftovers that needed `NotebookSession.swift`: tape IDs without a per-stroke read, reveal-all in one mutation, cancellable PDF insert, drop the retained PDF on close, version-history read errors.
+- Deferred from batch 1 for a later pass: A5-09 copy without `Data(contentsOf:)` (needs a file-copy `LibraryStore.addAsset`).
 - **App test command.** In a fresh worktree the test bundle is unsigned and macOS refuses to load it. Pass the signing settings on the command line:
   `xcodebuild test -project NoteApp.xcodeproj -scheme NoteApp -destination 'platform=macOS' -derivedDataPath /tmp/<dir> CODE_SIGN_IDENTITY="Apple Development" DEVELOPMENT_TEAM=CQ65B26KFJ`
 
