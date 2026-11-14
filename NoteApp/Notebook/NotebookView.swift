@@ -233,6 +233,8 @@ struct NotebookPane: View {
                     isRulerActive: $isRulerActive,
                     onItemAction: { item in handleToolbarItem(item) },
                     onCustomizeToolbar: { showsToolbarEditor = true },
+                    notebookTitle: session.manifest.title,
+                    titleMenu: AnyView(titleMenuItems),
                     insertMenu: { insertMenuItems },
                     moreMenu: { moreMenuItems },
                     itemMenu: { item in toolbarItemMenu(for: item) }

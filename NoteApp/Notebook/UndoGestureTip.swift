@@ -4,16 +4,15 @@ import TipKit
 
 /// Teaches the canvas's two-finger double-tap undo, once per install.
 ///
-/// The gesture has no visible control, so a tip is the only place a new reader
-/// can learn it; TipKit keeps it from coming back once it has been read or
-/// dismissed.
+/// The toolbar's Undo and Redo buttons are visible, but the faster gesture is
+/// not; TipKit keeps this from coming back once it has been read or dismissed.
 struct UndoGestureTip: Tip {
     var title: Text {
         Text("Undo with a gesture")
     }
 
     var message: Text? {
-        Text("Tip: double-tap with two fingers to undo, three fingers to redo.")
+        Text("Double-tap with two fingers to undo, three fingers to redo.")
     }
 
     var image: Image? {
