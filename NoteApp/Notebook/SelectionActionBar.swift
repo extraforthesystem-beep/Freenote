@@ -72,6 +72,8 @@ struct SelectionActionBar: View {
                 controller.clearSelection()
             }
             .disabled(editableCount == 0)
+            // Delete is destructive: keep it clear of Paste.
+            .padding(.leading, AppSpacing.xs)
             if isWorking {
                 ProgressView()
                     .controlSize(.mini)
@@ -79,7 +81,7 @@ struct SelectionActionBar: View {
                     .accessibilityLabel("Recognising text")
             }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, AppSpacing.xs)
         .frame(minHeight: 48)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
@@ -88,14 +90,14 @@ struct SelectionActionBar: View {
     }
 
     private var label: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: AppSpacing.xs) {
             Image(systemName: "lasso")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("\(selection.count)")
                 .font(.subheadline.monospacedDigit().weight(.medium))
         }
-        .padding(.leading, 10)
+        .padding(.leading, AppSpacing.s)
         .padding(.trailing, 8)
         .frame(minHeight: 44)
         .accessibilityElement(children: .ignore)
@@ -124,8 +126,8 @@ struct SelectionActionBar: View {
             Text("Selection Colour")
                 .font(.headline)
             LazyVGrid(
-                columns: Array(repeating: GridItem(.fixed(30), spacing: 6), count: 8),
-                spacing: 6
+                columns: [GridItem(.adaptive(minimum: 44, maximum: 44), spacing: AppSpacing.xs)],
+                spacing: AppSpacing.xs
             ) {
                 ForEach(Array(editor.favoriteColors.colors.enumerated()), id: \.offset) { _, color in
                     Button {
@@ -141,7 +143,8 @@ struct SelectionActionBar: View {
                             .fill(Color(color))
                             .overlay(Circle().strokeBorder(AppColor.swatchOutline, lineWidth: 1))
                             .frame(width: 30, height: 30)
-                            .contentShape(Circle())
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(editor.colorName(for: color))
@@ -266,7 +269,7 @@ struct SelectionActionBar: View {
         Image(systemName: systemImage)
             .font(.system(size: 15, weight: .regular))
             .foregroundStyle(tint ?? .primary)
-            .frame(width: 38, height: 44)
+            .frame(width: 44, height: 44)
             .contentShape(Rectangle())
     }
 }

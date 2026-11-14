@@ -13,7 +13,9 @@ import UniformTypeIdentifiers
 /// menu. Reading a notebook hides the tools and shows a Read Only pill instead.
 struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     @Bindable var editor: EditorToolState
-    let controller: PencilCanvasController
+    /// Observed, so an Undo/Redo item added in Customise Toolbar follows the
+    /// canvas's undo stack instead of staying greyed until an unrelated redraw.
+    @ObservedObject var controller: PencilCanvasController
     @Binding var showsThumbnails: Bool
     /// The notebook's recording state and elapsed time. A view of its own
     /// reads it, so the 2 Hz timer redraws only the recording label. Nil on a
@@ -44,6 +46,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
 
     @AppStorage(ToolbarLayout.storageKey) private var layoutStorage = ToolbarLayout.defaultStorage
     @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesOnLeft = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var popover: ToolPopover?
     @State private var showsPalette = false
     @State private var showsFavoritePens = false
@@ -72,7 +75,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             }
             trailing
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, AppSpacing.s)
         .frame(height: 52)
         .background(.bar)
         .background {
@@ -80,7 +83,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             Color.clear
                 .contentShape(Rectangle())
                 .contextMenu {
-                    Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
+                    Button("Customise Toolbar…", systemImage: "slider.horizontal.3") {
                         onCustomizeToolbar()
                     }
                 }
@@ -143,7 +146,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                     systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing",
                     isSelected: showsThumbnails
                 ) {
-                    withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
+                    AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { showsThumbnails.toggle() }
                 }
             }
         }
@@ -169,7 +172,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     private var readOnlyButton: some View {
         if !editor.isReadOnly {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { editor.isReadOnly = true }
+                AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) { editor.isReadOnly = true }
             } label: {
                 ToolbarIcon(systemImage: "lock.doc")
             }
@@ -195,9 +198,9 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     /// edited, but pages still scroll, zoom and follow PDF links.
     private var readOnlyPill: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { editor.isReadOnly = false }
+            AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) { editor.isReadOnly = false }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: AppSpacing.xs) {
                 Image(systemName: "lock.fill")
                     .font(.caption.weight(.semibold))
                 Text("Read Only")
@@ -415,7 +418,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         case .followLinks:
             editor.tool = .links
         case .zoomView:
-            withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown.toggle() }
+            AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { editor.isZoomViewShown.toggle() }
         case .ruler:
             isRulerActive.toggle()
         case .textBox, .image, .addPage, .search:
@@ -530,7 +533,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         return Button {
             select(.pen, popover: .pen)
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: AppSpacing.s) {
                 Image(systemName: editor.penStyle.symbolName)
                     .font(.system(size: 17, weight: .medium))
                 Circle()
@@ -643,16 +646,16 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             if editor.isZoomViewShown {
                 showsZoomOptions = true
             } else {
-                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = true }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { editor.isZoomViewShown = true }
             }
         }
         .popover(isPresented: $showsZoomOptions) {
             ZoomViewOptions {
                 showsZoomOptions = false
-                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { editor.isZoomViewShown = false }
             }
-            .padding(16)
-            .frame(width: 300)
+            .padding(AppSpacing.l)
+            .frame(width: 320)
             .presentationCompactAdaptation(.popover)
         }
     }
@@ -675,8 +678,10 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
-                        ForEach(Array(favorites.colors.enumerated()), id: \.element) { index, color in
-                            favoriteSwatch(color, index: index)
+                        // Keyed by slot, so a reorder moves a swatch instead of
+                        // rebuilding it, and `.id` matches the ForEach identity.
+                        ForEach(favorites.colors.indices, id: \.self) { index in
+                            favoriteSwatch(favorites.colors[index], index: index)
                                 .id(index)
                         }
                         if !favorites.isFull {
@@ -729,7 +734,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     private func revealSelectedColor(_ proxy: ScrollViewProxy) {
         guard let index = editor.favoriteColors.colors.firstIndex(where: { editor.isCurrentColor($0) })
         else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
             proxy.scrollTo(index, anchor: .center)
         }
     }
@@ -751,7 +756,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 .fill(Color(color))
                 .overlay(Circle().strokeBorder(AppColor.swatchOutline, lineWidth: 1))
                 .frame(width: 24, height: 24)
-                .padding(3)
+                .padding(AppSpacing.xs)
                 .overlay {
                     Circle()
                         .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
@@ -786,12 +791,12 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 .fill(Color(color))
                 .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
                 .frame(width: 34, height: 34)
-                .padding(5)
+                .padding(AppSpacing.xs)
         }
         .dropDestination(for: FavoriteColorSlot.self) { slots, _ in
             guard let source = slots.first?.index, source != index else { return false }
             dropTarget = nil
-            withAnimation(.easeInOut(duration: 0.15)) {
+            AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
                 editor.moveFavoriteColor(from: source, to: index)
             }
             return true
@@ -855,7 +860,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                     .frame(width: 10, height: 10)
             }
             .frame(width: 24, height: 24)
-            .padding(3)
+            .padding(AppSpacing.xs)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
@@ -975,7 +980,7 @@ private struct PenSettingsPopover: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: AppSpacing.m) {
                 FavoritePensContent(editor: editor)
                 Divider()
                 Text("Pen")
@@ -1013,7 +1018,7 @@ private struct PenSettingsPopover: View {
                 SmoothingSlider(title: "Stabilisation", editor: editor)
                 ScratchOutToggle()
             }
-            .padding(16)
+            .padding(AppSpacing.l)
         }
         .frame(width: 320)
         .frame(maxHeight: 620)
@@ -1026,7 +1031,7 @@ private struct WidthSettingsPopover: View {
     @AppStorage(AppSettings.Key.highlighterStraightLines) private var straightLines = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text(title)
                 .font(.headline)
             WidthSlider(editor: editor)
@@ -1041,8 +1046,8 @@ private struct WidthSettingsPopover: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 }
 
@@ -1055,7 +1060,7 @@ private struct WidthPresetPopover: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Edit Width Preset")
                     .font(.headline)
@@ -1067,8 +1072,8 @@ private struct WidthPresetPopover: View {
             }
             WidthSlider(editor: editor, presetSlot: slot)
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 }
 
@@ -1098,7 +1103,7 @@ private struct WidthSlider: View {
             max(PenWidth.millimetres(fromPoints: shown), sliderRange.lowerBound),
             sliderRange.upperBound
         )
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             HStack {
                 Text("Width")
                     .font(.subheadline)
@@ -1135,7 +1140,7 @@ private struct LineStylePicker: View {
     @Bindable var editor: EditorToolState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             Text("Line Style")
                 .font(.subheadline)
             Picker("Line Style", selection: Binding(
@@ -1161,7 +1166,7 @@ private struct SmoothingSlider: View {
     @Bindable var editor: EditorToolState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             HStack {
                 Text(title)
                     .font(.subheadline)
@@ -1212,7 +1217,7 @@ private struct EraserSettingsPopover: View {
     @AppStorage(AppSettings.Key.eraserFilter) private var filterRaw = AppSettings.eraserFilterUnset
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text("Eraser")
                 .font(.headline)
             Picker("Eraser", selection: Binding(
@@ -1223,7 +1228,7 @@ private struct EraserSettingsPopover: View {
                 Text("Pixel").tag(EraserMode.pixel)
             }
             .pickerStyle(.segmented)
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.s) {
                 Text("Size")
                     .font(.subheadline)
                 HStack(spacing: 8) {
@@ -1276,8 +1281,8 @@ private struct EraserSettingsPopover: View {
             }
             .font(.subheadline)
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 
     /// The filter shown, with the old "Erase Highlighter Only" switch
@@ -1307,7 +1312,7 @@ private struct LaserSettingsPopover: View {
     @Bindable var editor: EditorToolState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text("Laser Pointer")
                 .font(.headline)
             Picker("Laser pointer", selection: Binding(
@@ -1327,8 +1332,8 @@ private struct LaserSettingsPopover: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 }
 
@@ -1444,7 +1449,7 @@ private struct RecordingLabelButton: View {
         if let audio, audio.isRecording {
             let label = Self.label(for: audio.elapsed)
             Button(action: onStop) {
-                HStack(spacing: 5) {
+                HStack(spacing: AppSpacing.xs) {
                     Circle().fill(.red).frame(width: 8, height: 8)
                     Text(label)
                         .font(.caption.monospacedDigit())

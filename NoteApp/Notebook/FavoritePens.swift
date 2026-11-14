@@ -127,8 +127,8 @@ struct FavoritePensPopover: View {
 
     var body: some View {
         FavoritePensContent(editor: editor)
-            .padding(16)
-            .frame(width: 300)
+            .padding(AppSpacing.l)
+            .frame(width: 320)
     }
 }
 
@@ -138,10 +138,11 @@ struct FavoritePensPopover: View {
 struct FavoritePensContent: View {
     @Bindable var editor: EditorToolState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editMode: EditMode = .inactive
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             header
             if editor.favoritePens.pens.isEmpty {
                 emptyState
@@ -173,7 +174,7 @@ struct FavoritePensContent: View {
             Spacer(minLength: 0)
             if !editor.favoritePens.pens.isEmpty {
                 Button(editMode.isEditing ? "Done" : "Edit") {
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
                         editMode = editMode.isEditing ? .inactive : .active
                     }
                 }
@@ -238,7 +239,7 @@ struct FavoritePensContent: View {
 
     private func row(_ pen: FavoritePen) -> some View {
         let isCurrent = editor.currentPen.matches(pen)
-        return HStack(spacing: 10) {
+        return HStack(spacing: AppSpacing.s) {
             Image(systemName: pen.style.symbolName)
                 .font(.system(size: 16))
                 .frame(width: 22)
@@ -247,7 +248,7 @@ struct FavoritePensContent: View {
                 .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
                 .frame(width: dotSize(pen.width, style: pen.style), height: dotSize(pen.width, style: pen.style))
                 .frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: AppSpacing.xxs) {
                 Text(pen.style.displayName)
                     .font(.subheadline)
                 Text(PenWidth.label(pen.width))

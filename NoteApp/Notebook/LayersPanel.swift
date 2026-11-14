@@ -10,12 +10,11 @@ struct LayersPanel: View {
     @State private var renameTarget: Page.Layer?
     @State private var renameText = ""
 
-    private var layers: [Page.Layer] {
-        session.page?.layers ?? []
-    }
-
     var body: some View {
-        NavigationStack {
+        let page = session.page
+        let layers = page?.layers ?? []
+        let counts = LayerCounts(page)
+        return NavigationStack {
             Group {
                 if layers.isEmpty {
                     ContentUnavailableView(
@@ -27,7 +26,7 @@ struct LayersPanel: View {
                     List {
                         Section {
                             ForEach(layers.reversed(), id: \.id) { layer in
-                                row(layer)
+                                row(layer, layers: layers, counts: counts)
                             }
                         } footer: {
                             Text("The top layer is listed first. New ink goes to the layer with the checkmark.")
@@ -67,10 +66,10 @@ struct LayersPanel: View {
     }
 
     @ViewBuilder
-    private func row(_ layer: Page.Layer) -> some View {
+    private func row(_ layer: Page.Layer, layers: [Page.Layer], counts: LayerCounts) -> some View {
         let isActive = session.activeLayerID == layer.id
-        let strokeCount = session.page?.strokes.filter { $0.layerID == layer.id }.count ?? 0
-        let elementCount = session.page?.elements.filter { $0.layerID == layer.id }.count ?? 0
+        let strokeCount = counts.strokes(layer.id)
+        let elementCount = counts.elements(layer.id)
 
         HStack(spacing: 12) {
             Button {
@@ -78,6 +77,7 @@ struct LayersPanel: View {
             } label: {
                 Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isActive ? "Active layer" : "Make active")
@@ -97,6 +97,7 @@ struct LayersPanel: View {
             } label: {
                 Image(systemName: layer.isVisible ? "eye" : "eye.slash")
                     .foregroundStyle(layer.isVisible ? Color.secondary : Color.orange)
+                    .hitTarget()
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(layer.isVisible ? "Hide layer" : "Show layer")
@@ -106,6 +107,7 @@ struct LayersPanel: View {
             } label: {
                 Image(systemName: layer.isLocked ? "lock.fill" : "lock.open")
                     .foregroundStyle(layer.isLocked ? Color.orange : Color.secondary)
+                    .hitTarget()
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(layer.isLocked ? "Unlock layer" : "Lock layer")
@@ -130,9 +132,31 @@ struct LayersPanel: View {
                 .disabled(layers.count <= 1)
             } label: {
                 Image(systemName: "ellipsis.circle")
+                    .hitTarget()
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Layer options")
         }
         .padding(.vertical, 2)
     }
+}
+
+/// How many strokes and page elements each layer holds, counted in one pass
+/// over the page so a row never filters the whole page for itself.
+private struct LayerCounts {
+    private var byLayer: [UUID: (strokes: Int, elements: Int)] = [:]
+
+    init(_ page: Page?) {
+        guard let page else { return }
+        for stroke in page.strokes {
+            byLayer[stroke.layerID, default: (0, 0)].strokes += 1
+        }
+        for element in page.elements {
+            byLayer[element.layerID, default: (0, 0)].elements += 1
+        }
+    }
+
+    func strokes(_ layerID: UUID) -> Int { byLayer[layerID]?.strokes ?? 0 }
+
+    func elements(_ layerID: UUID) -> Int { byLayer[layerID]?.elements ?? 0 }
 }
