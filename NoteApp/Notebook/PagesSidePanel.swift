@@ -25,7 +25,9 @@ struct PagesSidePanel: View {
     let onSelect: (Int) -> Void
     let onClose: () -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 84, maximum: 120), spacing: 10)]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let columns = [GridItem(.adaptive(minimum: 84, maximum: 120), spacing: AppSpacing.s)]
 
     /// The current page's shape, so cells that have no image yet match the
     /// paper. It is read from the page when the page changes, not while the
@@ -64,7 +66,7 @@ struct PagesSidePanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: AppSpacing.s) {
             Picker("Panel", selection: $tab) {
                 Text("Pages").tag(NotebookPanelTab.pages)
                 Text("Search").tag(NotebookPanelTab.search)
@@ -77,30 +79,29 @@ struct PagesSidePanel: View {
             Button(action: onClose) {
                 Image(systemName: isOnLeft ? "sidebar.leading" : "sidebar.trailing")
                     .font(.system(size: 15, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Hide Panel")
             .help("Hide Panel")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, AppSpacing.s)
         .frame(height: 44)
     }
 
     private var pagesGrid: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 10) {
+                LazyVGrid(columns: columns, spacing: AppSpacing.s) {
                     ForEach(0..<session.pageCount, id: \.self) { index in
                         pageCell(index)
                     }
                     addPageTile
                 }
-                .padding(10)
+                .padding(AppSpacing.s)
             }
             .onChange(of: session.pageIndex) { _, index in
-                withAnimation(.easeInOut(duration: 0.18)) {
+                AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
                     proxy.scrollTo(index, anchor: .center)
                 }
             }
@@ -164,11 +165,11 @@ struct PagesSidePanel: View {
         Button {
             Task { await session.addPage() }
         } label: {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
                 .aspectRatio(pageAspect, contentMode: .fit)
                 .overlay {
-                    VStack(spacing: 4) {
+                    VStack(spacing: AppSpacing.xs) {
                         Image(systemName: "plus")
                             .font(.title3)
                         Text("Page")
@@ -220,14 +221,14 @@ private struct PageThumbnailCell: View {
     var body: some View {
         ZStack {
             // Paper is the page's own colour whatever the appearance.
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .fill(AppColor.paper(usesDarkPaper: usesDarkPaper))
 
             if let image {
                 Image(inkImage: image)
                     .resizable()
                     .scaledToFill()
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous))
             } else if failed {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(.tertiary)
@@ -238,7 +239,7 @@ private struct PageThumbnailCell: View {
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
         .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .strokeBorder(
                     isCurrent ? Color.accentColor : Color.secondary.opacity(0.25),
                     lineWidth: isCurrent ? 2 : 1
