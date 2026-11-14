@@ -6,10 +6,8 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var renameTarget: NotebookManifest?
-    @State private var renameText = ""
-    @State private var deleteTarget: NotebookManifest?
     @State private var purgeTarget: NotebookManifest?
     @State private var isCreatingFolder = false
     @State private var newFolderName = ""
@@ -19,9 +17,6 @@ struct LibraryView: View {
     @State private var deleteFolderTarget: Folder?
     @State private var showPDFImporter = false
     @State private var pdfImport: PDFImportFlow?
-    @State private var tagTarget: NotebookManifest?
-    @State private var tagsText = ""
-    @State private var coverTarget: CoverTarget?
     @State private var isSearchPresented = false
     @State private var showsEmptyTrashAlert = false
     @State private var showsSettings = false
@@ -35,6 +30,14 @@ struct LibraryView: View {
     @State private var queryText = ""
     /// Hits grouped once per search, instead of on every body pass.
     @State private var searchGroups: [NotebookSearchGroup] = []
+    /// The grid's list and the sidebar's derived values, recomputed when one of
+    /// their inputs changes instead of on every body pass. Nil until the first
+    /// pass lands, so the first frame reads them straight from the model.
+    @State private var gridNotebooks: [NotebookManifest]?
+    @State private var cachedFolderNodes: [FolderNode]?
+    @State private var cachedFolderCounts: [UUID: Int]?
+    @State private var cachedTagSummaries: [TagSummary]?
+    @State private var cachedTagSets: [UUID: Set<String>]?
 
     /// The library search's source filter; a change searches again.
     private var searchSources: Binding<Set<PageTextSource>> {
@@ -102,17 +105,13 @@ struct LibraryView: View {
         .onChange(of: model.search.hits) { _, hits in
             searchGroups = groupedSearchHits(hits)
         }
+        .onChange(of: libraryInputs, initial: true) { _, inputs in
+            refreshLibrary(inputs)
+        }
         .background(AppColor.groupedBackground)
-        .background(alignment: .topLeading) { newNotebookShortcut }
-        .alert("Rename notebook", isPresented: renameAlert) {
-            TextField("Name", text: $renameText)
-            Button("Cancel", role: .cancel) { renameTarget = nil }
-            Button("Rename") {
-                if let target = renameTarget {
-                    Task { await model.rename(target, to: renameText) }
-                }
-                renameTarget = nil
-            }
+        .background(alignment: .topLeading) {
+            newNotebookShortcut
+            if !model.tabs.isEmpty { closeTabShortcut }
         }
         .alert("New folder", isPresented: $isCreatingFolder) {
             TextField("Folder name", text: $newFolderName)
@@ -136,20 +135,9 @@ struct LibraryView: View {
                 renameFolderTarget = nil
             }
         }
-        .alert("Move to Recently Deleted?", isPresented: deleteAlert) {
-            Button("Cancel", role: .cancel) { deleteTarget = nil }
-            Button("Delete", role: .destructive) {
-                if let target = deleteTarget {
-                    Task { await model.delete(target) }
-                }
-                deleteTarget = nil
-            }
-        } message: {
-            Text("The notebook can be restored from Recently Deleted for 30 days.")
-        }
-        .alert("Delete permanently?", isPresented: purgeAlert) {
+        .alert("Delete Permanently?", isPresented: purgeAlert) {
             Button("Cancel", role: .cancel) { purgeTarget = nil }
-            Button("Delete", role: .destructive) {
+            Button("Delete Permanently", role: .destructive) {
                 if let target = purgeTarget {
                     Task { await model.purge(target) }
                 }
@@ -160,24 +148,11 @@ struct LibraryView: View {
         }
         .alert("Empty Recently Deleted?", isPresented: $showsEmptyTrashAlert) {
             Button("Cancel", role: .cancel) {}
-            Button("Empty Trash", role: .destructive) {
+            Button("Delete Permanently", role: .destructive) {
                 Task { await model.emptyTrash() }
             }
         } message: {
             Text("Every notebook in Recently Deleted is removed for good. This cannot be undone.")
-        }
-        .alert("Tags", isPresented: tagAlert) {
-            TextField("Comma-separated tags", text: $tagsText)
-            Button("Cancel", role: .cancel) { tagTarget = nil }
-            Button("Save") {
-                if let target = tagTarget {
-                    let tags = tagsText.split(separator: ",").map(String.init)
-                    Task { await model.setTags(tags, for: target) }
-                }
-                tagTarget = nil
-            }
-        } message: {
-            Text("Tags belong to the library, not to the notebook file.")
         }
         .alert("Delete this folder?", isPresented: deleteFolderAlert) {
             Button("Cancel", role: .cancel) { deleteFolderTarget = nil }
@@ -189,12 +164,6 @@ struct LibraryView: View {
             }
         } message: {
             Text("Only the folder is removed. Its notebooks and subfolders move to the folder above it.")
-        }
-        .sheet(item: $coverTarget) { target in
-            NotebookCoverPicker(current: target.notebook.coverName) { name in
-                coverTarget = nil
-                Task { await model.setCover(name, for: target.notebook) }
-            }
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView(model: model)
@@ -231,6 +200,20 @@ struct LibraryView: View {
             Task { await model.createNotebook() }
         }
         .keyboardShortcut("n", modifiers: .command)
+        .opacity(0)
+        .frame(width: 1, height: 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// ⌘W closes the tab on screen, the library's counterpart of the editor's
+    /// Close. It exists only while a tab is open, so with no tabs the window
+    /// keeps the system's ⌘W.
+    private var closeTabShortcut: some View {
+        Button("Close Tab") {
+            if let active = model.session { model.closeTab(active) }
+        }
+        .keyboardShortcut("w", modifiers: .command)
         .opacity(0)
         .frame(width: 1, height: 1)
         .allowsHitTesting(false)
@@ -332,20 +315,33 @@ struct LibraryView: View {
     }
 
     private var folderNodes: [FolderNode] {
-        folderNodes(parent: nil, depth: 0)
+        cachedFolderNodes ?? buildFolderNodes(parent: nil, depth: 0, folders: model.folderTree.folders)
     }
 
-    private func folderNodes(parent: UUID?, depth: Int) -> [FolderNode] {
-        // A hand-edited folders.json could contain a cycle; stop descending instead
-        // of recursing forever.
+    /// The sidebar tree, built once per change of the folder tree rather than
+    /// once per body pass. A hand-edited folders.json could contain a cycle;
+    /// stop descending instead of recursing forever.
+    private func buildFolderNodes(parent: UUID?, depth: Int, folders: [Folder]) -> [FolderNode] {
         guard depth < AppModel.maxFolderDepth else { return [] }
-        return model.folderTree.folders
+        return folders
             .filter { $0.parentID == parent }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             .map { folder in
-                let children = folderNodes(parent: folder.id, depth: depth + 1)
+                let children = buildFolderNodes(
+                    parent: folder.id,
+                    depth: depth + 1,
+                    folders: folders
+                )
                 return FolderNode(folder: folder, depth: depth, children: children.isEmpty ? nil : children)
             }
+    }
+
+    /// Notebooks per folder, computed in one pass over the assignments.
+    private var folderCounts: [UUID: Int] {
+        cachedFolderCounts ?? LibraryVisibility.folderCounts(
+            folders: model.folderTree.folders,
+            notebookFolder: model.folderTree.notebookFolder
+        )
     }
 
     private func folderRow(_ folder: Folder, depth: Int) -> some View {
@@ -355,7 +351,7 @@ struct LibraryView: View {
             Image(systemName: folder.iconName ?? "folder")
                 .foregroundStyle(folderColor(folder))
         }
-        .badge(model.notebookCount(inFolder: folder.id))
+        .badge(folderCounts[folder.id] ?? 0)
         .tag(AppModel.Location.folder(folder.id))
         .contextMenu { folderMenu(folder, depth: depth) }
         .dropDestination(for: String.self) { items, _ in
@@ -390,6 +386,8 @@ struct LibraryView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(showsPinnedPages ? [.isSelected] : [])
+        .accessibilityValue(Text(verbatim: showsPinnedPages ? "Selected" : ""))
     }
 
     private func tagRow(_ summary: TagSummary) -> some View {
@@ -408,6 +406,8 @@ struct LibraryView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityValue(Text(verbatim: isSelected ? "Selected" : ""))
     }
 
     private func toggleTag(_ key: String) {
@@ -416,13 +416,22 @@ struct LibraryView: View {
     }
 
     private var tagSummaries: [TagSummary] {
-        TagSummary.summaries(notebooks: model.notebooks, tags: model.tags(for:))
+        cachedTagSummaries ?? TagSummary.summaries(notebooks: model.notebooks, tags: model.tags(for:))
+    }
+
+    /// Every notebook's lowercased tags, built once per change of the tree.
+    private var notebookTagSets: [UUID: Set<String>] {
+        cachedTagSets ?? LibraryVisibility.tagSets(for: model.notebooks, tags: model.tags(for:))
     }
 
     /// Tags from the sidebar and from `tag:` tokens in the search field. All of
     /// them must be on a notebook for it to show.
     private var activeTagKeys: Set<String> {
-        var keys = TagQuery(queryText).tagKeys
+        activeTagKeys(query: queryText, selectedTag: selectedTag)
+    }
+
+    private func activeTagKeys(query: String, selectedTag: String?) -> Set<String> {
+        var keys = TagQuery(query).tagKeys
         if let selectedTag { keys.insert(selectedTag) }
         return keys
     }
@@ -435,9 +444,66 @@ struct LibraryView: View {
     }
 
     private func matchesActiveTags(_ notebookID: UUID) -> Bool {
-        let required = activeTagKeys
-        guard !required.isEmpty else { return true }
-        return required.isSubset(of: Set(model.tags(for: notebookID).map { $0.lowercased() }))
+        LibraryVisibility.matches(
+            notebookID: notebookID,
+            requiredTags: activeTagKeys,
+            tagSets: notebookTagSets
+        )
+    }
+
+    /// Everything the grid's derived lists read. Only a change here recomputes
+    /// them.
+    private var libraryInputs: LibraryInputs {
+        LibraryInputs(
+            notebooks: model.notebooks,
+            trashedNotebooks: model.trashedNotebooks,
+            location: model.selectedLocation,
+            sortOrder: model.sortOrder,
+            searchText: model.searchText,
+            query: queryText,
+            dateRange: model.search.dateRange,
+            selectedTag: selectedTag,
+            folderTree: model.folderTree
+        )
+    }
+
+    /// The grid's list: the sidebar row's browse list, narrowed by the active
+    /// tags. Falls back to a direct computation until the first change pass.
+    private var shownNotebooks: [NotebookManifest] {
+        if let gridNotebooks { return gridNotebooks }
+        return LibraryVisibility.filter(
+            model.visibleNotebooks,
+            requiredTags: activeTagKeys,
+            tagSets: notebookTagSets
+        )
+    }
+
+    /// Recomputes what the grid and the sidebar show, once per input change.
+    /// The expensive parts are `visibleNotebooks` (filter and sort), the tag
+    /// filter and the folder badges; none of them belong in a body pass.
+    private func refreshLibrary(_ inputs: LibraryInputs) {
+        let required = activeTagKeys(query: inputs.query, selectedTag: inputs.selectedTag)
+        let sets = LibraryVisibility.tagSets(for: inputs.notebooks) {
+            inputs.folderTree.tags[$0] ?? []
+        }
+        cachedTagSets = sets
+        cachedTagSummaries = TagSummary.summaries(notebooks: inputs.notebooks) {
+            inputs.folderTree.tags[$0] ?? []
+        }
+        cachedFolderCounts = LibraryVisibility.folderCounts(
+            folders: inputs.folderTree.folders,
+            notebookFolder: inputs.folderTree.notebookFolder
+        )
+        cachedFolderNodes = buildFolderNodes(
+            parent: nil,
+            depth: 0,
+            folders: inputs.folderTree.folders
+        )
+        gridNotebooks = LibraryVisibility.filter(
+            model.visibleNotebooks,
+            requiredTags: required,
+            tagSets: sets
+        )
     }
 
     private var pinnedCount: Int {
@@ -628,7 +694,7 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var notebookLibrary: some View {
-        let visibleNotebooks = model.visibleNotebooks.filter { matchesActiveTags($0.id) }
+        let visibleNotebooks = shownNotebooks
         if let loadError = model.loadError {
             loadErrorView(loadError)
         } else if model.isSearching {
@@ -690,7 +756,7 @@ struct LibraryView: View {
                 Button(role: .destructive) {
                     showsEmptyTrashAlert = true
                 } label: {
-                    Label("Empty Trash", systemImage: "trash.slash")
+                    Label("Empty Recently Deleted", systemImage: "trash.slash")
                 }
             }
         }
@@ -710,6 +776,13 @@ struct LibraryView: View {
                 }
             }
             Divider()
+            Menu("Close Tab", systemImage: "xmark") {
+                ForEach(model.tabs) { tab in
+                    Button(tab.manifest.title) {
+                        model.closeTab(tab)
+                    }
+                }
+            }
             Button("Close All Tabs", systemImage: "xmark.circle", role: .destructive) {
                 Task { await model.closeAllTabs() }
             }
@@ -726,11 +799,13 @@ struct LibraryView: View {
             Button("Import PDF…", systemImage: "square.and.arrow.down") {
                 showPDFImporter = true
             }
+            .keyboardShortcut("i", modifiers: [.command, .shift])
             Divider()
             Button("New Folder", systemImage: "folder.badge.plus") {
                 beginCreatingFolder(parent: newFolderParentForLocation())
             }
             .disabled(!canAddFolderAtSelection)
+            .keyboardShortcut("n", modifiers: [.command, .shift])
         } label: {
             Label("New", systemImage: "plus")
         }
@@ -782,12 +857,10 @@ struct LibraryView: View {
     private struct NotebookSearchGroup: Identifiable {
         let notebook: NotebookManifest
         let hits: [SearchKit.SearchHit]
+        /// Stored, not recomputed on every read: the header reads it per body pass.
+        let pageCount: Int
 
         var id: UUID { notebook.id }
-
-        var pageCount: Int {
-            Set(hits.map(\.pageID)).count
-        }
 
         func hits(for source: PageTextSource) -> [SearchKit.SearchHit] {
             hits.filter { $0.source == source }
@@ -803,10 +876,17 @@ struct LibraryView: View {
         let byNotebook = Dictionary(grouping: hits) { $0.notebookID }
         return byNotebook.compactMap { notebookID, hits -> NotebookSearchGroup? in
             guard let notebook = model.notebook(withID: notebookID) else { return nil }
+            // One page index per notebook, so grouping a thousand-page notebook
+            // does not scan `pageOrder` once per hit.
+            var pageIndex: [UUID: Int] = [:]
+            pageIndex.reserveCapacity(notebook.pageOrder.count)
+            for (index, pageID) in notebook.pageOrder.enumerated() where pageIndex[pageID] == nil {
+                pageIndex[pageID] = index
+            }
             // A hit whose page has been deleted is stale. Older records have no
             // page number, so it comes from the manifest while grouping here.
             let live = hits.compactMap { hit -> SearchKit.SearchHit? in
-                guard let index = notebook.pageOrder.firstIndex(of: hit.pageID) else { return nil }
+                guard let index = pageIndex[hit.pageID] else { return nil }
                 guard hit.pageIndex == 0 else { return hit }
                 var resolved = hit
                 resolved.pageIndex = index + 1
@@ -817,7 +897,11 @@ struct LibraryView: View {
                 if lhs.pageIndex != rhs.pageIndex { return lhs.pageIndex < rhs.pageIndex }
                 return sourceOrder(lhs.source) < sourceOrder(rhs.source)
             }
-            return NotebookSearchGroup(notebook: notebook, hits: sorted)
+            return NotebookSearchGroup(
+                notebook: notebook,
+                hits: sorted,
+                pageCount: Set(sorted.map(\.pageID)).count
+            )
         }
         .sorted { lhs, rhs in
             if lhs.hits.count != rhs.hits.count { return lhs.hits.count > rhs.hits.count }
@@ -834,7 +918,7 @@ struct LibraryView: View {
     private func searchResults(_ visibleNotebooks: [NotebookManifest]) -> some View {
         let groups = visibleSearchGroups
         return ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 24) {
                 tagFilterBar
 
                 if let error = model.search.lastError {
@@ -850,6 +934,7 @@ struct LibraryView: View {
                                 notebookResultRow(notebook)
                             }
                             .buttonStyle(.plain)
+                            .notebookContextActions(model: model, notebook: notebook, includesCover: false)
                             Divider()
                         }
                     }
@@ -861,7 +946,7 @@ struct LibraryView: View {
 
                 if visibleNotebooks.isEmpty && groups.isEmpty {
                     if model.search.isIndexing {
-                        HStack(spacing: 10) {
+                        HStack(spacing: AppSpacing.s) {
                             ProgressView()
                             Text("Reading handwriting… \(model.search.indexedPages) of \(model.search.totalPages)")
                                 .foregroundStyle(.secondary)
@@ -896,7 +981,7 @@ struct LibraryView: View {
     }
 
     private func searchErrorRow(_ error: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: AppSpacing.s) {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
             Text(error)
@@ -932,7 +1017,7 @@ struct LibraryView: View {
 
     @ViewBuilder
     private func notebookSearchGroupView(_ group: NotebookSearchGroup) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.l) {
             HStack(spacing: 12) {
                 SearchNotebookCover(notebook: group.notebook, store: model.store)
                 VStack(alignment: .leading, spacing: 2) {
@@ -954,20 +1039,19 @@ struct LibraryView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(alignment: .top, spacing: 10) {
-                                ForEach(sourceHits) { hit in
+                            LazyHStack(alignment: .top, spacing: AppSpacing.s) {
+                                ForEach(sourceHits.prefix(Self.searchChipsPerSource)) { hit in
                                     SearchHitChip(hit: hit, pageLabel: hit.pageLabel) {
-                                        Task {
-                                            await model.open(
-                                                group.notebook,
-                                                pageID: hit.pageID,
-                                                highlighting: SearchHighlight(
-                                                    query: model.searchText,
-                                                    sources: model.search.filter.sources,
-                                                    dateRange: model.search.dateRange
-                                                )
-                                            )
-                                        }
+                                        open(hit, in: group)
+                                    }
+                                }
+                                if sourceHits.count > Self.searchChipsPerSource,
+                                   let first = sourceHits.first {
+                                    SearchMoreChip(
+                                        count: sourceHits.count - Self.searchChipsPerSource,
+                                        pageLabel: first.pageLabel
+                                    ) {
+                                        open(first, in: group)
                                     }
                                 }
                             }
@@ -977,7 +1061,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(AppSpacing.l)
         .background(
             Color.secondary.opacity(0.07),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -990,11 +1074,30 @@ struct LibraryView: View {
         return "\(matches) match\(matches == 1 ? "" : "es") in \(pages) page\(pages == 1 ? "" : "s")"
     }
 
+    /// How many hit chips a source row draws before it offers the rest. A broad
+    /// query can match every page of a long notebook, and each chip is a view
+    /// with a snippet, a highlight and a background.
+    private static let searchChipsPerSource = 20
+
+    private func open(_ hit: SearchKit.SearchHit, in group: NotebookSearchGroup) {
+        Task {
+            await model.open(
+                group.notebook,
+                pageID: hit.pageID,
+                highlighting: SearchHighlight(
+                    query: model.searchText,
+                    sources: model.search.filter.sources,
+                    dateRange: model.search.dateRange
+                )
+            )
+        }
+    }
+
     // MARK: - Grid
 
     private func notebookGrid(_ visibleNotebooks: [NotebookManifest]) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: AppSpacing.xxl) {
                 tagFilterBar
                 // The Continue rail is library-wide, so it sits under All only.
                 if model.selectedLocation == .all, activeTagKeys.isEmpty {
@@ -1014,13 +1117,26 @@ struct LibraryView: View {
                         ) {
                             Task { await model.open(notebook) }
                         }
-                        .contextMenu { cardMenu(notebook) }
+                        .notebookContextActions(model: model, notebook: notebook)
                         .draggable(notebook.id.uuidString)
+                        .transition(cardTransition)
                     }
                 }
+                .appAnimation(gridAnimation, value: visibleNotebooks.map(\.id))
             }
             .padding(20)
         }
+    }
+
+    /// Inserts, removals and sort changes in the grid follow the shared standard
+    /// curve; Reduce Motion keeps only the fade.
+    private var gridAnimation: Animation {
+        reduceMotion ? AppMotion.fade : AppMotion.standard
+    }
+
+    /// A card the grid gains or loses, without moving the neighbours' content.
+    private var cardTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.92).combined(with: .opacity)
     }
 
     /// The tags narrowing the grid, with one way to clear them. Empty when no
@@ -1034,11 +1150,7 @@ struct LibraryView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(names, id: \.self) { name in
-                    Text(name)
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                    TagChip(tag: name, isActive: true)
                 }
                 Spacer(minLength: 4)
                 Button("Clear") {
@@ -1047,70 +1159,6 @@ struct LibraryView: View {
                 .font(.caption)
                 .buttonStyle(.borderless)
             }
-        }
-    }
-
-    @ViewBuilder
-    private func cardMenu(_ notebook: NotebookManifest) -> some View {
-        Button("Open", systemImage: "book") {
-            Task { await model.open(notebook) }
-        }
-        Button("Duplicate", systemImage: "plus.square.on.square") {
-            Task { await model.duplicate(notebook) }
-        }
-        Menu("Cover", systemImage: "book.closed") {
-            Button("First Page") {
-                Task { await model.setCover(nil, for: notebook) }
-            }
-            ForEach(NotebookCoverStyle.allCases) { style in
-                Button {
-                    Task { await model.setCover(style.rawValue, for: notebook) }
-                } label: {
-                    if notebook.coverName == style.rawValue {
-                        Label(style.name, systemImage: "checkmark")
-                    } else {
-                        Text(style.name)
-                    }
-                }
-            }
-            Divider()
-            Button("Choose Cover…", systemImage: "square.grid.2x2") {
-                coverTarget = CoverTarget(notebook: notebook)
-            }
-        }
-        Button("Rename", systemImage: "pencil") {
-            renameText = notebook.title
-            renameTarget = notebook
-        }
-        Button("Tags…", systemImage: "tag") {
-            tagsText = model.tags(for: notebook.id).joined(separator: ", ")
-            tagTarget = notebook
-        }
-        Button(
-            model.isFavourite(notebook.id) ? "Remove from Favourites" : "Add to Favourites",
-            systemImage: model.isFavourite(notebook.id) ? "star.slash" : "star"
-        ) {
-            Task { await model.toggleFavourite(notebook) }
-        }
-        Menu("Move to Folder", systemImage: "folder") {
-            Button("Root") {
-                Task { await model.move(notebook, to: nil) }
-            }
-            ForEach(model.folderPaths) { path in
-                Button {
-                    Task { await model.move(notebook, to: path.id) }
-                } label: {
-                    if model.folderID(of: notebook) == path.id {
-                        Label(indented(path), systemImage: "checkmark")
-                    } else {
-                        Text(indented(path))
-                    }
-                }
-            }
-        }
-        Divider()
-        Button("Delete", systemImage: "trash", role: .destructive) {
-            deleteTarget = notebook
         }
     }
 
@@ -1179,7 +1227,7 @@ struct LibraryView: View {
         let visibleNotebooks = model.visibleNotebooks
         return List {
             ForEach(visibleNotebooks, id: \.id) { notebook in
-                HStack(spacing: 14) {
+                HStack(spacing: AppSpacing.l) {
                     Image(systemName: "book.closed")
                         .font(.title3)
                         .foregroundStyle(.secondary)
@@ -1196,7 +1244,7 @@ struct LibraryView: View {
                     .buttonStyle(.bordered)
                 }
                 .swipeActions {
-                    Button("Delete", role: .destructive) {
+                    Button("Delete Permanently", role: .destructive) {
                         purgeTarget = notebook
                     }
                 }
@@ -1240,16 +1288,8 @@ struct LibraryView: View {
 
     // MARK: - Alert bindings
 
-    private var renameAlert: Binding<Bool> {
-        Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
-    }
-
     private var renameFolderAlert: Binding<Bool> {
         Binding(get: { renameFolderTarget != nil }, set: { if !$0 { renameFolderTarget = nil } })
-    }
-
-    private var deleteAlert: Binding<Bool> {
-        Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
     }
 
     private var purgeAlert: Binding<Bool> {
@@ -1260,14 +1300,38 @@ struct LibraryView: View {
         Binding(get: { deleteFolderTarget != nil }, set: { if !$0 { deleteFolderTarget = nil } })
     }
 
-    private var tagAlert: Binding<Bool> {
-        Binding(get: { tagTarget != nil }, set: { if !$0 { tagTarget = nil } })
-    }
 }
 
-private struct CoverTarget: Identifiable {
-    let notebook: NotebookManifest
-    var id: UUID { notebook.id }
+/// Everything the grid's derived lists read. A change here, and only a change
+/// here, recomputes them.
+private struct LibraryInputs: Equatable {
+    let notebooks: [NotebookManifest]
+    let trashedNotebooks: [NotebookManifest]
+    let location: AppModel.Location
+    let sortOrder: AppModel.SortOrder
+    let searchText: String
+    let query: String
+    let dateRange: SearchDateRange
+    let selectedTag: String?
+    let folderTree: FolderTree
+}
+
+/// One tag, in the active-filter bar and on a notebook card. Both drew their
+/// own chip before, with different padding and fonts, so the same tag changed
+/// size as it moved.
+private struct TagChip: View {
+    let tag: String
+    /// The filter bar tints its chips with the accent to read as active.
+    var isActive = false
+
+    var body: some View {
+        Text(tag)
+            .font(.caption2)
+            .lineLimit(1)
+            .padding(.horizontal, AppSpacing.s)
+            .padding(.vertical, AppSpacing.xxs)
+            .background((isActive ? Color.accentColor : Color.secondary).opacity(0.14), in: Capsule())
+    }
 }
 
 /// One page of search hits: "p.12" plus the excerpt with the match marked.
@@ -1278,7 +1342,7 @@ private struct SearchHitChip: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.s) {
                 Text(pageLabel)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -1286,7 +1350,7 @@ private struct SearchHitChip: View {
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(10)
+            .padding(AppSpacing.m)
             .frame(width: 150, height: 92, alignment: .topLeading)
             .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -1297,6 +1361,38 @@ private struct SearchHitChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("\(pageLabel), \(hit.source.sectionTitle)"))
+    }
+}
+
+/// The rest of a source's hits, behind one chip: a broad query can match more
+/// pages than a row can draw, and opening the notebook is how the user sees them.
+private struct SearchMoreChip: View {
+    let count: Int
+    let pageLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: AppSpacing.s) {
+                Text("+\(count)")
+                    .font(.headline.monospacedDigit())
+                Text("more from \(pageLabel)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(AppSpacing.m)
+            .frame(width: 150, height: 92)
+            .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("\(count) more matches, open at \(pageLabel)"))
     }
 }
 
@@ -1346,19 +1442,30 @@ private struct SearchNotebookCover: View {
             }
         }
         .frame(width: 34, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous)
                 .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
         }
-        .task(id: notebook.id) {
+        .task(id: coverTaskID) {
             guard coverStyle == nil else { return }
             if let cached = LibraryCovers.cached(notebook: notebook) {
                 cover = cached
                 return
             }
-            cover = await LibraryCovers.image(for: notebook, store: store)
+            let image = await LibraryCovers.image(for: notebook, store: store)
+            guard !Task.isCancelled else { return }
+            cover = image
         }
+    }
+
+    /// The same key the grid card uses: the notebook's first page and
+    /// `updatedAt`, so an edited notebook's cover is drawn again, plus the
+    /// cover generation so "Regenerate Thumbnails" reloads it too.
+    private var coverTaskID: String {
+        "\(notebook.id.uuidString)-\(notebook.pageOrder.first?.uuidString ?? "none")"
+            + "-\(Int(notebook.updatedAt.timeIntervalSince1970))"
+            + "-\(LibraryCovers.generation)"
     }
 }
 
@@ -1403,9 +1510,9 @@ private struct NotebookCard: View {
 
     var body: some View {
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: AppSpacing.s) {
                 coverArt
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
                     Text(notebook.title)
                         .font(.headline)
                         .lineLimit(1)
@@ -1419,10 +1526,21 @@ private struct NotebookCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("\(notebook.title), \(pageCountText), \(dateText)"))
+        .accessibilityLabel(Text(accessibilityDescription))
         .task(id: coverTaskID) {
             await loadCover()
         }
+    }
+
+    /// The card's explicit label replaces its children, so the grid's own Open
+    /// badge, favourite star and tag chips would never be announced. Fold them
+    /// into the text instead.
+    private var accessibilityDescription: String {
+        var parts = [notebook.title, pageCountText, dateText]
+        if isOpen { parts.append("open") }
+        if isFavourite { parts.append("favourite") }
+        if !tags.isEmpty { parts.append("tags: " + tags.joined(separator: ", ")) }
+        return parts.joined(separator: ", ")
     }
 
     private var coverArt: some View {
@@ -1436,7 +1554,7 @@ private struct NotebookCard: View {
                     .font(.system(size: symbolSize * 1.8, weight: .light))
                     .foregroundStyle(coverTint.opacity(0.35))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(18)
+                    .padding(AppSpacing.xl)
             } else if let cover {
                 Image(inkImage: cover)
                     .resizable()
@@ -1447,7 +1565,7 @@ private struct NotebookCard: View {
                     endPoint: .bottom
                 )
             } else if coverFailed {
-                VStack(spacing: 6) {
+                VStack(spacing: AppSpacing.s) {
                     Image(systemName: "eye.slash")
                         .font(.system(size: symbolSize))
                     Text("Preview unavailable")
@@ -1456,7 +1574,7 @@ private struct NotebookCard: View {
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(spacing: 10) {
+                VStack(spacing: AppSpacing.s) {
                     Image(systemName: "book.closed")
                         .font(.system(size: symbolSize))
                     ProgressView()
@@ -1468,7 +1586,7 @@ private struct NotebookCard: View {
             }
         }
         .aspectRatio(3 / 4, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
         .overlay(alignment: .topLeading) {
             if isOpen {
                 Text("Open")
@@ -1476,7 +1594,7 @@ private struct NotebookCard: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(.thinMaterial, in: Capsule())
-                    .padding(10)
+                    .padding(AppSpacing.m)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -1489,21 +1607,16 @@ private struct NotebookCard: View {
             }
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous)
                 .strokeBorder(.white.opacity(0.15), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.14), radius: 6, y: 3)
     }
 
     private var tagRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: AppSpacing.s) {
             ForEach(tags.prefix(3), id: \.self) { tag in
-                Text(tag)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.14), in: Capsule())
+                TagChip(tag: tag)
             }
             if tags.count > 3 {
                 Text("+\(tags.count - 3)")
@@ -1521,6 +1634,7 @@ private struct NotebookCard: View {
     private var coverTaskID: String {
         "\(notebook.id.uuidString)-\(notebook.pageOrder.first?.uuidString ?? "none")"
             + "-\(Int(notebook.updatedAt.timeIntervalSince1970))"
+            + "-\(LibraryCovers.generation)"
     }
 
     private func loadCover() async {
@@ -1531,6 +1645,8 @@ private struct NotebookCard: View {
             return
         }
         let image = await LibraryCovers.image(for: notebook, store: store)
+        // The card may have been recycled while the render ran.
+        guard !Task.isCancelled else { return }
         cover = image
         coverFailed = image == nil
     }

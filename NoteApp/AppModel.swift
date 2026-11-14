@@ -522,6 +522,9 @@ final class AppModel {
                 ThumbnailCache.invalidate(notebookID: notebook.id, pageID: pageID)
             }
         }
+        // The disk covers are gone, but the memory cache and the cards' cover
+        // task ids still hold the old images; this clears and reloads both.
+        LibraryCovers.invalidateAll()
         await reload()
     }
 
