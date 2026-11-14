@@ -10,8 +10,8 @@ struct NowPlayingBar: View {
     @State private var scrubSeconds: TimeInterval?
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 10) {
+        VStack(spacing: AppSpacing.xs) {
+            HStack(spacing: AppSpacing.s) {
                 Button {
                     if audio.isPlaying {
                         audio.pausePlayback()
@@ -21,14 +21,14 @@ struct NowPlayingBar: View {
                 } label: {
                     Image(systemName: audio.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .background(.thinMaterial, in: Circle())
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(audio.isPlaying ? "Pause recording" : "Play recording")
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: AppSpacing.xxs) {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
@@ -46,7 +46,7 @@ struct NowPlayingBar: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -62,7 +62,7 @@ struct NowPlayingBar: View {
                 }
             }
             .tint(.accentColor)
-            .frame(height: 20)
+            .frame(height: 44)
             .accessibilityLabel("Playback position")
         }
         .padding(.horizontal, 12)
@@ -81,8 +81,8 @@ struct NowPlayingBar: View {
                 Text("Follow")
                     .font(.caption.weight(.medium))
             }
-            .padding(.horizontal, 8)
-            .frame(minHeight: 30)
+            .padding(.horizontal, AppSpacing.s)
+            .frame(minHeight: 44)
             .foregroundStyle(audio.followsPlayhead ? Color.accentColor : Color.secondary)
             .background(
                 (audio.followsPlayhead ? Color.accentColor : Color.secondary)
