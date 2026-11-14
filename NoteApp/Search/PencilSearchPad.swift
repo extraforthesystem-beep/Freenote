@@ -74,7 +74,7 @@ struct PencilSearchPad: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             HStack {
                 Text("Write to Search")
                     .font(.headline)
@@ -100,7 +100,7 @@ struct PencilSearchPad: View {
                     }
                 }
 
-            HStack(spacing: 6) {
+            HStack(spacing: AppSpacing.s) {
                 Image(systemName: "text.magnifyingglass")
                     .foregroundStyle(.secondary)
                 Text(recognized.isEmpty ? "Recognised text appears here" : recognized)
@@ -208,11 +208,11 @@ struct SearchHighlightOverlay: View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(marks.enumerated()), id: \.offset) { _, mark in
                 let padded = mark.rect.insetBy(dx: -4, dy: -3)
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.yellow.opacity(0.32))
+                RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous)
+                    .fill(AppColor.searchHitFill)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .stroke(Color.orange.opacity(0.7), lineWidth: 1.5)
+                        RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous)
+                            .stroke(AppColor.searchHitStroke, lineWidth: 1.5)
                     )
                     .frame(width: padded.width, height: padded.height)
                     .rotationEffect(.degrees(mark.rotation))
@@ -235,19 +235,25 @@ struct SearchHighlightOverlay: View {
         .accessibilityHidden(true)
     }
 
-    private var taskKey: TaskKey {
-        TaskKey(
+    private var taskKey: SearchMarksKey {
+        SearchMarksKey(
             highlight: highlight,
             pageID: page.id,
-            strokeIDs: strokes.map(\.id),
+            strokeCount: strokes.count,
+            lastStrokeID: strokes.last?.id,
             elements: page.visibleElements.map { "\($0.id)\($0.updatedAt.timeIntervalSince1970)" }
         )
     }
+}
 
-    private struct TaskKey: Hashable {
-        var highlight: SearchHighlight
-        var pageID: UUID
-        var strokeIDs: [UUID]
-        var elements: [String]
-    }
+/// What the highlight overlay's task depends on. The ink is described by its
+/// length and last stroke, not by every id: adding or erasing a stroke changes
+/// that, while copying and hashing thousands of ids on every pass of the page's
+/// body does not have to happen at all.
+struct SearchMarksKey: Hashable {
+    var highlight: SearchHighlight
+    var pageID: UUID
+    var strokeCount: Int
+    var lastStrokeID: UUID?
+    var elements: [String]
 }

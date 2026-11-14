@@ -25,13 +25,17 @@ struct PagesSidePanel: View {
     let onSelect: (Int) -> Void
     let onClose: () -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 84, maximum: 120), spacing: 10)]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Pages can be different sizes, so the grid follows the page on screen.
-    private var aspectRatio: CGFloat {
-        guard let page = session.page, page.height > 0 else { return 0.707 }
-        return page.width / page.height
-    }
+    private let columns = [GridItem(.adaptive(minimum: 84, maximum: 120), spacing: AppSpacing.s)]
+
+    /// The current page's shape, so cells that have no image yet match the
+    /// paper. It is read from the page when the page changes, not while the
+    /// panel draws: `session.page` changes with every stroke, and the panel —
+    /// grid and embedded find bar — must not redraw per stroke.
+    @State private var pageAspect = Self.defaultAspect
+
+    private static let defaultAspect: CGFloat = 0.707
 
     var body: some View {
         HStack(spacing: 0) {
@@ -49,6 +53,12 @@ struct PagesSidePanel: View {
             if isOnLeft { edge }
         }
         .background(.bar)
+        .onChange(of: session.currentPageID, initial: true) { _, _ in
+            refreshPageAspect()
+        }
+        .onChange(of: session.otherPagesToken) { _, _ in
+            refreshPageAspect()
+        }
     }
 
     private var edge: some View {
@@ -56,7 +66,7 @@ struct PagesSidePanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: AppSpacing.s) {
             Picker("Panel", selection: $tab) {
                 Text("Pages").tag(NotebookPanelTab.pages)
                 Text("Search").tag(NotebookPanelTab.search)
@@ -69,30 +79,29 @@ struct PagesSidePanel: View {
             Button(action: onClose) {
                 Image(systemName: isOnLeft ? "sidebar.leading" : "sidebar.trailing")
                     .font(.system(size: 15, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Hide Panel")
             .help("Hide Panel")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, AppSpacing.s)
         .frame(height: 44)
     }
 
     private var pagesGrid: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 10) {
+                LazyVGrid(columns: columns, spacing: AppSpacing.s) {
                     ForEach(0..<session.pageCount, id: \.self) { index in
                         pageCell(index)
                     }
                     addPageTile
                 }
-                .padding(10)
+                .padding(AppSpacing.s)
             }
             .onChange(of: session.pageIndex) { _, index in
-                withAnimation(.easeInOut(duration: 0.18)) {
+                AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
                     proxy.scrollTo(index, anchor: .center)
                 }
             }
@@ -127,37 +136,40 @@ struct PagesSidePanel: View {
 
     private func pageCell(_ index: Int) -> some View {
         let isCurrent = index == session.pageIndex
-        return Button {
-            onSelect(index)
-        } label: {
-            VStack(spacing: 3) {
-                PageThumbnailCell(
-                    session: session,
-                    index: index,
-                    isCurrent: isCurrent,
-                    aspectRatio: aspectRatio
-                )
-                Text("\(index + 1)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
-            }
-            .contentShape(Rectangle())
+        // Cells are identified by page, not position: after an insert or a
+        // delete a cell must not keep the previous page's picture.
+        let pageID = session.manifest.pageOrder.indices.contains(index)
+            ? session.manifest.pageOrder[index]
+            : nil
+        return VStack(spacing: AppSpacing.xs) {
+            PageThumbnailCell(
+                session: session,
+                index: index,
+                isCurrent: isCurrent,
+                aspectRatio: pageAspect
+            )
+            Text("\(index + 1)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
         }
-        .buttonStyle(.plain)
-        .id(index)
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect(index) }
+        .id(pageID)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Page \(index + 1)")
-        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { onSelect(index) }
     }
 
     private var addPageTile: some View {
         Button {
             Task { await session.addPage() }
         } label: {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                .aspectRatio(aspectRatio, contentMode: .fit)
+                .aspectRatio(pageAspect, contentMode: .fit)
                 .overlay {
-                    VStack(spacing: 4) {
+                    VStack(spacing: AppSpacing.xs) {
                         Image(systemName: "plus")
                             .font(.title3)
                         Text("Page")
@@ -169,6 +181,17 @@ struct PagesSidePanel: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Add Page")
         .help("Add Page")
+    }
+
+    /// Reads the page's shape once per page change, outside `body`, so the
+    /// per-stroke page update never reaches the panel.
+    private func refreshPageAspect() {
+        guard let page = session.page, page.height > 0 else {
+            pageAspect = Self.defaultAspect
+            return
+        }
+        let aspect = page.width / page.height
+        if pageAspect != aspect { pageAspect = aspect }
     }
 }
 
@@ -183,6 +206,8 @@ private struct PageThumbnailCell: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var image: InkImage?
     @State private var failed = false
+    /// Bumped by a retry so the load task runs again.
+    @State private var retryCount = 0
 
     private var pageID: UUID? {
         session.manifest.pageOrder.indices.contains(index)
@@ -198,17 +223,16 @@ private struct PageThumbnailCell: View {
     var body: some View {
         ZStack {
             // Paper is the page's own colour whatever the appearance.
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .fill(AppColor.paper(usesDarkPaper: usesDarkPaper))
 
             if let image {
                 Image(inkImage: image)
                     .resizable()
                     .scaledToFill()
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous))
             } else if failed {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.tertiary)
+                retryButton
             } else {
                 ProgressView()
                     .controlSize(.mini)
@@ -216,7 +240,7 @@ private struct PageThumbnailCell: View {
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
         .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .strokeBorder(
                     isCurrent ? Color.accentColor : Color.secondary.opacity(0.25),
                     lineWidth: isCurrent ? 2 : 1
@@ -227,10 +251,36 @@ private struct PageThumbnailCell: View {
         }
     }
 
+    /// A thumbnail that did not load says so and can be tried again.
+    private var retryButton: some View {
+        Button(action: retry) {
+            VStack(spacing: AppSpacing.xxs) {
+                Image(systemName: "exclamationmark.triangle")
+                Text("Couldn’t load. Tap to retry.")
+                    .font(.caption2)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .foregroundStyle(.secondary)
+            .padding(AppSpacing.xs)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Couldn’t load Page \(index + 1). Retry.")
+    }
+
+    private func retry() {
+        guard failed else { return }
+        failed = false
+        // The load task is keyed on this, so it runs again straight away.
+        retryCount += 1
+    }
+
     private var taskKey: String {
         guard let pageID else { return "missing-\(index)" }
         // The current page re-renders after edits; others only when they load.
-        return "\(pageID)-\(isCurrent ? session.revision : 0)-\(usesDarkPaper)"
+        return "\(pageID)-\(isCurrent ? session.revision : 0)-\(usesDarkPaper)-\(retryCount)"
     }
 
     /// Small enough to be cheap, sharp enough for a panel-sized cell on Retina.

@@ -1,6 +1,51 @@
 import SearchKit
 import SwiftUI
 
+/// One result row: every hit on one page, with the page's hits kept in the
+/// order the search returned them.
+struct FindBarPageResult: Identifiable, Hashable {
+    let pageID: UUID
+    let pageIndex: Int
+    let hits: [SearchKit.SearchHit]
+
+    var id: UUID { pageID }
+
+    /// One row per page, in page order, with every source's hit on that page.
+    /// Computed when the hits change, never while the bar draws.
+    static func group(_ hits: [SearchKit.SearchHit]) -> [FindBarPageResult] {
+        var order: [UUID] = []
+        var grouped: [UUID: [SearchKit.SearchHit]] = [:]
+        for hit in hits {
+            if grouped[hit.pageID] == nil { order.append(hit.pageID) }
+            grouped[hit.pageID, default: []].append(hit)
+        }
+        return order.compactMap { pageID in
+            guard let pageHits = grouped[pageID] else { return nil }
+            return FindBarPageResult(
+                pageID: pageID,
+                pageIndex: pageHits.first?.pageIndex ?? 0,
+                hits: pageHits
+            )
+        }
+        .sorted { $0.pageIndex < $1.pageIndex }
+    }
+
+    var title: String {
+        pageIndex > 0 ? "Page \(pageIndex)" : "Page"
+    }
+
+    /// What VoiceOver reads: the page, the first match and the hit count.
+    var accessibilityLabel: String {
+        let snippet = hits.first?.snippet.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var parts = [title]
+        if !snippet.isEmpty { parts.append("“\(snippet)”") }
+        if hits.count > 1 {
+            parts.append("\(hits.count) matches")
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// In-notebook search as a find bar: one query row over the page and the
 /// results dropping beneath it in the same material.
 ///
@@ -23,6 +68,9 @@ struct NotebookFindBar: View {
     @State private var sources = Set(PageTextSource.allCases)
     @State private var dateRange = SearchDateRange.anyTime
     @State private var hits: [SearchKit.SearchHit] = []
+    /// The hits grouped into rows when they arrive, so a body pass never
+    /// regroups or re-sorts them.
+    @State private var pageResults: [FindBarPageResult] = []
     @State private var selectedPageID: UUID?
     /// Consumed by the first search, so later searches start at the first result.
     @State private var pendingInitialPageID: UUID?
@@ -70,7 +118,10 @@ struct NotebookFindBar: View {
     var body: some View {
         VStack(spacing: 0) {
             bar
-            if showsResults, !trimmedQuery.isEmpty {
+            if isEmbedded, trimmedQuery.isEmpty {
+                Divider()
+                searchHint
+            } else if showsResults, !trimmedQuery.isEmpty {
                 Divider()
                 results
             }
@@ -111,42 +162,46 @@ struct NotebookFindBar: View {
 
     // MARK: Bar
 
-    /// One 44 pt row. At narrow widths the count goes first, then the
-    /// steppers; the field never does.
+    /// One 44 pt row. Floating, at narrow widths the count goes first, then the
+    /// steppers; in a narrow split view everything but the field and close moves
+    /// into one menu. Inside the panel's 220 pt column the same menu holds the
+    /// controls that cannot be 44 pt wide; the panel's sheet is wide enough for
+    /// the full row.
     private var bar: some View {
-        ViewThatFits(in: .horizontal) {
-            barRow(showsCount: true, showsSteppers: true)
-            barRow(showsCount: false, showsSteppers: true)
-            barRow(showsCount: false, showsSteppers: false)
+        Group {
+            if isEmbedded {
+                ViewThatFits(in: .horizontal) {
+                    barRow(showsCount: true, showsSteppers: true)
+                    embeddedBarRow
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    barRow(showsCount: true, showsSteppers: true)
+                    barRow(showsCount: false, showsSteppers: true)
+                    barRow(showsCount: false, showsSteppers: false)
+                    compactBarRow
+                }
+            }
         }
         .frame(height: 44)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, AppSpacing.s)
     }
 
     private func barRow(showsCount: Bool, showsSteppers: Bool) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: AppSpacing.s) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search this notebook", text: $query)
-                .textFieldStyle(.plain)
-                .autocorrectionDisabled()
-                .focused($isFieldFocused)
-                .submitLabel(.go)
-                .onSubmit(go)
-                .layoutPriority(1)
-                .frame(minWidth: 70)
-            if !query.isEmpty {
-                iconButton("xmark.circle.fill", label: "Clear search") {
-                    query = ""
-                }
-            }
+            searchField
+            clearButton
             #if os(iOS)
             PencilSearchButton(search: search) { query = $0 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
+                .hitTarget()
             #endif
             SearchFilterMenu(sources: $sources, dateRange: $dateRange)
                 .labelStyle(.iconOnly)
+                .hitTarget()
             if showsCount, !hits.isEmpty {
                 Text(matchCountText)
                     .font(.caption)
@@ -156,50 +211,133 @@ struct NotebookFindBar: View {
                     .fixedSize()
             }
             if showsSteppers {
-                iconButton("chevron.up", label: "Previous result") {
+                iconButton("chevron.up", label: "Previous Result", shortcut: .previousResult) {
                     step(-1)
                 }
                 .disabled(!canStepBack)
-                iconButton("chevron.down", label: "Next result") {
+                iconButton("chevron.down", label: "Next Result", shortcut: .nextResult) {
                     step(1)
                 }
                 .disabled(!canStepForward)
             }
-            Button {
-                showsResults.toggle()
-            } label: {
-                Image(systemName: "list.bullet")
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(showsResults ? Color.accentColor : .secondary)
-            .accessibilityLabel(showsResults ? "Hide results" : "Show results")
-            .disabled(trimmedQuery.isEmpty)
+            resultsToggle
             if !isEmbedded {
-                iconButton("xmark", label: "Close search") {
+                iconButton("xmark", label: "Close Search") {
                     onClose()
                 }
             }
         }
     }
 
+    /// The narrowest floating bar: the field, its clear button, one menu for the
+    /// result steps and filters, and close. Used in a 1/3 split.
+    private var compactBarRow: some View {
+        HStack(spacing: AppSpacing.s) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            searchField
+            clearButton
+            moreMenu
+            iconButton("xmark", label: "Close Search") {
+                onClose()
+            }
+        }
+    }
+
+    /// The panel's bar: the field, its clear button and one menu at 44 pt each.
+    /// Search results step from that menu; nothing here is a 28 pt target.
+    private var embeddedBarRow: some View {
+        HStack(spacing: AppSpacing.s) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            searchField
+            clearButton
+            moreMenu
+        }
+    }
+
+    private var searchField: some View {
+        TextField("Search this notebook", text: $query)
+            .textFieldStyle(.plain)
+            .autocorrectionDisabled()
+            .focused($isFieldFocused)
+            .submitLabel(.go)
+            .onSubmit(go)
+            .layoutPriority(1)
+            .frame(minWidth: 56)
+    }
+
+    private var clearButton: some View {
+        Group {
+            if !query.isEmpty {
+                iconButton("xmark.circle.fill", label: "Clear Search") {
+                    query = ""
+                }
+            }
+        }
+    }
+
+    private var resultsToggle: some View {
+        Button {
+            showsResults.toggle()
+        } label: {
+            Image(systemName: "list.bullet")
+                .hitTarget()
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(showsResults ? Color.accentColor : .secondary)
+        .accessibilityLabel(showsResults ? "Hide Results" : "Show Results")
+        .disabled(trimmedQuery.isEmpty)
+    }
+
+    /// The controls the panel's width cannot hold at 44 pt each.
+    private var moreMenu: some View {
+        Menu {
+            Button("Previous Result", systemImage: "chevron.up") { step(-1) }
+                .disabled(!canStepBack)
+            Button("Next Result", systemImage: "chevron.down") { step(1) }
+                .disabled(!canStepForward)
+            Button(showsResults ? "Hide Results" : "Show Results", systemImage: "list.bullet") {
+                showsResults.toggle()
+            }
+            .disabled(trimmedQuery.isEmpty)
+            Divider()
+            SearchFilterMenu(sources: $sources, dateRange: $dateRange)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .hitTarget()
+        }
+        .accessibilityLabel("Search Options")
+    }
+
     private func iconButton(
         _ systemImage: String,
         label: String,
+        shortcut: ResultShortcut? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+                .hitTarget()
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .accessibilityLabel(label)
+        .modifier(ResultShortcutModifier(shortcut: shortcut))
     }
 
     // MARK: Results
+
+    /// Shown in the panel while the field is empty: what a search looks at.
+    private var searchHint: some View {
+        Text("Searches handwriting, typed text, PDF text and page numbers.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.m)
+    }
 
     private var results: some View {
         ScrollView {
@@ -225,15 +363,15 @@ struct NotebookFindBar: View {
             showsResults = false
             onGoToPage(page - 1)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: AppSpacing.s) {
                 Image(systemName: "number.square")
                     .foregroundStyle(.secondary)
                 Text("Go to Page \(page)")
                     .font(.callout.weight(.medium))
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.s)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -241,14 +379,14 @@ struct NotebookFindBar: View {
         .accessibilityLabel("Go to Page \(page)")
     }
 
-    private func pageRow(_ result: PageResult) -> some View {
+    private func pageRow(_ result: FindBarPageResult) -> some View {
         let isSelected = result.pageID == selectedPageID
         return Button {
             jump(to: result)
         } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text(pageTitle(result))
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                HStack(spacing: AppSpacing.s) {
+                    Text(result.title)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     if result.hits.count > 1 {
@@ -268,14 +406,14 @@ struct NotebookFindBar: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.s)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(pageTitle(result))
+        .accessibilityLabel(result.accessibilityLabel)
     }
 
     private var noMatches: some View {
@@ -283,18 +421,11 @@ struct NotebookFindBar: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 14)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.m)
     }
 
     // MARK: State
-
-    private struct PageResult: Identifiable {
-        let pageID: UUID
-        let pageIndex: Int
-        let hits: [SearchKit.SearchHit]
-        var id: UUID { pageID }
-    }
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -303,25 +434,6 @@ struct NotebookFindBar: View {
     /// The 1-based page a pure page-number query names, if any.
     private var pageTarget: Int? {
         PageNumberQuery.page(in: query, pageCount: pageCount)
-    }
-
-    /// One row per page, in page order, with every source's hit on that page.
-    private var pageResults: [PageResult] {
-        var order: [UUID] = []
-        var grouped: [UUID: [SearchKit.SearchHit]] = [:]
-        for hit in hits {
-            if grouped[hit.pageID] == nil { order.append(hit.pageID) }
-            grouped[hit.pageID, default: []].append(hit)
-        }
-        return order.compactMap { pageID in
-            guard let pageHits = grouped[pageID] else { return nil }
-            return PageResult(
-                pageID: pageID,
-                pageIndex: pageHits.first?.pageIndex ?? 0,
-                hits: pageHits
-            )
-        }
-        .sorted { $0.pageIndex < $1.pageIndex }
     }
 
     private var selectedIndex: Int {
@@ -342,15 +454,12 @@ struct NotebookFindBar: View {
         return "\(count) match\(count == 1 ? "" : "es")"
     }
 
-    private func pageTitle(_ result: PageResult) -> String {
-        result.pageIndex > 0 ? "Page \(result.pageIndex)" : "Page"
-    }
-
     private func scheduleSearch(_ value: String) {
         searchTask?.cancel()
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             hits = []
+            pageResults = []
             settledQuery = ""
             selectedPageID = nil
             onHighlight(nil)
@@ -364,17 +473,20 @@ struct NotebookFindBar: View {
             guard !Task.isCancelled else { return }
             let found = await search.search(trimmed, in: notebookID, sources: sources, dateRange: dateRange)
             guard !Task.isCancelled else { return }
+            // Group once, here, so the body never sorts the whole result set.
+            let grouped = FindBarPageResult.group(found)
             hits = found
+            pageResults = grouped
             settledQuery = trimmed
             onHighlight(SearchHighlight(query: trimmed, sources: sources, dateRange: dateRange))
             // The first search lands on the page a search hit asked for; every
             // later search starts at the first result.
             let requested = pendingInitialPageID
             pendingInitialPageID = nil
-            if let requested, pageResults.contains(where: { $0.pageID == requested }) {
+            if let requested, grouped.contains(where: { $0.pageID == requested }) {
                 selectedPageID = requested
             } else {
-                selectedPageID = pageResults.first?.pageID
+                selectedPageID = grouped.first?.pageID
             }
         }
     }
@@ -393,7 +505,7 @@ struct NotebookFindBar: View {
     }
 
     /// Tapping a row jumps and folds the list away; the toggle brings it back.
-    private func jump(to result: PageResult) {
+    private func jump(to result: FindBarPageResult) {
         selectedPageID = result.pageID
         showsResults = false
         onSelectPage(result.pageID)
@@ -422,6 +534,32 @@ struct NotebookFindBar: View {
     }
 }
 
+/// The two result steppers and the Mac shortcuts that reach them: ⌘G next,
+/// ⇧⌘G previous.
+enum ResultShortcut {
+    case nextResult
+    case previousResult
+
+    var key: KeyEquivalent { "g" }
+
+    var modifiers: EventModifiers {
+        self == .nextResult ? .command : [.command, .shift]
+    }
+}
+
+private struct ResultShortcutModifier: ViewModifier {
+    let shortcut: ResultShortcut?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let shortcut {
+            content.keyboardShortcut(shortcut.key, modifiers: shortcut.modifiers)
+        } else {
+            content
+        }
+    }
+}
+
 /// Floating over the page the bar is a material card; inside a panel it is
 /// just the row and its results.
 private struct FindBarChrome: ViewModifier {
@@ -433,8 +571,8 @@ private struct FindBarChrome: ViewModifier {
             content
         } else {
             content
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
                 .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
         }
     }

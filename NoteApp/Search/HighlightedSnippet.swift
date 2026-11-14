@@ -1,8 +1,8 @@
 import SearchKit
 import SwiftUI
 
-/// A search excerpt with the matched text in bold on a soft orange background,
-/// the way Goodnotes marks a hit.
+/// A search excerpt with the matched text in bold on the app's search-hit wash,
+/// the same colour the page marks use.
 struct HighlightedSnippet: View {
     let snippet: String
     let matchRange: Range<String.Index>?
@@ -25,7 +25,7 @@ struct HighlightedSnippet: View {
 
         let lower = text.index(text.startIndex, offsetByCharacters: start)
         let upper = text.index(lower, offsetByCharacters: length)
-        text[lower..<upper].backgroundColor = Color.orange.opacity(0.28)
+        text[lower..<upper].backgroundColor = AppColor.searchHitFill
         text[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
         return text
     }
