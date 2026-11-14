@@ -135,6 +135,42 @@ struct RenderBenchmarks {
         print("BENCH realPDF 2x paper: \(sample.count) pages \(paper)")
     }
 
+    /// The median of five runs, so one scheduler hiccup does not decide the
+    /// number.
+    static func median(_ values: [Duration]) -> Duration {
+        values.sorted()[values.count / 2]
+    }
+
+    /// One stroke appended to a page that already has `strokeCount` strokes,
+    /// through the converter's change check. The converter is prepared outside
+    /// the measurement.
+    static func oneStrokeAppend(
+        strokeCount: Int,
+        clock: ContinuousClock
+    ) -> Duration {
+        let layerID = UUID()
+        var strokes = (0..<strokeCount).map {
+            SampleStroke.stroke(style: .pen, index: $0, pointCount: 64)
+        }
+        let converter = IncrementalStrokeConverter()
+        let records = converter.records(from: strokes) { _ in layerID }
+        converter.seed(strokes: strokes, records: records)
+        strokes.append(SampleStroke.stroke(style: .pen, index: 1, pointCount: 64))
+        return clock.measure {
+            _ = converter.changedRecords(from: strokes) { _ in layerID }
+        }
+    }
+
+    @Test func inkOneStrokeAppend() throws {
+        let clock = ContinuousClock()
+        for strokeCount in [200, 2_000] {
+            let elapsed = Self.median((0..<5).map { _ in
+                Self.oneStrokeAppend(strokeCount: strokeCount, clock: clock)
+            })
+            print("BENCH inkAppend \(strokeCount) strokes, full path: median \(elapsed)")
+        }
+    }
+
     /// What one finished stroke costs on a busy page: the converter's change
     /// check and conversion, then the session's merge into the page.
     @Test func inkRoundTrip() throws {
