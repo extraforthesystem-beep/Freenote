@@ -795,11 +795,13 @@ struct LibraryView: View {
             Button("Import PDF…", systemImage: "square.and.arrow.down") {
                 showPDFImporter = true
             }
+            .keyboardShortcut("i", modifiers: [.command, .shift])
             Divider()
             Button("New Folder", systemImage: "folder.badge.plus") {
                 beginCreatingFolder(parent: newFolderParentForLocation())
             }
             .disabled(!canAddFolderAtSelection)
+            .keyboardShortcut("n", modifiers: [.command, .shift])
         } label: {
             Label("New", systemImage: "plus")
         }
