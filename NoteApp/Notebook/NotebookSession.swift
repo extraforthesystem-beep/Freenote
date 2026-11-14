@@ -553,12 +553,16 @@ final class NotebookSession: Identifiable {
     /// the manifest is rewritten. Pages are written one file at a time and then
     /// placed in the order, so a crash in between leaves orphan page files the
     /// next open recovers rather than a manifest entry with no page.
+    ///
+    /// A cancelled insert throws `CancellationError` at a page boundary: every
+    /// page already written is on disk and in the manifest, no page is
+    /// half-written, and the caller can tell a stop from a failure.
     @discardableResult
     func insertPages(
         _ pages: [Page],
         at index: Int,
         onProgress: ((_ written: Int, _ total: Int) -> Void)? = nil
-    ) async -> Int {
+    ) async throws -> Int {
         guard !pages.isEmpty else { return 0 }
         guard await commitSucceeded() else {
             errorMessage = "The pages could not be added because this page is not saved yet."
@@ -566,6 +570,9 @@ final class NotebookSession: Identifiable {
         }
         do {
             for (written, page) in pages.enumerated() {
+                // Checked before each page, so a cancel between pages leaves
+                // only whole pages behind.
+                try Task.checkCancellation()
                 try await store.savePage(page, in: manifest.id)
                 onProgress?(written + 1, pages.count)
             }
@@ -581,6 +588,11 @@ final class NotebookSession: Identifiable {
             await reloadManifest()
             await loadPage(at: position)
             return pages.count
+        } catch is CancellationError {
+            // The page files written so far stay, and the manifest lists them;
+            // a stop is not a failure, so no error banner.
+            await reloadManifest()
+            throw CancellationError()
         } catch {
             // The page files that were written are on disk already and the
             // manifest lists them, so show what is really there.

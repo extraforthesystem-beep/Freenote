@@ -230,7 +230,7 @@ enum PDFImporter {
         let pages = scan.pages.map { makePage($0, assetName: assetName, margin: margin) }
         let index = atEnd ? session.pageCount : session.pageIndex + 1
 
-        let inserted = await session.insertPages(pages, at: index) { written, total in
+        let inserted = try await session.insertPages(pages, at: index) { written, total in
             onProgress?(0.8 + 0.2 * Double(written) / Double(max(total, 1)))
         }
         guard inserted == pages.count else {
