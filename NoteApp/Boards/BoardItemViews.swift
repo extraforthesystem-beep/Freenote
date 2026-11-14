@@ -71,9 +71,36 @@ enum BoardStickyText {
     private static let maximum: CGFloat = 18
     private static let minimum: CGFloat = 9
 
+    /// Sizes already computed, by text and box. A note is drawn from a body
+    /// that re-runs on every viewport update, so the shrink-to-fit walk below
+    /// would otherwise run for every sticky on screen on every pan frame.
+    private static var fittedSizes: [FittedKey: CGFloat] = [:]
+    /// A board holds a handful of distinct notes; this only bounds the walk
+    /// done while one note is being resized or retyped.
+    private static let fittedSizeLimit = 256
+
+    private struct FittedKey: Hashable {
+        let text: String
+        let width: CGFloat
+        let height: CGFloat
+    }
+
+    /// The largest size that fits `text` in `box`, memoised by both.
     static func fontSize(for text: String, in box: CGSize) -> CGFloat {
         guard !text.isEmpty, box.width > 1, box.height > 1 else { return maximum }
 
+        let key = FittedKey(text: text, width: box.width, height: box.height)
+        if let cached = fittedSizes[key] { return cached }
+
+        let size = fittedSize(for: text, in: box)
+        if fittedSizes.count >= fittedSizeLimit {
+            fittedSizes.removeAll(keepingCapacity: true)
+        }
+        fittedSizes[key] = size
+        return size
+    }
+
+    private static func fittedSize(for text: String, in box: CGSize) -> CGFloat {
         let availableWidth = max(box.width - padding * 2, 1)
         let availableHeight = max(box.height - padding * 2, 1)
         var candidate = maximum
