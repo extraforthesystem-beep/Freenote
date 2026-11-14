@@ -135,6 +135,7 @@ struct LayersPanel: View {
                     .hitTarget()
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Layer options")
         }
         .padding(.vertical, 2)
     }
