@@ -1547,7 +1547,8 @@ struct NotebookPane: View {
                     panTouches: panTouches,
                     usesDarkPaper: usesDarkPaper,
                     inkCapture: inkCapture,
-                    onActivate: { index in await session.goToPage(index) }
+                    onActivate: { index in await session.goToPage(index) },
+                    onAddPageAtEnd: { await session.addPage(after: false) }
                 ) {
                     pageContent(page)
                 }

@@ -116,6 +116,8 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
     let usesDarkPaper: Bool
     let inkCapture: InkCapture
     let onActivate: @MainActor (Int) async -> Void
+    /// Pulling past the last page adds a page at the end.
+    let onAddPageAtEnd: (@MainActor () async -> Void)?
     let content: Content
 
     init(
@@ -129,6 +131,7 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
         usesDarkPaper: Bool = false,
         inkCapture: InkCapture,
         onActivate: @escaping @MainActor (Int) async -> Void,
+        onAddPageAtEnd: (@MainActor () async -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.mode = mode
@@ -141,6 +144,7 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
         self.usesDarkPaper = usesDarkPaper
         self.inkCapture = inkCapture
         self.onActivate = onActivate
+        self.onAddPageAtEnd = onAddPageAtEnd
         self.content = content()
     }
 
@@ -175,6 +179,7 @@ struct PagedNotebookView<Content: View>: UIViewRepresentable {
         view.usesDarkPaper = usesDarkPaper
         view.inkCapture = inkCapture
         view.onActivate = onActivate
+        view.onAddPageAtEnd = onAddPageAtEnd
         view.update(pageOrder: pageOrder, activePage: activePage, source: source)
     }
 
@@ -215,6 +220,74 @@ class PagesView: UIView {
         didSet { if oldValue != panTouches { panTouchesDidChange() } }
     }
     var onActivate: (@MainActor (Int) async -> Void)?
+    var onAddPageAtEnd: (@MainActor () async -> Void)?
+
+    // MARK: Pull past the end to add a page
+
+    /// How far past the last page a pull must go before letting go adds one.
+    static let addPagePullDistance: CGFloat = 90
+    private lazy var addPageHint: UILabel = {
+        let label = UILabel()
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.textColor = .secondaryLabel
+        label.textAlignment = .center
+        label.numberOfLines = 2
+        label.alpha = 0
+        label.isUserInteractionEnabled = false
+        addSubview(label)
+        return label
+    }()
+    private var addPageArmed = false
+    private var isAddingPage = false
+    private let addPageHaptic = UIImpactFeedbackGenerator(style: .medium)
+
+    /// Shows the hint in the space a pull past the end opens up. `overscroll`
+    /// is how far past the end the content is; `vertical` says along which axis.
+    func updateAddPageHint(overscroll: CGFloat, vertical: Bool, isDragging: Bool) {
+        guard onAddPageAtEnd != nil, !isAddingPage, overscroll > 4 else {
+            if addPageHint.alpha != 0 { addPageHint.alpha = 0 }
+            if !isDragging { addPageArmed = false }
+            return
+        }
+        bringSubviewToFront(addPageHint)
+        let armed = overscroll >= Self.addPagePullDistance
+        if isDragging, armed != addPageArmed {
+            addPageArmed = armed
+            if armed { addPageHaptic.impactOccurred() }
+        }
+        let symbol = vertical ? "arrow.up.doc" : "arrow.left.doc"
+        let text = addPageArmed ? "Release to add a page" : "Pull to add a page"
+        let attributed = NSMutableAttributedString(
+            attachment: NSTextAttachment(image: UIImage(systemName: addPageArmed ? "plus.circle.fill" : symbol) ?? UIImage())
+        )
+        attributed.append(NSAttributedString(string: vertical ? "  " + text : "\n" + text))
+        addPageHint.attributedText = attributed
+        addPageHint.textColor = addPageArmed ? tintColor : .secondaryLabel
+        addPageHint.alpha = min(overscroll / Self.addPagePullDistance, 1)
+        let size = addPageHint.sizeThatFits(CGSize(width: vertical ? bounds.width : 120, height: .greatestFiniteMagnitude))
+        addPageHint.bounds = CGRect(origin: .zero, size: size)
+        addPageHint.center = vertical
+            ? CGPoint(x: bounds.midX, y: bounds.maxY - overscroll / 2)
+            : CGPoint(x: bounds.maxX - overscroll / 2, y: bounds.midY)
+    }
+
+    func addPageHintWillBeginDragging() {
+        addPageArmed = false
+        addPageHaptic.prepare()
+    }
+
+    /// Call when the finger lifts: adds the page if the pull went far enough.
+    func addPageHintDidEndDragging() {
+        guard addPageArmed, !isAddingPage, let onAddPageAtEnd else { return }
+        addPageArmed = false
+        isAddingPage = true
+        UIView.animate(withDuration: 0.2) { self.addPageHint.alpha = 0 }
+        Task { @MainActor [weak self] in
+            await onAddPageAtEnd()
+            self?.isAddingPage = false
+        }
+    }
+
     /// Pages are drawn as dark paper, so background and page images follow.
     var usesDarkPaper = false {
         didSet {
@@ -836,6 +909,7 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
         scroll.showsHorizontalScrollIndicator = false
         scroll.showsVerticalScrollIndicator = true
         scroll.bouncesZoom = true
+        scroll.alwaysBounceVertical = true
         scroll.backgroundColor = .clear
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.panGestureRecognizer.allowedTouchTypes = PagesView.scrollTouchTypes
@@ -1094,6 +1168,12 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         refreshSlots()
+        let end = scroll.contentSize.height + scroll.contentInset.bottom
+        updateAddPageHint(
+            overscroll: scroll.contentOffset.y + scroll.bounds.height - end,
+            vertical: true,
+            isDragging: scroll.isDragging
+        )
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
@@ -1107,6 +1187,7 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        addPageHintDidEndDragging()
         if !decelerate { userScrollDidSettle() }
     }
 
@@ -1116,6 +1197,7 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         cancelPendingReveal()
+        addPageHintWillBeginDragging()
     }
 
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
@@ -1139,6 +1221,7 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
         pager.showsHorizontalScrollIndicator = false
         pager.showsVerticalScrollIndicator = false
         pager.alwaysBounceVertical = false
+        pager.alwaysBounceHorizontal = true
         pager.backgroundColor = .clear
         pager.contentInsetAdjustmentBehavior = .never
         pager.decelerationRate = .fast
@@ -1358,7 +1441,13 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if scrollView === pager { refreshSlots() }
+        guard scrollView === pager else { return }
+        refreshSlots()
+        updateAddPageHint(
+            overscroll: pager.contentOffset.x + pager.bounds.width - pager.contentSize.width,
+            vertical: false,
+            isDragging: pager.isDragging
+        )
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
@@ -1372,7 +1461,10 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if scrollView === pager, !decelerate { pagerDidSettle() }
+        if scrollView === pager {
+            addPageHintDidEndDragging()
+            if !decelerate { pagerDidSettle() }
+        }
     }
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
@@ -1381,6 +1473,7 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         cancelPendingReveal()
+        addPageHintWillBeginDragging()
     }
 
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
