@@ -83,8 +83,53 @@ struct BoardDotGrid: View {
     }
 }
 
+/// The board's objects, culled to what the viewport shows.
+///
+/// The visible slice is computed here, once per viewport change, so the layer
+/// below builds one element per item on screen instead of one per item on the
+/// board. It is a child of the canvas so a pan re-runs this body, not the
+/// canvas representable or the toolbar around it.
+struct BoardVisibleItemLayer: View {
+    let board: Board
+    let viewport: BoardViewportState
+    /// The selected object. It is kept even when it is dragged past the edge,
+    /// so its outline and handles never vanish mid-gesture.
+    var selectedItemID: UUID?
+    let assetsDirectory: URL
+    var reduceMotion = false
+    /// The item whose text is being typed into above the canvas.
+    var editingItemID: UUID?
+
+    /// Screen points of extra room, so an object is built just before its edge
+    /// scrolls in rather than on the frame it appears.
+    private static let margin: CGFloat = 64
+
+    var body: some View {
+        BoardItemLayer(
+            items: visibleItems,
+            viewport: viewport,
+            assetsDirectory: assetsDirectory,
+            reduceMotion: reduceMotion,
+            editingItemID: editingItemID
+        )
+    }
+
+    private var visibleItems: [BoardItem] {
+        guard viewport.isReady else { return [] }
+        let inset = Self.margin / max(viewport.zoom, 0.001)
+        let rect = viewport.visibleRect.insetBy(dx: -inset, dy: -inset)
+        return board.frameBackedItems(
+            in: rect,
+            alwaysIncluding: Set([selectedItemID].compactMap { $0 })
+        )
+    }
+}
+
 /// Sticky notes, text, shapes and images in page space, under the ink so a
 /// board can be annotated over them.
+///
+/// `items` is already culled by `BoardVisibleItemLayer`, so this builds only
+/// the objects on screen.
 struct BoardItemLayer: View {
     let items: [BoardItem]
     let viewport: BoardViewportState
@@ -99,7 +144,7 @@ struct BoardItemLayer: View {
         return ZStack(alignment: .topLeading) {
             if visible.width > 0 {
                 ForEach(items) { item in
-                    if let frame = item.frame, frame.intersects(visible) {
+                    if let frame = item.frame {
                         BoardItemView(
                             item: item,
                             assetsDirectory: assetsDirectory,
@@ -161,20 +206,6 @@ enum BoardResizeCorner: CaseIterable, Hashable {
             return abs(point.x - handle.x) <= tolerance && abs(point.y - handle.y) <= tolerance
         }
     }
-}
-
-/// An alignment guide shown while dragging: a thin line through the board at
-/// a world coordinate.
-struct BoardSnapGuide: Equatable, Identifiable {
-    enum Axis {
-        case vertical, horizontal
-    }
-
-    let axis: Axis
-    /// The world coordinate of the line.
-    let position: CGFloat
-
-    var id: String { "\(axis == .vertical ? "v" : "h")-\(position)" }
 }
 
 // MARK: - Selection chrome
@@ -324,7 +355,7 @@ private struct BoardSelectionBar: View {
     let onEditText: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             button("Duplicate", "plus.square.on.square", action: onDuplicate)
             button("Delete", "trash", action: onDelete)
             Divider().frame(height: 20)
@@ -340,25 +371,34 @@ private struct BoardSelectionBar: View {
                 colorMenu
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 44)
+        // 6, as in the notebook's `SelectionActionBar`: the two bars are one
+        // element and must not drift apart.
+        .padding(.horizontal, 6)
+        // The notebook's selection bar is the same element, so both use its
+        // metrics: 48 pt tall, 44 pt targets, a hairline border and a 2 pt drop.
+        .frame(minHeight: 48)
         .background(.regularMaterial, in: Capsule())
         .overlay {
-            Capsule().strokeBorder(Color.primary.opacity(0.08))
+            Capsule().strokeBorder(.separator, lineWidth: 0.5)
         }
-        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
 
     private func button(_ label: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
-                .frame(width: 36, height: 36)
-                .contentShape(Rectangle())
+            iconLabel(symbol)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .help(label)
+    }
+
+    /// 44 pt is the smallest target on iPad, and Delete sits next to Duplicate.
+    private func iconLabel(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 15, weight: .medium))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
     /// A shape gets a line colour and a fill; a sticky note has one colour.
@@ -375,10 +415,7 @@ private struct BoardSelectionBar: View {
                 swatches { onColor($0) }
             }
         } label: {
-            Image(systemName: "paintpalette")
-                .font(.system(size: 15, weight: .medium))
-                .frame(width: 36, height: 36)
-                .contentShape(Rectangle())
+            iconLabel("paintpalette")
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -443,11 +480,12 @@ struct BoardTextEditor: View {
                 // growing text can cover the keyboard's Done button.
                 Button("Done", action: onSubmit)
                     .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, AppSpacing.m)
                     .frame(height: 32)
                     .background(.regularMaterial, in: Capsule())
                     .overlay { Capsule().strokeBorder(Color.primary.opacity(0.08)) }
                     .offset(x: x, y: y > 44 ? y - 40 : y + height + 8)
+                    .hitTarget()
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
@@ -495,6 +533,7 @@ struct BoardZoomPill: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
+        .hitTarget()
         .accessibilityLabel("Zoom \(percentText)")
         .accessibilityHint("Opens Zoom to Fit and zoom presets")
         .help("Zoom")
@@ -524,6 +563,8 @@ struct BoardGridToggle: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // The drawn capsule stays 40 x 36; the target around it is 44 pt.
+        .hitTarget()
         .accessibilityLabel(isOn ? "Hide Dot Grid" : "Show Dot Grid")
         .accessibilityAddTraits(isOn ? .isSelected : [])
         .help(isOn ? "Hide the dot grid" : "Show a dot grid")

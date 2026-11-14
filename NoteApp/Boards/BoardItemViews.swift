@@ -1,11 +1,6 @@
 import BoardKit
 import NoteCore
 import SwiftUI
-#if os(iOS)
-import UIKit
-#else
-import AppKit
-#endif
 
 /// The six pastel card colours the board's sticky notes offer.
 enum BoardStickyPalette {
@@ -71,9 +66,36 @@ enum BoardStickyText {
     private static let maximum: CGFloat = 18
     private static let minimum: CGFloat = 9
 
+    /// Sizes already computed, by text and box. A note is drawn from a body
+    /// that re-runs on every viewport update, so the shrink-to-fit walk below
+    /// would otherwise run for every sticky on screen on every pan frame.
+    private static var fittedSizes: [FittedKey: CGFloat] = [:]
+    /// A board holds a handful of distinct notes; this only bounds the walk
+    /// done while one note is being resized or retyped.
+    private static let fittedSizeLimit = 256
+
+    private struct FittedKey: Hashable {
+        let text: String
+        let width: CGFloat
+        let height: CGFloat
+    }
+
+    /// The largest size that fits `text` in `box`, memoised by both.
     static func fontSize(for text: String, in box: CGSize) -> CGFloat {
         guard !text.isEmpty, box.width > 1, box.height > 1 else { return maximum }
 
+        let key = FittedKey(text: text, width: box.width, height: box.height)
+        if let cached = fittedSizes[key] { return cached }
+
+        let size = fittedSize(for: text, in: box)
+        if fittedSizes.count >= fittedSizeLimit {
+            fittedSizes.removeAll(keepingCapacity: true)
+        }
+        fittedSizes[key] = size
+        return size
+    }
+
+    private static func fittedSize(for text: String, in box: CGSize) -> CGFloat {
         let availableWidth = max(box.width - padding * 2, 1)
         let availableHeight = max(box.height - padding * 2, 1)
         var candidate = maximum
@@ -172,40 +194,55 @@ struct BoardShapeView: View {
 }
 
 /// A board image, read from the board assets folder on either platform.
+///
+/// The file is decoded once, off the main actor, and kept in
+/// `BoardImageCache`; the view never touches the disk while it is being drawn.
 struct BoardAssetImage: View {
     let assetName: String
     let assetsDirectory: URL
 
+    @State private var image: CGImage?
+
+    private var fileURL: URL {
+        assetsDirectory.appendingPathComponent(assetName)
+    }
+
     var body: some View {
         Group {
-            #if os(iOS)
-            if let image = UIImage(contentsOfFile: path) {
-                Image(uiImage: image)
+            if let image {
+                Image(decorative: image, scale: 1)
                     .resizable()
                     .scaledToFill()
                     .clipped()
             } else {
                 placeholder
             }
-            #else
-            if let image = NSImage(contentsOf: assetsDirectory.appendingPathComponent(assetName)) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .clipped()
-            } else {
-                placeholder
-            }
-            #endif
+        }
+        // Keyed by the asset, so the last image stays up while a new one
+        // decodes and a re-render never repeats the work.
+        .task(id: assetName) {
+            await load()
         }
     }
 
-    private var path: String {
-        assetsDirectory.appendingPathComponent(assetName).path
+    private func load() async {
+        let url = fileURL
+        if let cached = BoardImageCache.shared.image(for: url) {
+            image = cached
+            return
+        }
+
+        let decoded = await Task.detached(priority: .userInitiated) {
+            BoardImageDecoder.decode(fileAt: url)
+        }.value
+        guard !Task.isCancelled, let decoded else { return }
+
+        BoardImageCache.shared.store(decoded, for: url)
+        image = decoded
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
             .fill(Color.secondary.opacity(0.10))
             .overlay {
                 Image(systemName: "photo")
@@ -216,8 +253,8 @@ struct BoardAssetImage: View {
 }
 
 /// Frame-backed items laid out inside a world rectangle, for the Mac's static
-/// render. The iOS canvas uses `BoardItemLayer` instead, which follows the
-/// viewport.
+/// render and the board thumbnails. The iOS canvas uses `BoardItemLayer`
+/// instead, which follows the viewport.
 struct BoardStaticItemLayer: View {
     let items: [BoardItem]
     /// The world rectangle the layer covers.
@@ -228,7 +265,9 @@ struct BoardStaticItemLayer: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(items) { item in
-                if let frame = item.frame {
+                // A 52 pt thumbnail is many screens smaller than a full board;
+                // an item outside the crop has nothing to draw into.
+                if let frame = item.frame, frame.intersects(content) {
                     BoardItemView(item: item, assetsDirectory: assetsDirectory)
                         .frame(width: max(frame.width, 1), height: max(frame.height, 1))
                         .scaleEffect(scale, anchor: .topLeading)
