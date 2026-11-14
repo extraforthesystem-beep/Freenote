@@ -568,30 +568,41 @@ final class NotebookSession: Identifiable {
             errorMessage = "The pages could not be added because this page is not saved yet."
             return 0
         }
-        do {
-            for (written, page) in pages.enumerated() {
-                // Checked before each page, so a cancel between pages leaves
-                // only whole pages behind.
-                try Task.checkCancellation()
-                try await store.savePage(page, in: manifest.id)
-                onProgress?(written + 1, pages.count)
-            }
+        var writtenCount = 0
+        // Moves the pages written so far to `index`; a new page file is listed
+        // at the end of the notebook until then.
+        func placeWrittenPages() async throws -> Int {
             await reloadManifest()
-
             var order = manifest.pageOrder
-            let insertedIDs = pages.map(\.id)
+            let insertedIDs = pages.prefix(writtenCount).map(\.id)
             let insertedSet = Set(insertedIDs)
             order.removeAll { insertedSet.contains($0) }
             let position = min(max(0, index), order.count)
             order.insert(contentsOf: insertedIDs, at: position)
             try await store.reorderPages(in: manifest.id, order: order)
             await reloadManifest()
+            return position
+        }
+        do {
+            for page in pages {
+                // Checked before each page, so a cancel between pages leaves
+                // only whole pages behind.
+                try Task.checkCancellation()
+                try await store.savePage(page, in: manifest.id)
+                writtenCount += 1
+                onProgress?(writtenCount, pages.count)
+            }
+            let position = try await placeWrittenPages()
             await loadPage(at: position)
             return pages.count
         } catch is CancellationError {
-            // The page files written so far stay, and the manifest lists them;
-            // a stop is not a failure, so no error banner.
-            await reloadManifest()
+            // The pages written so far stay, at the insert position; a stop is
+            // not a failure, so no error banner.
+            if writtenCount > 0 {
+                _ = try? await placeWrittenPages()
+            } else {
+                await reloadManifest()
+            }
             throw CancellationError()
         } catch {
             // The page files that were written are on disk already and the

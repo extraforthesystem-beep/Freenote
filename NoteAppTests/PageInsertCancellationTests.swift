@@ -88,16 +88,17 @@ final class PageInsertCancellationTests: XCTestCase {
         let unwritten = Array(pages.dropFirst(cancelledAfter))
         let writtenIDs = written.map(\.id)
 
-        // The manifest holds exactly the pages written, in write order.
+        // The manifest holds exactly the pages written, in write order, at the
+        // requested insert position (0).
         XCTAssertEqual(
             session.manifest.pageOrder,
-            existingOrder + writtenIDs,
+            writtenIDs + existingOrder,
             "The session's manifest does not match the pages written"
         )
         let manifest = try await store.loadManifest(notebookID)
         XCTAssertEqual(
             manifest.pageOrder,
-            existingOrder + writtenIDs,
+            writtenIDs + existingOrder,
             "The manifest on disk does not match the pages written"
         )
 
