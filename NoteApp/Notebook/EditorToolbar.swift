@@ -75,7 +75,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             }
             trailing
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, AppSpacing.s)
         .frame(height: 52)
         .background(.bar)
         .background {
@@ -200,7 +200,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         Button {
             AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) { editor.isReadOnly = false }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: AppSpacing.xs) {
                 Image(systemName: "lock.fill")
                     .font(.caption.weight(.semibold))
                 Text("Read Only")
@@ -533,7 +533,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         return Button {
             select(.pen, popover: .pen)
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: AppSpacing.s) {
                 Image(systemName: editor.penStyle.symbolName)
                     .font(.system(size: 17, weight: .medium))
                 Circle()
@@ -756,7 +756,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 .fill(Color(color))
                 .overlay(Circle().strokeBorder(AppColor.swatchOutline, lineWidth: 1))
                 .frame(width: 24, height: 24)
-                .padding(3)
+                .padding(AppSpacing.xs)
                 .overlay {
                     Circle()
                         .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
@@ -791,7 +791,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 .fill(Color(color))
                 .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
                 .frame(width: 34, height: 34)
-                .padding(5)
+                .padding(AppSpacing.xs)
         }
         .dropDestination(for: FavoriteColorSlot.self) { slots, _ in
             guard let source = slots.first?.index, source != index else { return false }
@@ -860,7 +860,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                     .frame(width: 10, height: 10)
             }
             .frame(width: 24, height: 24)
-            .padding(3)
+            .padding(AppSpacing.xs)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
@@ -1103,7 +1103,7 @@ private struct WidthSlider: View {
             max(PenWidth.millimetres(fromPoints: shown), sliderRange.lowerBound),
             sliderRange.upperBound
         )
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             HStack {
                 Text("Width")
                     .font(.subheadline)
@@ -1140,7 +1140,7 @@ private struct LineStylePicker: View {
     @Bindable var editor: EditorToolState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             Text("Line Style")
                 .font(.subheadline)
             Picker("Line Style", selection: Binding(
@@ -1166,7 +1166,7 @@ private struct SmoothingSlider: View {
     @Bindable var editor: EditorToolState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             HStack {
                 Text(title)
                     .font(.subheadline)
@@ -1228,7 +1228,7 @@ private struct EraserSettingsPopover: View {
                 Text("Pixel").tag(EraserMode.pixel)
             }
             .pickerStyle(.segmented)
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.s) {
                 Text("Size")
                     .font(.subheadline)
                 HStack(spacing: 8) {
@@ -1449,7 +1449,7 @@ private struct RecordingLabelButton: View {
         if let audio, audio.isRecording {
             let label = Self.label(for: audio.elapsed)
             Button(action: onStop) {
-                HStack(spacing: 5) {
+                HStack(spacing: AppSpacing.xs) {
                     Circle().fill(.red).frame(width: 8, height: 8)
                     Text(label)
                         .font(.caption.monospacedDigit())

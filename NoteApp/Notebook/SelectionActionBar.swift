@@ -81,7 +81,7 @@ struct SelectionActionBar: View {
                     .accessibilityLabel("Recognising text")
             }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, AppSpacing.xs)
         .frame(minHeight: 48)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
@@ -90,14 +90,14 @@ struct SelectionActionBar: View {
     }
 
     private var label: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: AppSpacing.xs) {
             Image(systemName: "lasso")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("\(selection.count)")
                 .font(.subheadline.monospacedDigit().weight(.medium))
         }
-        .padding(.leading, 10)
+        .padding(.leading, AppSpacing.s)
         .padding(.trailing, 8)
         .frame(minHeight: 44)
         .accessibilityElement(children: .ignore)

@@ -239,7 +239,7 @@ struct FavoritePensContent: View {
 
     private func row(_ pen: FavoritePen) -> some View {
         let isCurrent = editor.currentPen.matches(pen)
-        return HStack(spacing: 10) {
+        return HStack(spacing: AppSpacing.s) {
             Image(systemName: pen.style.symbolName)
                 .font(.system(size: 16))
                 .frame(width: 22)
@@ -248,7 +248,7 @@ struct FavoritePensContent: View {
                 .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
                 .frame(width: dotSize(pen.width, style: pen.style), height: dotSize(pen.width, style: pen.style))
                 .frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: AppSpacing.xxs) {
                 Text(pen.style.displayName)
                     .font(.subheadline)
                 Text(PenWidth.label(pen.width))

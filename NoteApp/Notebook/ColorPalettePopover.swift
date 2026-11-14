@@ -81,7 +81,7 @@ struct ColorPalettePopover: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: AppSpacing.s) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(favoriteIndex == nil ? "Colour" : "Edit Favourite")
                     .font(.headline)
@@ -110,7 +110,7 @@ struct ColorPalettePopover: View {
             Text("Recent")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
+            HStack(spacing: AppSpacing.xs) {
                 ForEach(Array(editor.recentColors.colors.enumerated()), id: \.offset) { index, color in
                     Button {
                         apply(color)
