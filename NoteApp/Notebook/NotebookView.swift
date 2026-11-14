@@ -169,7 +169,7 @@ struct NotebookPane: View {
     @State private var pdfImport: PDFImportFlow?
     @State private var showsLayers = false
     @State private var showsOutline = false
-    @State private var showsSearch = false
+    @State private var pagesPanelTab: NotebookPanelTab = .pages
     @State private var showsAudio = false
     @State private var showsAI = false
     @State private var showsToolbarEditor = false
@@ -317,7 +317,7 @@ struct NotebookPane: View {
             Task { await session.audio.load() }
             session.audio.replayPageChanged(session.visibleStrokes)
             // Opened from a search: show its results beside the marked pages.
-            if session.searchHighlight != nil { showsSearch = true }
+            if session.searchHighlight != nil { openSearch() }
         }
         .onChange(of: session.currentPageID) { _, _ in
             // Replay seeks wait on the ink of the page in view.
@@ -327,7 +327,7 @@ struct NotebookPane: View {
             session.audio.replayPageChanged(session.visibleStrokes)
         }
         .onChange(of: session.searchHighlight) { _, highlight in
-            if highlight != nil { showsSearch = true }
+            if highlight != nil { openSearch() }
         }
         .onDisappear {
             session.audio.stopPlayback()
@@ -503,32 +503,15 @@ struct NotebookPane: View {
                 bookmarks: model.bookmarks
             )
         }
-        .inspector(isPresented: $showsSearch) {
-            NotebookSearchPanel(
-                notebookID: session.notebookID,
-                search: model.search,
-                activeHighlight: session.searchHighlight,
-                initialPageID: session.currentPageID,
-                onHighlight: { session.searchHighlight = $0 }
-            ) { pageID in
-                guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
-                Task { await session.goToPage(index) }
-            }
-            // A new panel per notebook, so one notebook's results never list in another.
-            .id(session.notebookID)
-            .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
-        }
-        // Search takes the right edge, so a right-side panel cannot stay open.
-        .onChange(of: showsSearch) { _, isShowing in
-            guard isShowing, showsPagesPanelInline, !pagesOnLeft else { return }
-            withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
-        }
         #if os(iOS)
         // Too narrow for a column: the same panel arrives as a sheet.
         .sheet(isPresented: compactPagesSheetBinding) {
             PagesSidePanel(
                 session: session,
                 isOnLeft: pagesOnLeft,
+                search: model.search,
+                tab: $pagesPanelTab,
+                onHighlight: { session.searchHighlight = $0 },
                 onSelect: { index in Task { await session.goToPage(index) } },
                 onClose: { pagesPanelBinding.wrappedValue = false }
             )
@@ -626,12 +609,12 @@ struct NotebookPane: View {
         showsThumbnails && pagesPanelIsInline
     }
 
-    /// Opening the panel closes Search when the panel would share its edge.
+    /// Regular width toggles the inline panel; compact shows the sheet.
     private var pagesPanelBinding: Binding<Bool> {
         Binding(
             get: { pagesPanelIsInline ? showsThumbnails : showsCompactPages },
             set: { isShown in
-                if isShown && !pagesOnLeft { showsSearch = false }
+                if isShown { pagesPanelTab = .pages }
                 if pagesPanelIsInline {
                     showsThumbnails = isShown
                 } else {
@@ -656,11 +639,14 @@ struct NotebookPane: View {
         PagesSidePanel(
             session: session,
             isOnLeft: pagesOnLeft,
+            search: model.search,
+            tab: $pagesPanelTab,
+            onHighlight: { session.searchHighlight = $0 },
             onSelect: { index in
                 Task { await session.goToPage(index) }
             },
             onClose: {
-                withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
+                withAnimation(.easeInOut(duration: 0.2)) { pagesPanelBinding.wrappedValue = false }
             }
         )
         .frame(width: 220)
@@ -687,6 +673,23 @@ struct NotebookPane: View {
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
+    }
+
+    // MARK: - Search
+
+    /// True while the side panel is showing its Search tab.
+    private var isSearchVisible: Bool {
+        guard pagesPanelTab == .search else { return false }
+        return pagesPanelIsInline ? showsThumbnails : showsCompactPages
+    }
+
+    /// Opens the side panel on its Search tab; the page keeps its size.
+    private func openSearch() {
+        pagesPanelTab = .search
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showsThumbnails = true
+            if !pagesPanelIsInline { showsCompactPages = true }
+        }
     }
 
     // MARK: - Banners
@@ -873,7 +876,7 @@ struct NotebookPane: View {
         case .addPage:
             Task { await session.addPage() }
         case .search:
-            showsSearch = true
+            openSearch()
         default:
             break
         }
@@ -935,7 +938,7 @@ struct NotebookPane: View {
             }
             .disabled(session.pageCount == 0)
             Button("Search in Notebook…", systemImage: "magnifyingglass") {
-                showsSearch = true
+                openSearch()
             }
             .keyboardShortcut("f", modifiers: .command)
             bookmarksMenu
@@ -1246,7 +1249,6 @@ struct NotebookPane: View {
     private func startReadingMode() {
         withAnimation(.easeInOut(duration: 0.2)) {
             pagesPanelBinding.wrappedValue = false
-            showsSearch = false
             editor.isReadingMode = true
             editor.isReadOnly = true
         }
@@ -1559,7 +1561,7 @@ struct NotebookPane: View {
                 onToolGestureEnded: {
                     editor.didEndToolGesture()
                     // Writing on the page ends the search marks; they would go stale.
-                    if !showsSearch { session.searchHighlight = nil }
+                    if !isSearchVisible { session.searchHighlight = nil }
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
@@ -1752,7 +1754,7 @@ struct NotebookPane: View {
                 onToolGestureEnded: {
                     editor.didEndToolGesture()
                     // Writing on the page ends the search marks; they would go stale.
-                    if !showsSearch { session.searchHighlight = nil }
+                    if !isSearchVisible { session.searchHighlight = nil }
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 // The page's canvas answers the Pencil's double-tap; two
