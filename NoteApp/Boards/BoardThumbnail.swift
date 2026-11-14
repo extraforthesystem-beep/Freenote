@@ -53,7 +53,7 @@ struct BoardThumbnail: View {
 
             if let crop {
                 BoardStaticItemLayer(
-                    items: board.normalizedZOrder(),
+                    items: board.frameBackedItems(in: crop),
                     content: crop,
                     scale: side / crop.width,
                     assetsDirectory: assetsDirectory

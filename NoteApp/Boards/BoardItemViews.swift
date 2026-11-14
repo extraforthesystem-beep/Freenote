@@ -216,8 +216,8 @@ struct BoardAssetImage: View {
 }
 
 /// Frame-backed items laid out inside a world rectangle, for the Mac's static
-/// render. The iOS canvas uses `BoardItemLayer` instead, which follows the
-/// viewport.
+/// render and the board thumbnails. The iOS canvas uses `BoardItemLayer`
+/// instead, which follows the viewport.
 struct BoardStaticItemLayer: View {
     let items: [BoardItem]
     /// The world rectangle the layer covers.
@@ -228,7 +228,9 @@ struct BoardStaticItemLayer: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(items) { item in
-                if let frame = item.frame {
+                // A 52 pt thumbnail is many screens smaller than a full board;
+                // an item outside the crop has nothing to draw into.
+                if let frame = item.frame, frame.intersects(content) {
                     BoardItemView(item: item, assetsDirectory: assetsDirectory)
                         .frame(width: max(frame.width, 1), height: max(frame.height, 1))
                         .scaleEffect(scale, anchor: .topLeading)

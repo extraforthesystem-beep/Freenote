@@ -181,9 +181,10 @@ struct BoardEditorView: View {
         ZStack {
             BoardDotGrid(viewport: viewport, isVisible: showsDotGrid, origin: Self.worldOffset)
 
-            BoardItemLayer(
-                items: board.normalizedZOrder().filter { $0.frame != nil },
+            BoardVisibleItemLayer(
+                board: board,
                 viewport: viewport,
+                selectedItemID: selection,
                 assetsDirectory: assetsDirectory,
                 reduceMotion: reduceMotion,
                 editingItemID: editingItemID
@@ -333,7 +334,7 @@ struct BoardEditorView: View {
                     Color.white
 
                     BoardStaticItemLayer(
-                        items: board.normalizedZOrder(),
+                        items: board.frameBackedItems(in: content),
                         content: content,
                         scale: scale,
                         assetsDirectory: assetsDirectory

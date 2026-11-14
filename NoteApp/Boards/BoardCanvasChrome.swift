@@ -83,8 +83,53 @@ struct BoardDotGrid: View {
     }
 }
 
+/// The board's objects, culled to what the viewport shows.
+///
+/// The visible slice is computed here, once per viewport change, so the layer
+/// below builds one element per item on screen instead of one per item on the
+/// board. It is a child of the canvas so a pan re-runs this body, not the
+/// canvas representable or the toolbar around it.
+struct BoardVisibleItemLayer: View {
+    let board: Board
+    let viewport: BoardViewportState
+    /// The selected object. It is kept even when it is dragged past the edge,
+    /// so its outline and handles never vanish mid-gesture.
+    var selectedItemID: UUID?
+    let assetsDirectory: URL
+    var reduceMotion = false
+    /// The item whose text is being typed into above the canvas.
+    var editingItemID: UUID?
+
+    /// Screen points of extra room, so an object is built just before its edge
+    /// scrolls in rather than on the frame it appears.
+    private static let margin: CGFloat = 64
+
+    var body: some View {
+        BoardItemLayer(
+            items: visibleItems,
+            viewport: viewport,
+            assetsDirectory: assetsDirectory,
+            reduceMotion: reduceMotion,
+            editingItemID: editingItemID
+        )
+    }
+
+    private var visibleItems: [BoardItem] {
+        guard viewport.isReady else { return [] }
+        let inset = Self.margin / max(viewport.zoom, 0.001)
+        let rect = viewport.visibleRect.insetBy(dx: -inset, dy: -inset)
+        return board.frameBackedItems(
+            in: rect,
+            alwaysIncluding: Set([selectedItemID].compactMap { $0 })
+        )
+    }
+}
+
 /// Sticky notes, text, shapes and images in page space, under the ink so a
 /// board can be annotated over them.
+///
+/// `items` is already culled by `BoardVisibleItemLayer`, so this builds only
+/// the objects on screen.
 struct BoardItemLayer: View {
     let items: [BoardItem]
     let viewport: BoardViewportState
@@ -99,7 +144,7 @@ struct BoardItemLayer: View {
         return ZStack(alignment: .topLeading) {
             if visible.width > 0 {
                 ForEach(items) { item in
-                    if let frame = item.frame, frame.intersects(visible) {
+                    if let frame = item.frame {
                         BoardItemView(
                             item: item,
                             assetsDirectory: assetsDirectory,
