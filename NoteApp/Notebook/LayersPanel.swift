@@ -77,6 +77,7 @@ struct LayersPanel: View {
             } label: {
                 Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isActive ? "Active layer" : "Make active")
@@ -96,6 +97,7 @@ struct LayersPanel: View {
             } label: {
                 Image(systemName: layer.isVisible ? "eye" : "eye.slash")
                     .foregroundStyle(layer.isVisible ? Color.secondary : Color.orange)
+                    .hitTarget()
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(layer.isVisible ? "Hide layer" : "Show layer")
@@ -105,6 +107,7 @@ struct LayersPanel: View {
             } label: {
                 Image(systemName: layer.isLocked ? "lock.fill" : "lock.open")
                     .foregroundStyle(layer.isLocked ? Color.orange : Color.secondary)
+                    .hitTarget()
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(layer.isLocked ? "Unlock layer" : "Lock layer")
@@ -129,6 +132,7 @@ struct LayersPanel: View {
                 .disabled(layers.count <= 1)
             } label: {
                 Image(systemName: "ellipsis.circle")
+                    .hitTarget()
             }
             .buttonStyle(.borderless)
         }
