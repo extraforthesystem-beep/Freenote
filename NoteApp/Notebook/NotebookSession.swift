@@ -102,6 +102,10 @@ final class NotebookSession: Identifiable {
     /// rebuilt while writing.
     private(set) var currentPageID: UUID?
     private(set) var activeLayer: Page.Layer?
+    /// The ids of the tape pieces on the page, in page order. Like
+    /// `currentPageID`, it changes only when the page's tape does, so the tape
+    /// study chrome is not rebuilt on every stroke.
+    private(set) var tapeIDs: [UUID] = []
     private(set) var isLoadingPage = false
     private(set) var isSaving = false
     private(set) var isApplyingTemplate = false
@@ -216,6 +220,11 @@ final class NotebookSession: Identifiable {
             layer = page.layers.first { $0.id == activeLayerID }
         }
         if activeLayer != layer { activeLayer = layer }
+        let tapes = page?.visibleElements.compactMap { element -> UUID? in
+            if case .tape = element.content { return element.id }
+            return nil
+        } ?? []
+        if tapeIDs != tapes { tapeIDs = tapes }
     }
 
     /// Ink the canvas may show and edit: every stroke on a visible layer, in
