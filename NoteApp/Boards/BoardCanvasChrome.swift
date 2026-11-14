@@ -355,7 +355,7 @@ private struct BoardSelectionBar: View {
     let onEditText: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             button("Duplicate", "plus.square.on.square", action: onDuplicate)
             button("Delete", "trash", action: onDelete)
             Divider().frame(height: 20)
@@ -371,25 +371,32 @@ private struct BoardSelectionBar: View {
                 colorMenu
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 44)
+        .padding(.horizontal, 6)
+        // The notebook's selection bar is the same element, so both use its
+        // metrics: 48 pt tall, 44 pt targets, a hairline border and a 2 pt drop.
+        .frame(minHeight: 48)
         .background(.regularMaterial, in: Capsule())
         .overlay {
-            Capsule().strokeBorder(Color.primary.opacity(0.08))
+            Capsule().strokeBorder(.separator, lineWidth: 0.5)
         }
-        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
 
     private func button(_ label: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
-                .frame(width: 36, height: 36)
-                .contentShape(Rectangle())
+            iconLabel(symbol)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .help(label)
+    }
+
+    /// 44 pt is the smallest target on iPad, and Delete sits next to Duplicate.
+    private func iconLabel(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 15, weight: .medium))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
     /// A shape gets a line colour and a fill; a sticky note has one colour.
@@ -406,10 +413,7 @@ private struct BoardSelectionBar: View {
                 swatches { onColor($0) }
             }
         } label: {
-            Image(systemName: "paintpalette")
-                .font(.system(size: 15, weight: .medium))
-                .frame(width: 36, height: 36)
-                .contentShape(Rectangle())
+            iconLabel("paintpalette")
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -474,11 +478,12 @@ struct BoardTextEditor: View {
                 // growing text can cover the keyboard's Done button.
                 Button("Done", action: onSubmit)
                     .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, AppSpacing.m)
                     .frame(height: 32)
                     .background(.regularMaterial, in: Capsule())
                     .overlay { Capsule().strokeBorder(Color.primary.opacity(0.08)) }
                     .offset(x: x, y: y > 44 ? y - 40 : y + height + 8)
+                    .hitTarget()
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
@@ -526,6 +531,7 @@ struct BoardZoomPill: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
+        .hitTarget()
         .accessibilityLabel("Zoom \(percentText)")
         .accessibilityHint("Opens Zoom to Fit and zoom presets")
         .help("Zoom")
@@ -555,6 +561,8 @@ struct BoardGridToggle: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // The drawn capsule stays 40 x 36; the target around it is 44 pt.
+        .hitTarget()
         .accessibilityLabel(isOn ? "Hide Dot Grid" : "Show Dot Grid")
         .accessibilityAddTraits(isOn ? .isSelected : [])
         .help(isOn ? "Hide the dot grid" : "Show a dot grid")
