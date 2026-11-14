@@ -38,6 +38,8 @@ struct BoardEditorView: View {
 
     @State private var board: Board
     @State private var isSaving = false
+    /// True while a picked photo is read and written to the assets folder.
+    @State private var isInsertingImage = false
     @State private var hasUnsavedChanges = false
     @State private var saveGeneration = 0
     @State private var saveTask: Task<Bool, Never>?
@@ -72,8 +74,6 @@ struct BoardEditorView: View {
     @State private var snapGuides: [BoardSnapGuide] = []
     @State private var showsPhotoPicker = false
     @State private var photoSelection: PhotosPickerItem?
-    /// True while a picked photo is read and written to the assets folder.
-    @State private var isInsertingImage = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
     @AppStorage(AppSettings.Key.drawWithFinger) private var drawWithFinger = false
