@@ -658,6 +658,8 @@ class PagesView: UIView {
         var queue: [UUID] = []
         for pageID in renderPriority() where pageID != activePageID {
             guard let slot = slots[pageID] else { continue }
+            // A page that just failed to read is tried again after a pause.
+            guard slot.mayRetry else { continue }
             if slot.renderedScale >= scale * 0.8 { continue }
             if let cached = PageImageCache.entry(key(for: pageID, source: source)),
                cached.scale >= scale * 0.8,
@@ -688,8 +690,14 @@ class PagesView: UIView {
         if let override = renderOverrides.removeValue(forKey: pageID) {
             page = override
         } else {
-            guard let loaded = try? await source.store.loadPage(pageID, in: source.notebookID) else { return }
-            page = loaded
+            do {
+                page = try await source.store.loadPage(pageID, in: source.notebookID)
+            } catch {
+                // A page that cannot be read says so on its slot instead of
+                // staying blank paper, as though it had been erased.
+                if !Task.isCancelled { slots[pageID]?.showFailure() }
+                return
+            }
         }
         // Reading the page takes a moment: the slot may have gone and the task
         // may have been cancelled while it waited. Drawing paper for a page
@@ -1368,11 +1376,17 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
             backgroundColor = PaperAppearance.pageBackgroundColor(usesDarkPaper: usesDarkPaper)
             imageView.image = nil
             renderedScale = 0
+            failedAt = nil
+            updateFailureLabel()
         }
     }
 
     private let imageView = UIImageView()
     private var placeholder: UIView?
+    /// Says a page could not be read, instead of leaving blank paper.
+    private let failureLabel = UILabel()
+    /// When the page last failed to read; `nil` while it is fine.
+    private(set) var failedAt: ContinuousClock.Instant?
     private let pencilDown = InkCaptureRecognizer()
     private let fingerTap = UITapGestureRecognizer()
     /// Previews of caught strokes, above the live content until replayed.
@@ -1395,6 +1409,7 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
             guard oldValue != isActive else { return }
             imageView.isHidden = isActive
             placeholder?.isHidden = isActive
+            updateFailureLabel()
             // The capture recognizer stays on: a stroke that began while the
             // page loaded must reach its end. It ignores touches that start
             // on the active page, which belong to the live canvas.
@@ -1415,6 +1430,17 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
         imageView.contentMode = .scaleToFill
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(imageView)
+
+        failureLabel.text = "This page could not be read"
+        failureLabel.font = .preferredFont(forTextStyle: .footnote)
+        failureLabel.adjustsFontForContentSizeCategory = true
+        failureLabel.textAlignment = .center
+        failureLabel.numberOfLines = 0
+        failureLabel.isHidden = true
+        failureLabel.isAccessibilityElement = true
+        failureLabel.accessibilityHint = "It will be tried again when it comes back on screen"
+        addSubview(failureLabel)
+        updateFailureLabel()
 
         inkPreview.isUserInteractionEnabled = false
         inkPreview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -1445,6 +1471,7 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
         super.layoutSubviews()
         imageView.frame = bounds
         placeholder?.frame = bounds
+        failureLabel.frame = bounds.insetBy(dx: 16, dy: 16)
         inkPreview.frame = bounds
         layer.shadowPath = UIBezierPath(rect: bounds).cgPath
     }
@@ -1452,8 +1479,35 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
     func show(_ image: UIImage, scale: CGFloat) {
         imageView.image = image
         renderedScale = scale
+        failedAt = nil
+        updateFailureLabel()
         placeholder?.removeFromSuperview()
         placeholder = nil
+    }
+
+    /// The page could not be read: say so on the paper instead of staying
+    /// blank. The next image clears it.
+    func showFailure() {
+        failedAt = .now
+        imageView.image = nil
+        renderedScale = 0
+        updateFailureLabel()
+    }
+
+    /// A page that just failed is retried after a pause, so a broken page does
+    /// not re-read on every scroll frame but does recover on its own.
+    var mayRetry: Bool {
+        guard let failedAt else { return true }
+        return ContinuousClock.now - failedAt > .seconds(3)
+    }
+
+    private func updateFailureLabel() {
+        failureLabel.isHidden = isActive || failedAt == nil
+        // Paper keeps its own colour whatever the appearance, so the message
+        // does not follow the interface: it must read on the paper it sits on.
+        failureLabel.textColor = usesDarkPaper
+            ? UIColor(white: 0.72, alpha: 1)
+            : UIColor(white: 0.42, alpha: 1)
     }
 
     /// Keeps caught ink above the live page content when it moves in.
