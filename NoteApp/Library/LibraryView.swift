@@ -35,6 +35,14 @@ struct LibraryView: View {
     @State private var queryText = ""
     /// Hits grouped once per search, instead of on every body pass.
     @State private var searchGroups: [NotebookSearchGroup] = []
+    /// The grid's list and the sidebar's derived values, recomputed when one of
+    /// their inputs changes instead of on every body pass. Nil until the first
+    /// pass lands, so the first frame reads them straight from the model.
+    @State private var gridNotebooks: [NotebookManifest]?
+    @State private var cachedFolderNodes: [FolderNode]?
+    @State private var cachedFolderCounts: [UUID: Int]?
+    @State private var cachedTagSummaries: [TagSummary]?
+    @State private var cachedTagSets: [UUID: Set<String>]?
 
     /// The library search's source filter; a change searches again.
     private var searchSources: Binding<Set<PageTextSource>> {
@@ -101,6 +109,9 @@ struct LibraryView: View {
         }
         .onChange(of: model.search.hits) { _, hits in
             searchGroups = groupedSearchHits(hits)
+        }
+        .onChange(of: libraryInputs, initial: true) { _, inputs in
+            refreshLibrary(inputs)
         }
         .background(AppColor.groupedBackground)
         .background(alignment: .topLeading) { newNotebookShortcut }
@@ -332,20 +343,33 @@ struct LibraryView: View {
     }
 
     private var folderNodes: [FolderNode] {
-        folderNodes(parent: nil, depth: 0)
+        cachedFolderNodes ?? buildFolderNodes(parent: nil, depth: 0, folders: model.folderTree.folders)
     }
 
-    private func folderNodes(parent: UUID?, depth: Int) -> [FolderNode] {
-        // A hand-edited folders.json could contain a cycle; stop descending instead
-        // of recursing forever.
+    /// The sidebar tree, built once per change of the folder tree rather than
+    /// once per body pass. A hand-edited folders.json could contain a cycle;
+    /// stop descending instead of recursing forever.
+    private func buildFolderNodes(parent: UUID?, depth: Int, folders: [Folder]) -> [FolderNode] {
         guard depth < AppModel.maxFolderDepth else { return [] }
-        return model.folderTree.folders
+        return folders
             .filter { $0.parentID == parent }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             .map { folder in
-                let children = folderNodes(parent: folder.id, depth: depth + 1)
+                let children = buildFolderNodes(
+                    parent: folder.id,
+                    depth: depth + 1,
+                    folders: folders
+                )
                 return FolderNode(folder: folder, depth: depth, children: children.isEmpty ? nil : children)
             }
+    }
+
+    /// Notebooks per folder, computed in one pass over the assignments.
+    private var folderCounts: [UUID: Int] {
+        cachedFolderCounts ?? LibraryVisibility.folderCounts(
+            folders: model.folderTree.folders,
+            notebookFolder: model.folderTree.notebookFolder
+        )
     }
 
     private func folderRow(_ folder: Folder, depth: Int) -> some View {
@@ -355,7 +379,7 @@ struct LibraryView: View {
             Image(systemName: folder.iconName ?? "folder")
                 .foregroundStyle(folderColor(folder))
         }
-        .badge(model.notebookCount(inFolder: folder.id))
+        .badge(folderCounts[folder.id] ?? 0)
         .tag(AppModel.Location.folder(folder.id))
         .contextMenu { folderMenu(folder, depth: depth) }
         .dropDestination(for: String.self) { items, _ in
@@ -416,13 +440,22 @@ struct LibraryView: View {
     }
 
     private var tagSummaries: [TagSummary] {
-        TagSummary.summaries(notebooks: model.notebooks, tags: model.tags(for:))
+        cachedTagSummaries ?? TagSummary.summaries(notebooks: model.notebooks, tags: model.tags(for:))
+    }
+
+    /// Every notebook's lowercased tags, built once per change of the tree.
+    private var notebookTagSets: [UUID: Set<String>] {
+        cachedTagSets ?? LibraryVisibility.tagSets(for: model.notebooks, tags: model.tags(for:))
     }
 
     /// Tags from the sidebar and from `tag:` tokens in the search field. All of
     /// them must be on a notebook for it to show.
     private var activeTagKeys: Set<String> {
-        var keys = TagQuery(queryText).tagKeys
+        activeTagKeys(query: queryText, selectedTag: selectedTag)
+    }
+
+    private func activeTagKeys(query: String, selectedTag: String?) -> Set<String> {
+        var keys = TagQuery(query).tagKeys
         if let selectedTag { keys.insert(selectedTag) }
         return keys
     }
@@ -435,9 +468,66 @@ struct LibraryView: View {
     }
 
     private func matchesActiveTags(_ notebookID: UUID) -> Bool {
-        let required = activeTagKeys
-        guard !required.isEmpty else { return true }
-        return required.isSubset(of: Set(model.tags(for: notebookID).map { $0.lowercased() }))
+        LibraryVisibility.matches(
+            notebookID: notebookID,
+            requiredTags: activeTagKeys,
+            tagSets: notebookTagSets
+        )
+    }
+
+    /// Everything the grid's derived lists read. Only a change here recomputes
+    /// them.
+    private var libraryInputs: LibraryInputs {
+        LibraryInputs(
+            notebooks: model.notebooks,
+            trashedNotebooks: model.trashedNotebooks,
+            location: model.selectedLocation,
+            sortOrder: model.sortOrder,
+            searchText: model.searchText,
+            query: queryText,
+            dateRange: model.search.dateRange,
+            selectedTag: selectedTag,
+            folderTree: model.folderTree
+        )
+    }
+
+    /// The grid's list: the sidebar row's browse list, narrowed by the active
+    /// tags. Falls back to a direct computation until the first change pass.
+    private var shownNotebooks: [NotebookManifest] {
+        if let gridNotebooks { return gridNotebooks }
+        return LibraryVisibility.filter(
+            model.visibleNotebooks,
+            requiredTags: activeTagKeys,
+            tagSets: notebookTagSets
+        )
+    }
+
+    /// Recomputes what the grid and the sidebar show, once per input change.
+    /// The expensive parts are `visibleNotebooks` (filter and sort), the tag
+    /// filter and the folder badges; none of them belong in a body pass.
+    private func refreshLibrary(_ inputs: LibraryInputs) {
+        let required = activeTagKeys(query: inputs.query, selectedTag: inputs.selectedTag)
+        let sets = LibraryVisibility.tagSets(for: inputs.notebooks) {
+            inputs.folderTree.tags[$0] ?? []
+        }
+        cachedTagSets = sets
+        cachedTagSummaries = TagSummary.summaries(notebooks: inputs.notebooks) {
+            inputs.folderTree.tags[$0] ?? []
+        }
+        cachedFolderCounts = LibraryVisibility.folderCounts(
+            folders: inputs.folderTree.folders,
+            notebookFolder: inputs.folderTree.notebookFolder
+        )
+        cachedFolderNodes = buildFolderNodes(
+            parent: nil,
+            depth: 0,
+            folders: inputs.folderTree.folders
+        )
+        gridNotebooks = LibraryVisibility.filter(
+            model.visibleNotebooks,
+            requiredTags: required,
+            tagSets: sets
+        )
     }
 
     private var pinnedCount: Int {
@@ -628,7 +718,7 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var notebookLibrary: some View {
-        let visibleNotebooks = model.visibleNotebooks.filter { matchesActiveTags($0.id) }
+        let visibleNotebooks = shownNotebooks
         if let loadError = model.loadError {
             loadErrorView(loadError)
         } else if model.isSearching {
@@ -782,12 +872,10 @@ struct LibraryView: View {
     private struct NotebookSearchGroup: Identifiable {
         let notebook: NotebookManifest
         let hits: [SearchKit.SearchHit]
+        /// Stored, not recomputed on every read: the header reads it per body pass.
+        let pageCount: Int
 
         var id: UUID { notebook.id }
-
-        var pageCount: Int {
-            Set(hits.map(\.pageID)).count
-        }
 
         func hits(for source: PageTextSource) -> [SearchKit.SearchHit] {
             hits.filter { $0.source == source }
@@ -803,10 +891,17 @@ struct LibraryView: View {
         let byNotebook = Dictionary(grouping: hits) { $0.notebookID }
         return byNotebook.compactMap { notebookID, hits -> NotebookSearchGroup? in
             guard let notebook = model.notebook(withID: notebookID) else { return nil }
+            // One page index per notebook, so grouping a thousand-page notebook
+            // does not scan `pageOrder` once per hit.
+            var pageIndex: [UUID: Int] = [:]
+            pageIndex.reserveCapacity(notebook.pageOrder.count)
+            for (index, pageID) in notebook.pageOrder.enumerated() where pageIndex[pageID] == nil {
+                pageIndex[pageID] = index
+            }
             // A hit whose page has been deleted is stale. Older records have no
             // page number, so it comes from the manifest while grouping here.
             let live = hits.compactMap { hit -> SearchKit.SearchHit? in
-                guard let index = notebook.pageOrder.firstIndex(of: hit.pageID) else { return nil }
+                guard let index = pageIndex[hit.pageID] else { return nil }
                 guard hit.pageIndex == 0 else { return hit }
                 var resolved = hit
                 resolved.pageIndex = index + 1
@@ -817,7 +912,11 @@ struct LibraryView: View {
                 if lhs.pageIndex != rhs.pageIndex { return lhs.pageIndex < rhs.pageIndex }
                 return sourceOrder(lhs.source) < sourceOrder(rhs.source)
             }
-            return NotebookSearchGroup(notebook: notebook, hits: sorted)
+            return NotebookSearchGroup(
+                notebook: notebook,
+                hits: sorted,
+                pageCount: Set(sorted.map(\.pageID)).count
+            )
         }
         .sorted { lhs, rhs in
             if lhs.hits.count != rhs.hits.count { return lhs.hits.count > rhs.hits.count }
@@ -834,7 +933,7 @@ struct LibraryView: View {
     private func searchResults(_ visibleNotebooks: [NotebookManifest]) -> some View {
         let groups = visibleSearchGroups
         return ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 24) {
                 tagFilterBar
 
                 if let error = model.search.lastError {
@@ -954,20 +1053,19 @@ struct LibraryView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(alignment: .top, spacing: 10) {
-                                ForEach(sourceHits) { hit in
+                            LazyHStack(alignment: .top, spacing: 10) {
+                                ForEach(sourceHits.prefix(Self.searchChipsPerSource)) { hit in
                                     SearchHitChip(hit: hit, pageLabel: hit.pageLabel) {
-                                        Task {
-                                            await model.open(
-                                                group.notebook,
-                                                pageID: hit.pageID,
-                                                highlighting: SearchHighlight(
-                                                    query: model.searchText,
-                                                    sources: model.search.filter.sources,
-                                                    dateRange: model.search.dateRange
-                                                )
-                                            )
-                                        }
+                                        open(hit, in: group)
+                                    }
+                                }
+                                if sourceHits.count > Self.searchChipsPerSource,
+                                   let first = sourceHits.first {
+                                    SearchMoreChip(
+                                        count: sourceHits.count - Self.searchChipsPerSource,
+                                        pageLabel: first.pageLabel
+                                    ) {
+                                        open(first, in: group)
                                     }
                                 }
                             }
@@ -988,6 +1086,25 @@ struct LibraryView: View {
         let matches = group.hits.count
         let pages = group.pageCount
         return "\(matches) match\(matches == 1 ? "" : "es") in \(pages) page\(pages == 1 ? "" : "s")"
+    }
+
+    /// How many hit chips a source row draws before it offers the rest. A broad
+    /// query can match every page of a long notebook, and each chip is a view
+    /// with a snippet, a highlight and a background.
+    private static let searchChipsPerSource = 20
+
+    private func open(_ hit: SearchKit.SearchHit, in group: NotebookSearchGroup) {
+        Task {
+            await model.open(
+                group.notebook,
+                pageID: hit.pageID,
+                highlighting: SearchHighlight(
+                    query: model.searchText,
+                    sources: model.search.filter.sources,
+                    dateRange: model.search.dateRange
+                )
+            )
+        }
     }
 
     // MARK: - Grid
@@ -1265,6 +1382,20 @@ struct LibraryView: View {
     }
 }
 
+/// Everything the grid's derived lists read. A change here, and only a change
+/// here, recomputes them.
+private struct LibraryInputs: Equatable {
+    let notebooks: [NotebookManifest]
+    let trashedNotebooks: [NotebookManifest]
+    let location: AppModel.Location
+    let sortOrder: AppModel.SortOrder
+    let searchText: String
+    let query: String
+    let dateRange: SearchDateRange
+    let selectedTag: String?
+    let folderTree: FolderTree
+}
+
 private struct CoverTarget: Identifiable {
     let notebook: NotebookManifest
     var id: UUID { notebook.id }
@@ -1297,6 +1428,38 @@ private struct SearchHitChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("\(pageLabel), \(hit.source.sectionTitle)"))
+    }
+}
+
+/// The rest of a source's hits, behind one chip: a broad query can match more
+/// pages than a row can draw, and opening the notebook is how the user sees them.
+private struct SearchMoreChip: View {
+    let count: Int
+    let pageLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Text("+\(count)")
+                    .font(.headline.monospacedDigit())
+                Text("more from \(pageLabel)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(10)
+            .frame(width: 150, height: 92)
+            .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("\(count) more matches, open at \(pageLabel)"))
     }
 }
 
