@@ -123,4 +123,38 @@ final class TapeIDsInvalidationTests: XCTestCase {
 
         await session.flushPendingSave()
     }
+
+    /// Reveal All and Hide All replace the revealed set in one assignment, and
+    /// setting it to what it already is notifies nothing.
+    func testRevealingAllTapeIsOneStateChange() async throws {
+        let session = try await makeSession()
+        await session.insertTape(color: NotebookSession.tapeColors[0])
+        await session.insertTape(color: NotebookSession.tapeColors[1])
+        let ids = Set(session.tapeIDs)
+        XCTAssertEqual(ids.count, 2)
+
+        let revealed = Flag()
+        withObservationTracking {
+            _ = session.revealedTapeIDs
+        } onChange: {
+            revealed.set()
+        }
+        session.setRevealedTape(ids)
+        XCTAssertTrue(revealed.isSet)
+        XCTAssertEqual(session.revealedTapeIDs, ids)
+
+        let repeated = Flag()
+        withObservationTracking {
+            _ = session.revealedTapeIDs
+        } onChange: {
+            repeated.set()
+        }
+        session.setRevealedTape(ids)
+        XCTAssertFalse(repeated.isSet, "Setting the same revealed tape notified anyway")
+
+        session.setRevealedTape([])
+        XCTAssertTrue(session.revealedTapeIDs.isEmpty)
+
+        await session.flushPendingSave()
+    }
 }

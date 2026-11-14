@@ -1030,6 +1030,13 @@ final class NotebookSession: Identifiable {
         }
     }
 
+    /// Replaces the revealed tape set in one state change, so Reveal All and
+    /// Hide All animate once instead of once per piece of tape.
+    func setRevealedTape(_ ids: Set<UUID>) {
+        guard revealedTapeIDs != ids else { return }
+        revealedTapeIDs = ids
+    }
+
     /// A default-sized element kept on the page, centred on it.
     private static func centredFrame(size: CGSize, in page: Page) -> ElementFrame {
         let width = min(size.width, page.width)

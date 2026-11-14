@@ -90,17 +90,13 @@ private struct TapeStudyActions: View {
 
     private func revealAll(_ ids: [UUID]) {
         AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
-            for id in ids where !session.revealedTapeIDs.contains(id) {
-                session.toggleTapeRevealed(id)
-            }
+            session.setRevealedTape(Set(ids))
         }
     }
 
     private func hideAll() {
         AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
-            for id in session.tapeIDs where session.revealedTapeIDs.contains(id) {
-                session.toggleTapeRevealed(id)
-            }
+            session.setRevealedTape([])
         }
     }
 }
