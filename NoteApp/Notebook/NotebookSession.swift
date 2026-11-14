@@ -4,6 +4,7 @@ import HistoryKit
 import InkKit
 import NoteCore
 import Observation
+import os
 
 enum PageDefaults {
     nonisolated static let width: Double = 595  // A4 at 72 dpi
@@ -71,6 +72,13 @@ struct PendingPageQueue {
 @Observable
 final class NotebookSession: Identifiable {
     var id: UUID { manifest.id }
+
+    /// One signposter for the ink path; intervals show up in Instruments'
+    /// "Points of Interest" under local.noteapp.NoteApp/Ink.
+    private static let inkSignposter = OSSignposter(
+        subsystem: "local.noteapp.NoteApp",
+        category: "Ink"
+    )
 
     let store: LibraryStore
     let assetsDirectory: URL?
@@ -1036,6 +1044,8 @@ final class NotebookSession: Identifiable {
     /// - Parameter pageID: the page the canvas was showing. A report that lands
     ///   after a page change is dropped, or it would overwrite the new page.
     func strokesChanged(_ strokes: [StrokeRecord], onPage pageID: UUID? = nil) {
+        let strokesChanged = Self.inkSignposter.beginInterval("StrokesChanged")
+        defer { Self.inkSignposter.endInterval("StrokesChanged", strokesChanged) }
         guard var updated = page else { return }
         if let pageID, pageID != updated.id { return }
         let shown = Set(updated.layers.filter(\.isVisible).map(\.id))
@@ -1177,7 +1187,9 @@ final class NotebookSession: Identifiable {
 
             writesInFlight += 1
             isSaving = true
+            let pageSave = Self.inkSignposter.beginInterval("PageSave")
             let error = await write.value
+            Self.inkSignposter.endInterval("PageSave", pageSave)
             writesInFlight -= 1
             isSaving = writesInFlight > 0
 
