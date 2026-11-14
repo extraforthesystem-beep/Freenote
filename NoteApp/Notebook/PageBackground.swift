@@ -275,6 +275,52 @@ extension RGBAColor {
     }
 }
 
+/// The cache key of a page's paper, rebuilt only when what feeds it changes.
+/// The page content is handed to `PaperBackground` again on every stroke, and
+/// a stroke does not change the paper, so the key is kept until an input
+/// differs. The key is the same one the pre-render path stores under.
+final class BackgroundKeyMemo {
+    /// Everything `PageBackgroundCache.baseKey` reads, apart from the strokes.
+    private struct Inputs: Equatable {
+        let pageID: UUID
+        let width: Double
+        let height: Double
+        let template: PageTemplate
+        let layers: [Page.Layer]
+        let elements: [PageElement]
+        let assetsPath: String?
+        let usesDarkPaper: Bool
+
+        init(page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) {
+            pageID = page.id
+            width = page.width
+            height = page.height
+            template = page.template
+            layers = page.layers
+            elements = page.elements
+            assetsPath = assetsDirectory?.path
+            self.usesDarkPaper = usesDarkPaper
+        }
+    }
+
+    private var inputs: Inputs?
+    private var storedKey: String?
+
+    func key(for page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) -> String {
+        let inputs = Inputs(page: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
+        if inputs == self.inputs, let storedKey { return storedKey }
+        // `withoutTape` is the page as drawn, the same page `prewarm` keys.
+        let key = PageBackgroundCache.baseKey(
+            for: page.withoutTape,
+            assetsDirectory: assetsDirectory,
+            usesDarkPaper: usesDarkPaper
+        )
+        self.inputs = inputs
+        storedKey = key
+        return key
+    }
+}
+
 /// The full page background — paper and elements — drawn by InkKit. The ink is
 /// left to the canvas on top.
 ///
@@ -295,14 +341,9 @@ struct PaperBackground: View {
     @Environment(\.displayScale) private var displayScale
     @State private var base: (key: String, image: InkImage)?
     @State private var sharp: (key: String, image: InkImage)?
-
-    private var baseKey: String {
-        PageBackgroundCache.baseKey(
-            for: page,
-            assetsDirectory: assetsDirectory,
-            usesDarkPaper: usesDarkPaper
-        )
-    }
+    /// The cache key, kept across the per-stroke updates that hand this view
+    /// the whole page again.
+    @State private var keys = BackgroundKeyMemo()
 
     /// The page's own identity, without its elements: while an element drag
     /// invalidates the image, the last one for this page stays up.
@@ -315,7 +356,7 @@ struct PaperBackground: View {
     }
 
     var body: some View {
-        let key = baseKey
+        let key = keys.key(for: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
         Group {
             if let image = image(for: key) {
                 Image(inkImage: image)
@@ -326,7 +367,7 @@ struct PaperBackground: View {
                 AppColor.paper(usesDarkPaper: usesDarkPaper)
             }
         }
-        .task(id: "\(key)@\(targetScale)") {
+        .task(id: BackgroundRenderKey(key: key, scale: targetScale)) {
             await renderBase(key: key)
             await renderSharp(key: key, scale: targetScale)
         }
@@ -403,6 +444,13 @@ struct PaperBackground: View {
     }
 }
 
+/// What the background's renders are keyed on: the paper's cache key and the
+/// zoom bucket, as a value rather than a joined string.
+private struct BackgroundRenderKey: Hashable {
+    let key: String
+    let scale: CGFloat
+}
+
 extension Page {
     /// The page as its paper is drawn: tape is an overlay the user reveals,
     /// not part of the paper. Paper backgrounds and their cache keys use this.
@@ -420,7 +468,7 @@ extension Page {
 /// gone stale. Kept apart from the drawing so the rules — one at a time, one
 /// draw per key, a page that left is never drawn — can be tested without a
 /// renderer.
-struct PagePrewarmQueue {
+nonisolated struct PagePrewarmQueue {
     private var waiting: [String] = []
     private var known: Set<String> = []
     /// The key being drawn, if any.
