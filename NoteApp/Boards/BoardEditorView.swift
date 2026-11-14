@@ -523,13 +523,20 @@ struct BoardEditorView: View {
     }
 
     /// Frames all content with a little room around it.
+    ///
+    /// `UIScrollView.zoom(to:animated:)` does not read Reduce Motion, and Zoom
+    /// to Fit is the largest move on the board, so the setting is applied here
+    /// rather than left to the scroll view.
     private func zoomToFit(animated: Bool) {
         guard let canvas = controller.canvas, canvas.bounds.width > 1 else { return }
         guard let content = board.bounds(), content.width > 0, content.height > 0 else {
             centerAt100Percent(animated: animated)
             return
         }
-        canvas.zoom(to: content.insetBy(dx: -Self.fitPadding, dy: -Self.fitPadding), animated: animated)
+        canvas.zoom(
+            to: content.insetBy(dx: -Self.fitPadding, dy: -Self.fitPadding),
+            animated: animated && !reduceMotion
+        )
     }
 
     /// Sets a zoom level around whatever the board is showing now.
@@ -547,7 +554,7 @@ struct BoardEditorView: View {
                 width: size.width,
                 height: size.height
             ),
-            animated: animated
+            animated: animated && !reduceMotion
         )
     }
 
@@ -561,7 +568,7 @@ struct BoardEditorView: View {
                 width: size.width,
                 height: size.height
             ),
-            animated: animated
+            animated: animated && !reduceMotion
         )
     }
 
