@@ -235,19 +235,25 @@ struct SearchHighlightOverlay: View {
         .accessibilityHidden(true)
     }
 
-    private var taskKey: TaskKey {
-        TaskKey(
+    private var taskKey: SearchMarksKey {
+        SearchMarksKey(
             highlight: highlight,
             pageID: page.id,
-            strokeIDs: strokes.map(\.id),
+            strokeCount: strokes.count,
+            lastStrokeID: strokes.last?.id,
             elements: page.visibleElements.map { "\($0.id)\($0.updatedAt.timeIntervalSince1970)" }
         )
     }
+}
 
-    private struct TaskKey: Hashable {
-        var highlight: SearchHighlight
-        var pageID: UUID
-        var strokeIDs: [UUID]
-        var elements: [String]
-    }
+/// What the highlight overlay's task depends on. The ink is described by its
+/// length and last stroke, not by every id: adding or erasing a stroke changes
+/// that, while copying and hashing thousands of ids on every pass of the page's
+/// body does not have to happen at all.
+struct SearchMarksKey: Hashable {
+    var highlight: SearchHighlight
+    var pageID: UUID
+    var strokeCount: Int
+    var lastStrokeID: UUID?
+    var elements: [String]
 }
