@@ -1075,15 +1075,15 @@ extension BlockRow: Equatable {
 // MARK: - Typography
 
 private enum BlockTypography {
-    static let body = BlockFont(size: 17)
-    static let quote = BlockFont(size: 17, isItalic: true)
-    static let code = BlockFont(size: 15, isMonospaced: true)
+    static let body = BlockFont(size: 17, textStyle: .body)
+    static let quote = BlockFont(size: 17, textStyle: .body, isItalic: true)
+    static let code = BlockFont(size: 15, textStyle: .callout, isMonospaced: true)
 
     static func heading(_ level: Int) -> BlockFont {
         switch level {
-        case ...1: BlockFont(size: 30, weight: .bold)
-        case 2: BlockFont(size: 24, weight: .semibold)
-        default: BlockFont(size: 20, weight: .semibold)
+        case ...1: BlockFont(size: 30, textStyle: .title, weight: .bold)
+        case 2: BlockFont(size: 24, textStyle: .title2, weight: .semibold)
+        default: BlockFont(size: 20, textStyle: .title3, weight: .semibold)
         }
     }
 }

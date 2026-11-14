@@ -15,8 +15,12 @@ struct CaretRequest: Equatable {
 ///
 /// The iPad editor needs a `UIFont` and the Mac fallback wants a SwiftUI
 /// `Font`, so blocks describe the type once and each side converts it.
+/// `textStyle` is the closest system text style for the block's size, so the
+/// font follows the reader's Dynamic Type setting instead of staying at a
+/// fixed point size.
 struct BlockFont {
     var size: CGFloat
+    var textStyle: Font.TextStyle = .body
     var weight: Font.Weight = .regular
     var isMonospaced = false
     var isItalic = false
@@ -28,7 +32,12 @@ struct BlockFont {
     }
 
     #if os(iOS)
+    /// The font at the block's own size, scaled to the current text size.
     var uiFont: UIFont {
+        UIFontMetrics(forTextStyle: textStyle.uiTextStyle).scaledFont(for: unscaledUIFont)
+    }
+
+    private var unscaledUIFont: UIFont {
         var font = isMonospaced
             ? UIFont.monospacedSystemFont(ofSize: size, weight: weight.uiWeight)
             : UIFont.systemFont(ofSize: size, weight: weight.uiWeight)
@@ -39,6 +48,25 @@ struct BlockFont {
     }
     #endif
 }
+
+#if os(iOS)
+private extension Font.TextStyle {
+    /// The `UIFont.TextStyle` whose scaling curve matches this style.
+    var uiTextStyle: UIFont.TextStyle {
+        if self == .largeTitle { return .largeTitle }
+        if self == .title { return .title1 }
+        if self == .title2 { return .title2 }
+        if self == .title3 { return .title3 }
+        if self == .headline { return .headline }
+        if self == .subheadline { return .subheadline }
+        if self == .callout { return .callout }
+        if self == .footnote { return .footnote }
+        if self == .caption { return .caption1 }
+        if self == .caption2 { return .caption2 }
+        return .body
+    }
+}
+#endif
 
 #if os(iOS)
 private extension Font.Weight {
