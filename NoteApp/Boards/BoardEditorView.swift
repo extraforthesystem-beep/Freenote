@@ -914,7 +914,8 @@ extension BoardEditorView {
         if editingItemID != nil {
             commitEditing()
         }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        // The bar and outline appearing: a bar, so the standard token.
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
             selection = id
         }
         if id == nil {
@@ -1134,7 +1135,7 @@ extension BoardEditorView {
 
     /// Adds an object in the middle of the view, selects it, and springs it in.
     private func addNewItem(_ item: BoardItem) {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8)) {
+        AppMotion.animate(AppMotion.emphasized, reduceMotion: reduceMotion) {
             board.add(item)
             selection = item.id
         }
@@ -1227,7 +1228,7 @@ extension BoardEditorView {
         copy.isLocked = false
         copy.content = Self.translated(item.content, by: CGPoint(x: 24, y: 24))
 
-        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8)) {
+        AppMotion.animate(AppMotion.emphasized, reduceMotion: reduceMotion) {
             board.add(copy)
             selection = copy.id
         }
@@ -1240,7 +1241,8 @@ extension BoardEditorView {
             editingItemID = nil
             editingText = ""
         }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        // A removal only fades, so the one animation Reduce Motion keeps.
+        AppMotion.animate(AppMotion.fade, reduceMotion: reduceMotion) {
             board.remove(id)
             selection = nil
         }
@@ -1252,7 +1254,7 @@ extension BoardEditorView {
         guard var item = selectedItem else { return }
         item.zIndex = nextZIndex
         item.updatedAt = Date()
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
             board.add(item)
         }
         scheduleSave()
@@ -1262,7 +1264,7 @@ extension BoardEditorView {
         guard var item = selectedItem else { return }
         item.zIndex = (board.visibleItems.map(\.zIndex).min() ?? 0) - 1
         item.updatedAt = Date()
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
             board.add(item)
         }
         scheduleSave()
