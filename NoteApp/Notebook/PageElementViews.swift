@@ -108,7 +108,13 @@ struct PageElementsSheet: View {
     @State private var editing: EditingElement?
     /// The page's elements in drawing order, sorted once per edit rather than
     /// on every body pass.
-    @State private var elements: [PageElement] = []
+    @State private var elements: [PageElement]
+
+    init(session: NotebookSession) {
+        self.session = session
+        // Sorted once here as well, so the sheet's first frame is not empty.
+        _elements = State(initialValue: (session.page?.elements ?? []).inPageOrder)
+    }
 
     /// The editor to show for a row. A text box and a sticky note are edited the
     /// same way, with a different set of controls.

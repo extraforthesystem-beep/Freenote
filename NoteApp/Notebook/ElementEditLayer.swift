@@ -17,9 +17,27 @@ struct ElementEditLayer: View {
     @State private var resizeOrigin: (id: UUID, frame: ElementFrame)?
     /// The page's elements in drawing order, sorted once per element change: a
     /// drag only moves the preview above them.
-    @State private var ordered: [PageElement] = []
+    @State private var ordered: [PageElement]
 
     private static let pageSpace = "ElementEditLayer.page"
+
+    init(
+        page: Page,
+        selectedID: Binding<UUID?>,
+        onFrame: @escaping (UUID, ElementFrame) -> Void,
+        onLock: @escaping (UUID, Bool) -> Void,
+        onDelete: @escaping (UUID) -> Void,
+        onMoveZ: @escaping (UUID, Int) -> Void
+    ) {
+        self.page = page
+        _selectedID = selectedID
+        self.onFrame = onFrame
+        self.onLock = onLock
+        self.onDelete = onDelete
+        self.onMoveZ = onMoveZ
+        // Sorted once here as well, so the layer's first frame has its elements.
+        _ordered = State(initialValue: page.elements.inPageOrder)
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
