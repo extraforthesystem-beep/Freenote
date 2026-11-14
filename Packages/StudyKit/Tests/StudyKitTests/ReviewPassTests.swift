@@ -334,4 +334,20 @@ struct ReviewPassTests {
         #expect(nextPass.count == 2)
         #expect(pass.remainingCount == 3, "the card is still in the current pass")
     }
+
+    @Test func dueCountsPerSetMatchOneSetAtATime() {
+        let first = makeSet(cardCount: 2, title: "First", now: testNow)
+        let second = makeSet(cardCount: 3, title: "Second", now: testNow)
+        let later = testNow.addingTimeInterval(400)
+        let states: [UUID: [UUID: ReviewState]] = [
+            first.id: [first.cards[0].id: ReviewState(cardID: first.cards[0].id, dueDate: later)],
+        ]
+
+        let counts = StudyQueue.dueCounts(in: [first, second], states: states, now: testNow)
+
+        #expect(counts[first.id] == 1)
+        #expect(counts[second.id] == 3)
+        #expect(counts[first.id] == StudyQueue.dueCount(in: [first], states: states, now: testNow))
+        #expect(counts[second.id] == StudyQueue.dueCount(in: [second], states: states, now: testNow))
+    }
 }
