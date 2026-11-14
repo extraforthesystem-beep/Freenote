@@ -318,10 +318,11 @@ struct NotebookPane: View {
         }
         .background(AppColor.groupedBackground)
         .background(alignment: .topLeading) { pageHistoryShortcuts }
+        .background(alignment: .topLeading) { menuShortcuts }
         #if os(iOS)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { editorHeight = $0 }
         #endif
-        .animation(.easeInOut(duration: 0.2), value: bannerState)
+        .appAnimation(AppMotion.standard, value: bannerState)
         .onAppear {
             Task { await session.audio.load() }
             session.audio.replayPageChanged(session.visibleStrokes)
@@ -678,6 +679,35 @@ struct NotebookPane: View {
         .accessibilityHidden(true)
     }
 
+    /// The keyboard equivalents of the More menu's items. They live here
+    /// because SwiftUI builds a `Menu`'s content only when it opens, so a
+    /// shortcut inside it does nothing until then.
+    private var menuShortcuts: some View {
+        Group {
+            Button("Search in Notebook") { openSearch() }
+                .keyboardShortcut("f", modifiers: .command)
+            #if os(iOS)
+            Button("Zoom In") { zoomController.zoomIn() }
+                .keyboardShortcut("+", modifiers: .command)
+            Button("Zoom Out") { zoomController.zoomOut() }
+                .keyboardShortcut("-", modifiers: .command)
+            Button("Zoom to Fit") { zoomController.fit() }
+                .keyboardShortcut("0", modifiers: .command)
+            #endif
+            Button("Add Page") { Task { await session.addPage() } }
+                .keyboardShortcut(.return, modifiers: .command)
+            Button("Export PDF") { showsExportOptions = true }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(session.pageCount == 0 || isExporting)
+            Button("Page Overview") { showsPageOverview = true }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(session.pageCount == 0)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
     // MARK: - Search
 
     /// True while the side panel is showing its Search tab.
@@ -951,7 +981,6 @@ struct NotebookPane: View {
             Button("Search in Notebook…", systemImage: "magnifyingglass") {
                 openSearch()
             }
-            .keyboardShortcut("f", modifiers: .command)
             bookmarksMenu
             Button("Page Template…", systemImage: "square.grid.3x3") {
                 showsTemplatePicker = true
