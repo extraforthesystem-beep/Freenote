@@ -1527,10 +1527,12 @@ private struct SearchNotebookCover: View {
     }
 
     /// The same key the grid card uses: the notebook's first page and
-    /// `updatedAt`, so an edited notebook's cover is drawn again.
+    /// `updatedAt`, so an edited notebook's cover is drawn again, plus the
+    /// cover generation so "Regenerate Thumbnails" reloads it too.
     private var coverTaskID: String {
         "\(notebook.id.uuidString)-\(notebook.pageOrder.first?.uuidString ?? "none")"
             + "-\(Int(notebook.updatedAt.timeIntervalSince1970))"
+            + "-\(LibraryCovers.generation)"
     }
 }
 
@@ -1693,6 +1695,7 @@ private struct NotebookCard: View {
     private var coverTaskID: String {
         "\(notebook.id.uuidString)-\(notebook.pageOrder.first?.uuidString ?? "none")"
             + "-\(Int(notebook.updatedAt.timeIntervalSince1970))"
+            + "-\(LibraryCovers.generation)"
     }
 
     private func loadCover() async {

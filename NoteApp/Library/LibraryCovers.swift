@@ -141,6 +141,17 @@ enum LibraryCovers {
         memory.removeAllObjects()
     }
 
+    /// Bumped whenever every cover is thrown away, so every card's cover task id
+    /// changes and the visible grid draws its covers again even though no
+    /// notebook changed.
+    private(set) static var generation = 0
+
+    /// Empties the memory cache and asks every card to load its cover again.
+    static func invalidateAll() {
+        memory.removeAllObjects()
+        generation &+= 1
+    }
+
     /// Forgets every render of a notebook, for when it leaves the library.
     static func removeCachedCovers(for notebookID: UUID, store: LibraryStore) {
         let directory = coversDirectory(store: store)
