@@ -7,6 +7,11 @@ import UniformTypeIdentifiers
 struct LibraryView: View {
     @Bindable var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    /// The sidebar's "Other" section: Text Documents, Whiteboards and Study
+    /// Sets, folded away until the user looks for them.
+    @AppStorage("noteapp.library.otherExpanded") private var otherExpanded = false
 
     @State private var purgeTarget: NotebookManifest?
     @State private var isCreatingFolder = false
@@ -111,6 +116,7 @@ struct LibraryView: View {
         .background(AppColor.groupedBackground)
         .background(alignment: .topLeading) {
             newNotebookShortcut
+            searchShortcut
             if !model.tabs.isEmpty { closeTabShortcut }
         }
         .alert("New folder", isPresented: $isCreatingFolder) {
@@ -206,6 +212,23 @@ struct LibraryView: View {
         .accessibilityHidden(true)
     }
 
+    /// ⌘F opens the library's search field on a hardware keyboard. The field
+    /// itself is the sidebar's searchable control; on the Mac the system binds
+    /// ⌘F to that field already.
+    @ViewBuilder
+    private var searchShortcut: some View {
+        #if os(iOS)
+        Button("Search") {
+            isSearchPresented = true
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .opacity(0)
+        .frame(width: 1, height: 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        #endif
+    }
+
     /// ⌘W closes the tab on screen, the library's counterpart of the editor's
     /// Close. It exists only while a tab is open, so with no tabs the window
     /// keeps the system's ⌘W.
@@ -237,9 +260,7 @@ struct LibraryView: View {
 
             Section("Folders") {
                 if folderNodes.isEmpty {
-                    Text("No folders yet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    newFolderRow
                 } else {
                     OutlineGroup(folderNodes, children: \.children) { node in
                         folderRow(node.folder, depth: node.depth)
@@ -260,7 +281,9 @@ struct LibraryView: View {
                 }
             }
 
-            Section("Documents") {
+            // Notebooks come first; the other document kinds stay out of the
+            // way until the user asks for them.
+            Section(isExpanded: $otherExpanded) {
                 Label("Text Documents", systemImage: "doc.text")
                     .tag(AppModel.Location.textDocuments)
                 Label("Whiteboards", systemImage: "rectangle.3.group")
@@ -268,6 +291,8 @@ struct LibraryView: View {
                 Label("Study Sets", systemImage: "rectangle.stack")
                     .badge(model.study.totalDueCount)
                     .tag(AppModel.Location.studySets)
+            } header: {
+                Text("Other")
             }
 
             Section {
@@ -275,36 +300,36 @@ struct LibraryView: View {
                     .badge(model.trashedNotebooks.count)
                     .tag(AppModel.Location.trash)
             }
+
+            #if os(iOS)
+            Section {
+                Button {
+                    showsSettings = true
+                } label: {
+                    Label("Settings", systemImage: "gear")
+                        .foregroundStyle(.primary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            #endif
         }
         .navigationTitle("Library")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                settingsButton
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    beginCreatingFolder(parent: newFolderParentForLocation())
-                } label: {
-                    Label("New Folder", systemImage: "folder.badge.plus")
-                }
-                .disabled(!canAddFolderAtSelection)
-            }
-        }
     }
 
-    /// The gear in the library's toolbar, and ⌘, on iOS where there is no
-    /// Settings scene to own that shortcut.
-    private var settingsButton: some View {
-        let button = Button {
-            showsSettings = true
+    /// The Folders section's empty state is also its way in: one tap creates
+    /// the first folder, where a plain "No folders yet" used to sit.
+    private var newFolderRow: some View {
+        Button {
+            beginCreatingFolder(parent: newFolderParentForLocation())
         } label: {
-            Label("Settings", systemImage: "gear")
+            Label("New Folder", systemImage: "folder.badge.plus")
+                .contentShape(Rectangle())
         }
-        #if os(iOS)
-        return button.keyboardShortcut(",", modifiers: .command)
-        #else
-        return button
-        #endif
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.accentColor)
+        .disabled(!canAddFolderAtSelection)
     }
 
     private struct FolderNode: Identifiable {
@@ -716,16 +741,9 @@ struct LibraryView: View {
             }
         }
         if model.showsNotebookLibrary && model.selectedLocation != .trash && !showsPinnedPages {
-            ToolbarItem(placement: .secondaryAction) {
-                Button {
-                    isSearchPresented = true
-                } label: {
-                    Label("Search", systemImage: "magnifyingglass")
-                }
-                .keyboardShortcut("f", modifiers: .command)
-            }
             #if os(iOS)
-            ToolbarItem(placement: .secondaryAction) {
+            // Handwriting search sits next to the "+", not behind a More menu.
+            ToolbarItem(placement: .primaryAction) {
                 PencilSearchButton(search: model.search) { query in
                     model.searchText = query
                     if !query.isEmpty { isSearchPresented = true }
@@ -787,8 +805,30 @@ struct LibraryView: View {
                 Task { await model.closeAllTabs() }
             }
         } label: {
-            Label("Open Tabs (\(model.tabs.count))", systemImage: "rectangle.on.rectangle")
+            tabsLabel
         }
+        .accessibilityLabel("Open Tabs (\(model.tabs.count))")
+    }
+
+    /// "Tabs (2)" where the navigation bar has room for words, the two-squares
+    /// icon alone where it does not.
+    @ViewBuilder
+    private var tabsLabel: some View {
+        if showsTabsTitle {
+            Label("Tabs (\(model.tabs.count))", systemImage: "rectangle.on.rectangle")
+                .labelStyle(.titleAndIcon)
+        } else {
+            Label("Tabs (\(model.tabs.count))", systemImage: "rectangle.on.rectangle")
+                .labelStyle(.iconOnly)
+        }
+    }
+
+    private var showsTabsTitle: Bool {
+        #if os(iOS)
+        horizontalSizeClass == .regular
+        #else
+        true
+        #endif
     }
 
     private var newMenu: some View {
@@ -1396,6 +1436,11 @@ private struct SearchMoreChip: View {
     }
 }
 
+/// The hairline around a first-page cover. Paper stays white in dark mode,
+/// where `primary` is white and the edge would disappear, so this is ink at the
+/// same 12% either way.
+private let paperCoverEdge = Color.black.opacity(0.12)
+
 /// A compact notebook cover for a search result header, the size of a thumbnail
 /// rather than a library card.
 private struct SearchNotebookCover: View {
@@ -1403,57 +1448,56 @@ private struct SearchNotebookCover: View {
     let store: LibraryStore
 
     @State private var cover: InkImage?
+    @AppStorage(AppSettings.Key.darkPaper) private var darkPaperInDarkMode = false
+    @Environment(\.colorScheme) private var colorScheme
 
     private var coverStyle: NotebookCoverStyle? {
         notebook.coverName.flatMap(NotebookCoverStyle.init(rawValue:))
     }
 
-    private var coverColors: [Color] {
-        if let coverStyle { return coverStyle.colors }
-        let seed = notebook.id.uuidString.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
-        let palettes: [[Color]] = [
-            [.indigo, .blue],
-            [.orange, .pink],
-            [.teal, .green],
-            [.purple, .indigo],
-            [.brown, .orange],
-        ]
-        return palettes[seed % palettes.count]
+    /// The same rule the editor uses: Dark Paper only when switched on and the
+    /// app is in dark mode.
+    private var usesDarkPaper: Bool {
+        darkPaperInDarkMode && colorScheme == .dark
     }
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: coverColors, startPoint: .topLeading, endPoint: .bottomTrailing)
-
             if let coverStyle {
-                Image(systemName: coverStyle.symbol)
-                    .font(.caption)
-                    .foregroundStyle(coverStyle.prefersLightText == false
-                        ? Color.black.opacity(0.5)
-                        : Color.white.opacity(0.75))
-            } else if let cover {
-                Image(inkImage: cover)
-                    .resizable()
-                    .scaledToFill()
+                // A chosen cover is one colour, like cloth on a book, drawn the
+                // way the library card draws it.
+                NotebookCoverCloth(style: coverStyle, symbolSize: 12, symbolPadding: AppSpacing.xs)
             } else {
-                Image(systemName: "book.closed")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.85))
+                // No cover chosen: the first page on its paper, flat while the
+                // render arrives.
+                AppColor.paper(usesDarkPaper: usesDarkPaper)
+                if let cover {
+                    Image(inkImage: cover)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "book.closed")
+                        .font(.caption2)
+                        .foregroundStyle(usesDarkPaper ? Color.white.opacity(0.3) : Color.black.opacity(0.25))
+                }
             }
         }
         .frame(width: 34, height: 44)
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+                .strokeBorder(
+                    coverStyle == nil ? NotebookCardPaper.edge(usesDarkPaper: usesDarkPaper, colorScheme: colorScheme) : .white.opacity(0.15),
+                    lineWidth: 0.5
+                )
         }
         .task(id: coverTaskID) {
             guard coverStyle == nil else { return }
-            if let cached = LibraryCovers.cached(notebook: notebook) {
+            if let cached = LibraryCovers.cached(notebook: notebook, usesDarkPaper: usesDarkPaper) {
                 cover = cached
                 return
             }
-            let image = await LibraryCovers.image(for: notebook, store: store)
+            let image = await LibraryCovers.image(for: notebook, store: store, usesDarkPaper: usesDarkPaper)
             guard !Task.isCancelled else { return }
             cover = image
         }
@@ -1461,11 +1505,29 @@ private struct SearchNotebookCover: View {
 
     /// The same key the grid card uses: the notebook's first page and
     /// `updatedAt`, so an edited notebook's cover is drawn again, plus the
-    /// cover generation so "Regenerate Thumbnails" reloads it too.
+    /// cover generation so "Regenerate Thumbnails" reloads it, and the paper,
+    /// so Dark Paper picks the dark render.
     private var coverTaskID: String {
         "\(notebook.id.uuidString)-\(notebook.pageOrder.first?.uuidString ?? "none")"
             + "-\(Int(notebook.updatedAt.timeIntervalSince1970))"
             + "-\(LibraryCovers.generation)"
+            + (usesDarkPaper ? "-dark" : "")
+    }
+}
+
+/// How a card with no cover style draws its paper: the same decision the
+/// grid card and the search thumbnail make, kept together so they stay alike.
+private enum NotebookCardPaper {
+    /// White paper, or the editor's Dark Paper when the user asked for it.
+    static func paper(usesDarkPaper: Bool) -> Color {
+        AppColor.paper(usesDarkPaper: usesDarkPaper)
+    }
+
+    /// The hairline around that paper. Dark paper gets a light edge, and so
+    /// does white paper on a dark library: a hairline plus the card's soft
+    /// shadow, never a gradient.
+    static func edge(usesDarkPaper: Bool, colorScheme: ColorScheme) -> Color {
+        usesDarkPaper || colorScheme == .dark ? .white.opacity(0.16) : paperCoverEdge
     }
 }
 
@@ -1480,26 +1542,16 @@ private struct NotebookCard: View {
     @State private var cover: InkImage?
     @State private var coverFailed = false
     @ScaledMetric(relativeTo: .title2) private var symbolSize: CGFloat = 22
+    @AppStorage(AppSettings.Key.darkPaper) private var darkPaperInDarkMode = false
+    @Environment(\.colorScheme) private var colorScheme
 
     private var coverStyle: NotebookCoverStyle? {
         notebook.coverName.flatMap(NotebookCoverStyle.init(rawValue:))
     }
 
-    private var coverColors: [Color] {
-        if let coverStyle { return coverStyle.colors }
-        let seed = notebook.id.uuidString.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
-        let palettes: [[Color]] = [
-            [.indigo, .blue],
-            [.orange, .pink],
-            [.teal, .green],
-            [.purple, .indigo],
-            [.brown, .orange],
-        ]
-        return palettes[seed % palettes.count]
-    }
-
-    private var coverTint: Color {
-        coverStyle?.prefersLightText == false ? .black.opacity(0.65) : .white
+    /// Dark Paper is an opt-in, and only in dark mode, as in the editor.
+    private var usesDarkPaper: Bool {
+        darkPaperInDarkMode && colorScheme == .dark
     }
 
     private var pages: Int { notebook.pageOrder.count }
@@ -1545,44 +1597,29 @@ private struct NotebookCard: View {
 
     private var coverArt: some View {
         ZStack {
-            // The gradient is always there, so the card reads as a cover before the
-            // first page render arrives and while it is missing.
-            LinearGradient(colors: coverColors, startPoint: .topLeading, endPoint: .bottomTrailing)
-
             if let coverStyle {
-                Image(systemName: coverStyle.symbol)
-                    .font(.system(size: symbolSize * 1.8, weight: .light))
-                    .foregroundStyle(coverTint.opacity(0.35))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(AppSpacing.xl)
-            } else if let cover {
-                Image(inkImage: cover)
-                    .resizable()
-                    .scaledToFill()
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.22)],
-                    startPoint: .center,
-                    endPoint: .bottom
+                // A chosen cover reads as a book cover: one colour with a
+                // whisper of light across it, drawn by the same helper as the
+                // picker's swatches.
+                NotebookCoverCloth(
+                    style: coverStyle,
+                    symbolSize: symbolSize * 1.8,
+                    symbolPadding: AppSpacing.xl
                 )
-            } else if coverFailed {
-                VStack(spacing: AppSpacing.s) {
+            } else {
+                // No cover chosen: the first page itself, on the paper it was
+                // written on. Flat paper while the render arrives, so a blank
+                // notebook never looks like a loading placeholder.
+                NotebookCardPaper.paper(usesDarkPaper: usesDarkPaper)
+                if let cover {
+                    Image(inkImage: cover)
+                        .resizable()
+                        .scaledToFill()
+                } else if coverFailed {
                     Image(systemName: "eye.slash")
                         .font(.system(size: symbolSize))
-                    Text("Preview unavailable")
-                        .font(.caption2)
+                        .foregroundStyle(usesDarkPaper ? Color.white.opacity(0.3) : Color.black.opacity(0.25))
                 }
-                .foregroundStyle(.white.opacity(0.8))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(spacing: AppSpacing.s) {
-                    Image(systemName: "book.closed")
-                        .font(.system(size: symbolSize))
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white.opacity(0.7))
-                }
-                .foregroundStyle(.white.opacity(0.85))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .aspectRatio(3 / 4, contentMode: .fit)
@@ -1608,9 +1645,20 @@ private struct NotebookCard: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                .strokeBorder(
+                    coverStyle == nil
+                        ? NotebookCardPaper.edge(usesDarkPaper: usesDarkPaper, colorScheme: colorScheme)
+                        : .white.opacity(0.15),
+                    lineWidth: 0.5
+                )
         }
-        .shadow(color: .black.opacity(0.14), radius: 6, y: 3)
+        // A white page on a black library glares: a soft halo instead of a
+        // black drop shadow, which would be invisible there.
+        .shadow(
+            color: colorScheme == .dark ? .white.opacity(0.07) : .black.opacity(0.14),
+            radius: colorScheme == .dark ? 10 : 6,
+            y: colorScheme == .dark ? 2 : 3
+        )
     }
 
     private var tagRow: some View {
@@ -1630,21 +1678,23 @@ private struct NotebookCard: View {
         "\(pages) page\(pages == 1 ? "" : "s")"
     }
 
-    /// Re-render when the notebook's first page changes, which bumps `updatedAt`.
+    /// Re-render when the notebook's first page changes, which bumps `updatedAt`,
+    /// or when Dark Paper is switched: the cover is rendered in the page's paper.
     private var coverTaskID: String {
         "\(notebook.id.uuidString)-\(notebook.pageOrder.first?.uuidString ?? "none")"
             + "-\(Int(notebook.updatedAt.timeIntervalSince1970))"
             + "-\(LibraryCovers.generation)"
+            + (usesDarkPaper ? "-dark" : "")
     }
 
     private func loadCover() async {
         guard coverStyle == nil, !notebook.pageOrder.isEmpty else { return }
-        if let cached = LibraryCovers.cached(notebook: notebook) {
+        if let cached = LibraryCovers.cached(notebook: notebook, usesDarkPaper: usesDarkPaper) {
             cover = cached
             coverFailed = false
             return
         }
-        let image = await LibraryCovers.image(for: notebook, store: store)
+        let image = await LibraryCovers.image(for: notebook, store: store, usesDarkPaper: usesDarkPaper)
         // The card may have been recycled while the render ran.
         guard !Task.isCancelled else { return }
         cover = image

@@ -31,6 +31,11 @@ struct PageCounterPill: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, AppSpacing.l)
                     .frame(minHeight: 44)
+
+                // An empty notebook still needs its way to a first page.
+                pillButton("Add Page", systemImage: "plus") {
+                    Task { await session.addPage(after: false) }
+                }
             } else {
                 pillButton("Previous Page", systemImage: "chevron.backward") {
                     Task { await session.goToPreviousPage() }

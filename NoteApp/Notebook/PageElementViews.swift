@@ -141,9 +141,9 @@ struct PageElementsSheet: View {
             Group {
                 if elements.isEmpty {
                     ContentUnavailableView(
-                        "No Page Elements",
+                        "No Objects on This Page",
                         systemImage: "square.on.square.dashed",
-                        description: Text("Add a text box, a sticky note, an image or a PDF from Page Actions.")
+                        description: Text("Add a text box, a sticky note, an image or a PDF from the Insert menu.")
                     )
                 } else {
                     List {
@@ -153,7 +153,7 @@ struct PageElementsSheet: View {
                     }
                 }
             }
-            .navigationTitle("Page Elements")
+            .navigationTitle("Objects on This Page")
             .navigationBarTitleDisplayModeInline()
             .task(id: session.revision) {
                 // One sort per edit, and not one per body pass.

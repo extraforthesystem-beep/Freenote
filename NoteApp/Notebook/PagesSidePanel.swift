@@ -17,6 +17,10 @@ struct PagesSidePanel: View {
     let search: HandwritingSearch
     /// Asks the panel's field for the keyboard; cleared once it has it.
     @Binding var searchFocusRequest: Bool
+    /// Set only for the compact-width sheet, which has no toolbar toggle
+    /// behind it and needs its own way back to the page. The inline column is
+    /// closed by the toolbar's Pages button.
+    var onDone: (() -> Void)?
     let onHighlight: (SearchHighlight?) -> Void
     let onSelect: (Int) -> Void
 
@@ -64,6 +68,7 @@ struct PagesSidePanel: View {
             activeHighlight: session.searchHighlight,
             initialPageID: session.currentPageID,
             focusRequest: $searchFocusRequest,
+            onDone: onDone,
             onHighlight: onHighlight,
             onSelectPage: { pageID in
                 guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
@@ -77,13 +82,22 @@ struct PagesSidePanel: View {
     private var pagesGrid: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: columns, spacing: AppSpacing.s) {
-                    ForEach(0..<session.pageCount, id: \.self) { index in
-                        pageCell(index)
+                VStack(spacing: AppSpacing.s) {
+                    if session.pageCount == 0 {
+                        Text("No pages yet. Use the + beside the page count to add one.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, AppSpacing.s)
+                            .padding(.top, AppSpacing.m)
                     }
-                    addPageTile
+                    LazyVGrid(columns: columns, spacing: AppSpacing.s) {
+                        ForEach(0..<session.pageCount, id: \.self) { index in
+                            pageCell(index)
+                        }
+                    }
+                    .padding(AppSpacing.s)
                 }
-                .padding(AppSpacing.s)
             }
             .onChange(of: session.pageIndex) { _, index in
                 AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
@@ -121,28 +135,6 @@ struct PagesSidePanel: View {
         .accessibilityLabel("Page \(index + 1)")
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { onSelect(index) }
-    }
-
-    private var addPageTile: some View {
-        Button {
-            Task { await session.addPage() }
-        } label: {
-            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
-                .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                .aspectRatio(pageAspect, contentMode: .fit)
-                .overlay {
-                    VStack(spacing: AppSpacing.xs) {
-                        Image(systemName: "plus")
-                            .font(.title3)
-                        Text("Page")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Add Page")
-        .help("Add Page")
     }
 
     /// Reads the page's shape once per page change, outside `body`, so the

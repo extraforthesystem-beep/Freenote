@@ -546,7 +546,13 @@ final class AppModel {
 
     // MARK: - Notebooks
 
-    func createNotebook(title: String = "Untitled Notebook") async {
+    /// Creates a notebook and opens it. Without a title the notebook is named
+    /// after today, numbered when another notebook already has that name.
+    func createNotebook(title: String? = nil) async {
+        let title = title ?? NotebookNaming.defaultNotebookTitle(
+            for: Date(),
+            existing: Set(notebooks.map(\.title) + trashedNotebooks.map(\.title))
+        )
         var createdID: UUID?
         do {
             let manifest = try await store.createNotebook(title: title)

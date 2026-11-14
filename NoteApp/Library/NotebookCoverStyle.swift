@@ -66,7 +66,7 @@ struct NotebookCoverPicker: View {
     let onSelect: (String?) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    private let columns = [GridItem(.adaptive(minimum: 120, maximum: 180), spacing: 16)]
+    private let columns = [GridItem(.adaptive(minimum: 120, maximum: 180), spacing: AppSpacing.l)]
 
     var body: some View {
         NavigationStack {
@@ -77,8 +77,11 @@ struct NotebookCoverPicker: View {
                         option(title: style.name, name: style.rawValue, style: style)
                     }
                 }
-                .padding(20)
+                .padding(AppSpacing.xl)
             }
+            // The nine covers need the whole sheet: a shorter one cut the last
+            // row's label off below the fold.
+            .safeAreaPadding(.bottom, AppSpacing.l)
             .navigationTitle("Notebook Cover")
             .navigationBarTitleDisplayModeInline()
             .toolbar {
@@ -87,6 +90,7 @@ struct NotebookCoverPicker: View {
                 }
             }
         }
+        .coverPickerSheetSize()
     }
 
     private func option(
@@ -99,22 +103,14 @@ struct NotebookCoverPicker: View {
         return Button {
             onSelect(name)
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: AppSpacing.s) {
                 ZStack {
                     if let style {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: style.colors,
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                        Image(systemName: style.symbol)
-                            .font(.title2)
-                            .foregroundStyle(style.prefersLightText ? .white.opacity(0.9) : .black.opacity(0.5))
+                        // The same cloth the library card draws, so the swatch
+                        // is a small picture of the notebook it chooses.
+                        NotebookCoverCloth(style: style, symbolSize: 22, symbolPadding: AppSpacing.m)
                     } else {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: AppRadius.m, style: .continuous)
                             .fill(.white)
                         Image(systemName: "doc.text.image")
                             .font(.title2)
@@ -130,8 +126,9 @@ struct NotebookCoverPicker: View {
                     }
                 }
                 .aspectRatio(3 / 4, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.m, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: AppRadius.m, style: .continuous)
                         .strokeBorder(
                             selected ? Color.accentColor : Color.secondary.opacity(0.25),
                             lineWidth: selected ? 2.5 : 1
@@ -141,9 +138,42 @@ struct NotebookCoverPicker: View {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(selected ? Color.accentColor : .primary)
+                    .lineLimit(1)
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A chosen cover's cloth, as the library draws it: one solid colour with a
+/// whisper of light across it and the cover's symbol in the corner. Shared by
+/// the library cards and the cover picker, so a swatch and the card it makes
+/// are the same picture.
+struct NotebookCoverCloth: View {
+    let style: NotebookCoverStyle
+    /// The symbol's point size, so a card and a picker swatch can differ.
+    var symbolSize: CGFloat = 22
+    var symbolPadding: CGFloat = AppSpacing.s
+
+    private var symbolTint: Color {
+        (style.prefersLightText ? Color.white : Color.black.opacity(0.65)).opacity(0.35)
+    }
+
+    var body: some View {
+        ZStack {
+            style.colors[0]
+            LinearGradient(
+                colors: [.white.opacity(0.10), .clear, .black.opacity(0.10)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: style.symbol)
+                .font(.system(size: symbolSize, weight: .light))
+                .foregroundStyle(symbolTint)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(symbolPadding)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -152,6 +182,18 @@ private extension View {
     func navigationBarTitleDisplayModeInline() -> some View {
         #if os(iOS)
         navigationBarTitleDisplayMode(.inline)
+        #else
+        self
+        #endif
+    }
+
+    /// The cover picker is a sheet of nine cards: give it the room to show
+    /// every name.
+    @ViewBuilder
+    func coverPickerSheetSize() -> some View {
+        #if os(iOS)
+        presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         #else
         self
         #endif

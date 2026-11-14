@@ -70,6 +70,8 @@ struct NotebookFindBar<Idle: View>: View {
     private let onSelectPage: (UUID) -> Void
     private let onGoToPage: (Int) -> Void
     private let idle: Idle
+    /// Shown as a Done button after the filter when the bar sits in a sheet.
+    private let onDone: (() -> Void)?
 
     /// Asks for the keyboard. Set by ⌘F, the toolbar's Search item and the More
     /// menu; cleared as soon as it is honoured, so showing the panel alone never
@@ -110,6 +112,7 @@ struct NotebookFindBar<Idle: View>: View {
         activeHighlight: SearchHighlight? = nil,
         initialPageID: UUID? = nil,
         focusRequest: Binding<Bool>,
+        onDone: (() -> Void)? = nil,
         onHighlight: @escaping (SearchHighlight?) -> Void = { _ in },
         onSelectPage: @escaping (UUID) -> Void,
         onGoToPage: @escaping (Int) -> Void,
@@ -125,6 +128,7 @@ struct NotebookFindBar<Idle: View>: View {
         self.onSelectPage = onSelectPage
         self.onGoToPage = onGoToPage
         self.idle = idle()
+        self.onDone = onDone
     }
 
     var body: some View {
@@ -207,6 +211,14 @@ struct NotebookFindBar<Idle: View>: View {
                 pageRange: $pageRange,
                 pageCount: pageCount
             )
+
+            if let onDone {
+                Button("Done", action: onDone)
+                    .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.borderless)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Done with pages panel")
+            }
         }
         .padding(.horizontal, AppSpacing.s)
         .frame(height: 44)

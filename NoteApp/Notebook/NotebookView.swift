@@ -138,7 +138,9 @@ struct NotebookPane: View {
     let session: NotebookSession
     @Bindable var model: AppModel
 
-    @AppStorage("noteapp.editor.showsThumbnails") private var showsThumbnails = true
+    /// The pages panel starts closed: the page is the point of the editor, and
+    /// the toolbar's Pages button brings the panel back.
+    @AppStorage("noteapp.editor.showsThumbnails") private var showsThumbnails = false
     @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesOnLeft = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showsDeletePageConfirmation = false
@@ -231,6 +233,8 @@ struct NotebookPane: View {
                     isRulerActive: $isRulerActive,
                     onItemAction: { item in handleToolbarItem(item) },
                     onCustomizeToolbar: { showsToolbarEditor = true },
+                    notebookTitle: session.manifest.title,
+                    titleMenu: AnyView(titleMenuItems),
                     insertMenu: { insertMenuItems },
                     moreMenu: { moreMenuItems },
                     itemMenu: { item in toolbarItemMenu(for: item) }
@@ -319,6 +323,7 @@ struct NotebookPane: View {
         #endif
         .appAnimation(AppMotion.standard, value: bannerState)
         .onAppear {
+            closePagesPanelOnceAfterUpdate()
             Task { await session.audio.load() }
             session.audio.replayPageChanged(session.visibleStrokes)
             // Opened from a search: show its results beside the marked pages.
@@ -531,6 +536,7 @@ struct NotebookPane: View {
                 isOnLeft: pagesOnLeft,
                 search: model.search,
                 searchFocusRequest: $searchFocusRequest,
+                onDone: { pagesPanelBinding.wrappedValue = false },
                 onHighlight: { session.searchHighlight = $0 },
                 onSelect: { index in Task { await session.goToPage(index) } }
             )
@@ -620,6 +626,19 @@ struct NotebookPane: View {
 
     private var showsPagesPanelInline: Bool {
         showsThumbnails && pagesPanelIsInline
+    }
+
+    /// Set once the reader has opened a notebook with the panel hidden by
+    /// default, so the migration below never overrides a choice made after it.
+    private static let panelHiddenOnceKey = "noteapp.editor.panelHiddenOnce.v1"
+
+    /// The panel used to start open. The first notebook opened after it started
+    /// closed closes it once; from then on the Pages button is the reader's.
+    private func closePagesPanelOnceAfterUpdate() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.panelHiddenOnceKey) else { return }
+        defaults.set(true, forKey: Self.panelHiddenOnceKey)
+        showsThumbnails = false
     }
 
     /// Regular width toggles the inline panel; compact shows the sheet.
@@ -773,6 +792,11 @@ struct NotebookPane: View {
 
     private var banners: some View {
         VStack(spacing: 8) {
+            #if os(iOS)
+            if showsUndoGestureTip {
+                UndoGestureTipView()
+            }
+            #endif
             if let message = session.errorMessage {
                 EditorBanner(
                     systemImage: "exclamationmark.triangle.fill",
@@ -847,6 +871,14 @@ struct NotebookPane: View {
         .padding(.top, AppSpacing.s)
     }
 
+    #if os(iOS)
+    /// The one-time hint about the canvas's two-finger double-tap undo. Reading
+    /// Mode is one clean page, so the hint stays out of it.
+    private var showsUndoGestureTip: Bool {
+        twoFingerDoubleTapUndo && !editor.isReadingMode
+    }
+    #endif
+
     /// What the export banner says: page progress for a PDF export, or which
     /// file is being prepared before the first page reports.
     private var exportBannerMessage: String {
@@ -892,7 +924,7 @@ struct NotebookPane: View {
         }
         .disabled(session.currentPageID == nil)
         Divider()
-        Button("Page Elements…", systemImage: "square.on.square.dashed") {
+        Button("Objects on This Page…", systemImage: "square.on.square.dashed") {
             showsElements = true
         }
         .disabled(session.currentPageID == nil)
@@ -952,11 +984,75 @@ struct NotebookPane: View {
         }
     }
 
+    /// The notebook-level actions behind the editor's title.
+    ///
+    /// The integrator passes `AnyView(titleMenuItems)` and
+    /// `session.manifest.title` to `EditorToolbar`'s `titleMenu` and
+    /// `notebookTitle` parameters, so the editor always shows which notebook is
+    /// open and keeps these actions one tap away.
+    @ViewBuilder
+    private var titleMenuItems: some View {
+        Button("Rename…", systemImage: "pencil") {
+            renameText = session.manifest.title
+            isRenaming = true
+        }
+        Button("Notebook Cover…", systemImage: "book.closed") {
+            showsCoverPicker = true
+        }
+        moveToFolderMenu
+        Divider()
+        Button("Export PDF…", systemImage: "square.and.arrow.up") {
+            showsExportOptions = true
+        }
+        .disabled(session.pageCount == 0 || isExporting)
+        Button("Version History…", systemImage: "clock.arrow.circlepath") {
+            showsHistory = true
+        }
+        .disabled(session.currentPageID == nil)
+    }
+
+    /// The library's own move menu, so a notebook can be filed without going
+    /// back to the library first.
+    @ViewBuilder
+    private var moveToFolderMenu: some View {
+        let currentFolderID = model.folderID(of: session.manifest)
+        Menu("Move to Folder", systemImage: "folder") {
+            Button {
+                Task { await model.move(session.manifest, to: nil) }
+            } label: {
+                if currentFolderID == nil {
+                    Label("Root", systemImage: "checkmark")
+                } else {
+                    Text("Root")
+                }
+            }
+            ForEach(model.folderPaths) { path in
+                Button {
+                    Task { await model.move(session.manifest, to: path.id) }
+                } label: {
+                    if currentFolderID == path.id {
+                        Label(Self.indented(path), systemImage: "checkmark")
+                    } else {
+                        Text(Self.indented(path))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Full path with one indent step per level, so two folders with the same
+    /// name can be told apart in the move menu.
+    private static func indented(_ path: AppModel.FolderPath) -> String {
+        String(repeating: "    ", count: path.depth) + path.path
+    }
+
+    /// Everything that is not the notebook itself: how the page is shown, where
+    /// to go, what to change on the page, and study, audio and page AI. The
+    /// notebook's own actions live in ``titleMenuItems``.
     @ViewBuilder
     private var moreMenuItems: some View {
-        #if os(iOS)
         Section {
-            Toggle("Read Only", systemImage: "lock.doc", isOn: Binding(
+            Toggle("Read Only", systemImage: "lock", isOn: Binding(
                 get: { editor.isReadOnly },
                 set: { editor.isReadOnly = $0 }
             ))
@@ -964,25 +1060,30 @@ struct NotebookPane: View {
                 startReadingMode()
             }
             .disabled(session.currentPageID == nil)
-            Button("Customise Toolbar…", systemImage: "slider.horizontal.3") {
-                showsToolbarEditor = true
+            #if os(iOS)
+            Menu("Scrolling", systemImage: "arrow.up.and.down") {
+                scrollModeButton("Scroll Vertically", mode: .vertical)
+                scrollModeButton("Scroll Horizontally", mode: .horizontal)
             }
-        }
-        #endif
-        Section(session.manifest.title) {
-            Button("Rename…", systemImage: "pencil") {
-                renameText = session.manifest.title
-                isRenaming = true
+            Menu("Zoom", systemImage: "plus.magnifyingglass") {
+                Button("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    zoomController.fit()
+                }
+                Button("Zoom In", systemImage: "plus.magnifyingglass") {
+                    zoomController.zoomIn()
+                }
+                Button("Zoom Out", systemImage: "minus.magnifyingglass") {
+                    zoomController.zoomOut()
+                }
             }
-            Button("Notebook Cover…", systemImage: "book.closed") {
-                showsCoverPicker = true
-            }
+            #endif
+            Toggle("Ruler", systemImage: "ruler", isOn: $isRulerActive)
+                .disabled(session.currentPageID == nil)
         }
         Section {
-            Button("Layers…", systemImage: "square.3.layers.3d") {
-                showsLayers = true
+            Button("Search in Notebook…", systemImage: "magnifyingglass") {
+                openSearch()
             }
-            .disabled(session.currentPageID == nil)
             Button("Outline…", systemImage: "list.bullet.indent") {
                 showsOutline = true
             }
@@ -990,77 +1091,74 @@ struct NotebookPane: View {
                 showsPageOverview = true
             }
             .disabled(session.pageCount == 0)
-            Button("Search in Notebook…", systemImage: "magnifyingglass") {
-                openSearch()
-            }
             bookmarksMenu
+        }
+        Section {
+            pageActionsMenu
+        }
+        Section {
+            Menu("Study & Audio", systemImage: "graduationcap") {
+                Button("Review This Notebook…", systemImage: "rectangle.stack") {
+                    studyScope = .notebook
+                }
+                Button("Review This Page…", systemImage: "rectangle.on.rectangle") {
+                    studyScope = .page
+                }
+                .disabled(session.currentPageID == nil)
+                #if os(iOS)
+                Button(
+                    showsTapeStudy ? "Hide Quiz with Tape" : "Quiz with Tape",
+                    systemImage: "bandage"
+                ) {
+                    showsTapeStudy.toggle()
+                }
+                .disabled(session.currentPageID == nil)
+                #endif
+                Divider()
+                Button(
+                    session.audio.isRecording ? "Stop Recording" : "Record Audio",
+                    systemImage: session.audio.isRecording ? "stop.circle" : "record.circle"
+                ) {
+                    Task {
+                        if session.audio.isRecording {
+                            await session.audio.stopRecording()
+                        } else {
+                            await session.audio.startRecording()
+                        }
+                    }
+                }
+                Button("Audio Recordings…", systemImage: "waveform") {
+                    showsAudio = true
+                }
+                Button("Page AI…", systemImage: "sparkles") {
+                    showsAI = true
+                }
+            }
+        }
+        #if os(iOS)
+        Section {
+            Button("Customise Toolbar…", systemImage: "slider.horizontal.3") {
+                showsToolbarEditor = true
+            }
+        }
+        #endif
+    }
+
+    /// Everything that happens to the current page, template and layers first:
+    /// the More menu has to fit a portrait iPad without scrolling, so the page
+    /// edits sit one level down rather than in the top-level list.
+    @ViewBuilder
+    private var pageActionsMenu: some View {
+        Menu("Page", systemImage: "doc") {
             Button("Page Template…", systemImage: "square.grid.3x3") {
                 showsTemplatePicker = true
             }
             .disabled(session.currentPageID == nil)
-        }
-        Section("Study") {
-            Button("Review This Notebook…", systemImage: "rectangle.stack") {
-                studyScope = .notebook
-            }
-            Button("Review This Page…", systemImage: "rectangle.on.rectangle") {
-                studyScope = .page
+            Button("Layers…", systemImage: "square.3.layers.3d") {
+                showsLayers = true
             }
             .disabled(session.currentPageID == nil)
-            #if os(iOS)
-            Button(
-                showsTapeStudy ? "Hide Tape Study Bar" : "Tape Study",
-                systemImage: "bandage"
-            ) {
-                showsTapeStudy.toggle()
-            }
-            .disabled(session.currentPageID == nil)
-            #endif
-        }
-        Section {
-            Button(
-                session.audio.isRecording ? "Stop Recording" : "Record Audio",
-                systemImage: session.audio.isRecording ? "stop.circle" : "record.circle"
-            ) {
-                Task {
-                    if session.audio.isRecording {
-                        await session.audio.stopRecording()
-                    } else {
-                        await session.audio.startRecording()
-                    }
-                }
-            }
-            Button("Audio Recordings…", systemImage: "waveform") {
-                showsAudio = true
-            }
-            Button("Page AI…", systemImage: "sparkles") {
-                showsAI = true
-            }
-            Button("Version History…", systemImage: "clock.arrow.circlepath") {
-                showsHistory = true
-            }
-            .disabled(session.currentPageID == nil)
-        }
-        #if os(iOS)
-        Section("Scrolling") {
-            scrollModeButton("Scroll Vertically", mode: .vertical)
-            scrollModeButton("Scroll Horizontally", mode: .horizontal)
-        }
-        Section {
-            Toggle("Ruler", systemImage: "ruler", isOn: $isRulerActive)
-                .disabled(session.currentPageID == nil)
-            Button("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") {
-                zoomController.fit()
-            }
-            Button("Zoom In", systemImage: "plus.magnifyingglass") {
-                zoomController.zoomIn()
-            }
-            Button("Zoom Out", systemImage: "minus.magnifyingglass") {
-                zoomController.zoomOut()
-            }
-        }
-        #endif
-        Section("Page") {
+            Divider()
             Button("Add Page After", systemImage: "plus") {
                 Task { await session.addPage() }
             }
@@ -1088,12 +1186,7 @@ struct NotebookPane: View {
                 }
             }
             .disabled(session.currentPageID == nil)
-            Button("Go to Page…", systemImage: "arrow.right.to.line") {
-                showsGoToPage = true
-            }
-            .disabled(session.pageCount < 2)
-        }
-        Section("Clear or Trash Page") {
+            Divider()
             Button("Delete Specific Items…", systemImage: "square.grid.2x2") {
                 showsDeleteItems = true
             }
@@ -1106,12 +1199,7 @@ struct NotebookPane: View {
                 showsDeletePageConfirmation = true
             }
             .disabled(session.currentPageID == nil)
-        }
-        Section {
-            Button("Export PDF…", systemImage: "square.and.arrow.up") {
-                showsExportOptions = true
-            }
-            .disabled(session.pageCount == 0 || isExporting)
+            Divider()
             Button("Export Page as PNG…", systemImage: "photo") {
                 exportPNG()
             }
@@ -1247,9 +1335,23 @@ struct NotebookPane: View {
             } label: {
                 Label("Library", systemImage: "chevron.backward")
             }
-            Text(session.manifest.title)
-                .font(.headline)
-                .lineLimit(1)
+            Menu {
+                titleMenuItems
+            } label: {
+                HStack(spacing: AppSpacing.xs) {
+                    Text(session.manifest.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(maxWidth: 280, alignment: .leading)
+            .accessibilityLabel("Notebook: \(session.manifest.title)")
+            .help("Rename, cover, move, export and history for this notebook")
             Spacer()
             Button {
                 editor.isReadOnly.toggle()
