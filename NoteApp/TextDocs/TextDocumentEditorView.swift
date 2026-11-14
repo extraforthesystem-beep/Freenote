@@ -14,12 +14,17 @@ struct TextDocumentEditorView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var document: TextDocument
     @State private var focusedKey: BlockKey?
     @State private var focusRequest: FocusRequest?
     @State private var scrollTarget: UUID?
     @State private var history = TextDocumentHistory()
+
+    /// The metadata row's word count. It trails the text by `wordCountDelay`
+    /// so a keystroke never re-joins the whole document.
+    @State private var wordCount: Int
 
     @State private var pendingSave: Task<Void, Never>?
     @State private var editGeneration = 0
@@ -30,6 +35,7 @@ struct TextDocumentEditorView: View {
     init(model: TextDocModel, document: TextDocument) {
         self.model = model
         _document = State(initialValue: document)
+        _wordCount = State(initialValue: Self.words(in: document))
     }
 
     var body: some View {
@@ -55,7 +61,11 @@ struct TextDocumentEditorView: View {
             .background(AppColor.groupedBackground)
             .onChange(of: scrollTarget) { _, target in
                 guard let target else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
+                // Scroll first, then let the row take focus: in the lazy list a
+                // row that is off screen does not exist yet, and
+                // `BlockTextEditor` retries a pending focus request when the
+                // view moves into the window.
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
                     proxy.scrollTo(target, anchor: .center)
                 }
                 scrollTarget = nil
@@ -110,6 +120,17 @@ struct TextDocumentEditorView: View {
             } else if document.blocks.count == 1, document.blocks[0].text.isEmpty {
                 requestFocus(BlockKey(blockID: document.blocks[0].id), caret: 0)
             }
+        }
+        // The word count is presentation only, so it waits for a pause in
+        // typing instead of re-joining every block on each keystroke. `.task`
+        // cancels the previous count, so a burst of keys costs one count.
+        .task(id: document.blocks) {
+            do {
+                try await Task.sleep(for: .milliseconds(Self.wordCountDelay))
+            } catch {
+                return
+            }
+            wordCount = Self.words(in: document)
         }
         .alert("Text Document Error", isPresented: errorBinding) {
             Button("OK", role: .cancel) { model.clearError() }
@@ -201,7 +222,9 @@ struct TextDocumentEditorView: View {
     }
 
     private var blocks: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Lazy: a long page only builds the rows near the viewport, so a
+        // keystroke costs one row instead of the whole document.
+        LazyVStack(alignment: .leading, spacing: 0) {
             if document.blocks.isEmpty {
                 emptyBlocks
             } else {
@@ -225,6 +248,10 @@ struct TextDocumentEditorView: View {
                             hasUnsavedChanges = true
                         }
                     )
+                    // The row's body is skipped when its block, focus and
+                    // menu state are unchanged, so only the edited row's
+                    // text view is updated.
+                    .equatable()
                     .id(block.id)
                     .dropDestination(for: String.self) { payloads, _ in
                         guard let raw = payloads.first,
@@ -278,7 +305,10 @@ struct TextDocumentEditorView: View {
 
     // MARK: - Editing
 
-    private var wordCount: Int {
+    /// How long typing has to pause before the word count catches up.
+    private static let wordCountDelay = 300
+
+    private static func words(in document: TextDocument) -> Int {
         document.plainText.split(whereSeparator: { $0.isWhitespace }).count
     }
 
@@ -1007,6 +1037,21 @@ private struct BlockRow: View {
         }
         onChecklistChange()
         block.kind = .checklist(items: items)
+    }
+}
+
+extension BlockRow: Equatable {
+    /// Equality on the values the row draws, so a parent update that changed
+    /// another block does not re-run this row's body. The action closures are
+    /// deliberately ignored: they close over the block's stable id and read the
+    /// editor's `@State` when called, so a stale closure still does the right
+    /// thing.
+    static func == (lhs: BlockRow, rhs: BlockRow) -> Bool {
+        lhs.block == rhs.block
+            && lhs.focusedKey == rhs.focusedKey
+            && lhs.focusRequest == rhs.focusRequest
+            && lhs.canMoveUp == rhs.canMoveUp
+            && lhs.canMoveDown == rhs.canMoveDown
     }
 }
 

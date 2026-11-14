@@ -173,17 +173,37 @@ extension BlockTextEditor {
             coordinator.parent = self
             coordinator.view = view
 
-            if view.font != font {
-                view.font = font
+            let label = coordinator.placeholder
+            let textChanged = view.text != text
+            let styleChanged = view.font != font
+                || view.textColor != textColor
+                || view.typingAttributes[.font] as? UIFont != font
+                || view.typingAttributes[.foregroundColor] as? UIColor != textColor
+            let placeholderChanged = label?.text != placeholder
+                || label?.font != font
+                || label?.isHidden != text.isEmpty
+
+            // Everything this update would apply is already applied: a
+            // keystroke stays in the text view, and no text is reset (which
+            // would move the caret to the end).
+            guard textChanged || styleChanged || placeholderChanged else {
+                coordinator.applyFocusIfNeeded()
+                return
             }
-            if view.textColor != textColor {
-                view.textColor = textColor
+
+            if styleChanged {
+                if view.font != font {
+                    view.font = font
+                }
+                if view.textColor != textColor {
+                    view.textColor = textColor
+                }
+                view.typingAttributes = [.font: font, .foregroundColor: textColor]
             }
-            view.typingAttributes = [.font: font, .foregroundColor: textColor]
 
             // Only push model text in when the view does not already show it,
             // so typing never rewrites the buffer and resets the caret.
-            if view.text != text {
+            if textChanged {
                 let selection = view.selectedRange
                 view.text = text
                 view.font = font
@@ -196,9 +216,11 @@ extension BlockTextEditor {
                 }
             }
 
-            coordinator.placeholder?.text = placeholder
-            coordinator.placeholder?.font = font
-            coordinator.placeholder?.isHidden = !text.isEmpty
+            if placeholderChanged {
+                label?.text = placeholder
+                label?.font = font
+                label?.isHidden = !text.isEmpty
+            }
 
             coordinator.applyFocusIfNeeded()
         }
@@ -231,10 +253,15 @@ extension BlockTextEditor {
                 guard let view else { return }
 
                 if let request = parent.focusRequest, request.token != appliedToken {
-                    appliedToken = request.token
                     let offset = request.offset
-                    DispatchQueue.main.async { [weak view] in
-                        guard let view, view.window != nil else { return }
+                    // Mark the token applied only once the view is really in a
+                    // window. In the lazy block list a row that is off screen
+                    // does not exist yet; the token then stays pending and
+                    // `BlockTextView.didMoveToWindow` retries it when the row
+                    // appears.
+                    DispatchQueue.main.async { [weak self, weak view] in
+                        guard let self, let view, view.window != nil else { return }
+                        self.appliedToken = request.token
                         if !view.isFirstResponder {
                             view.becomeFirstResponder()
                         }
