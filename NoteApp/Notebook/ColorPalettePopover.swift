@@ -68,13 +68,17 @@ struct ColorPalettePopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
-            if !editor.recentColors.colors.isEmpty {
+            // Embedded under the favourite colours, the current colour's ring
+            // on the swatch already says what is selected, so the header row
+            // would only repeat it.
+            if !embedded {
+                header
+            }
+            if showsRecent {
                 recentRow
             }
             presetGrid
-            hexRow
-            systemPicker
+            colorRow
         }
         .padding(embedded ? 0 : AppSpacing.l)
         .frame(width: embedded ? nil : 320)
@@ -85,6 +89,16 @@ struct ColorPalettePopover: View {
             // Closed without submitting: a value the user typed still counts.
             applyTypedHexOnClose()
         }
+    }
+
+    /// Recent colours earn their row only when they show something the grid
+    /// and the selected ring do not: nothing to show, or the single colour
+    /// already picked, keeps the popover short.
+    private var showsRecent: Bool {
+        let colors = editor.recentColors.colors
+        guard let only = colors.first else { return false }
+        if colors.count == 1 { return !isShown(only) }
+        return true
     }
 
     private var header: some View {
@@ -160,32 +174,51 @@ struct ColorPalettePopover: View {
         }
     }
 
-    private var hexRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text("Hex")
-                    .font(.subheadline)
-                TextField("#RRGGBB", text: $hexText)
-                    .font(.body.monospaced())
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .focused($isHexFocused)
-                    .submitLabel(.done)
-                    .onChange(of: hexText) { _, newValue in
-                        // Only the marker follows the typing: applying every
-                        // intermediate value would record half-typed junk.
-                        updateHexValidity(newValue)
-                    }
-                    .onSubmit {
-                        applyTypedHex()
-                        isHexFocused = false
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
-                            .strokeBorder(hexIsInvalid ? Color.red : Color.secondary.opacity(0.3), lineWidth: 1)
-                            .padding(Self.hexBorderInset)
-                    }
-                    .accessibilityLabel("Hex colour, hash R R G B B")
+    /// A typed hex value and the system picker share the last row: both are
+    /// ways to name a colour the grid does not have, and stacking them cost a
+    /// whole row in the popover.
+    private var colorRow: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
+            HStack(spacing: AppSpacing.m) {
+                HStack(spacing: AppSpacing.s) {
+                    Text("Hex")
+                        .font(.subheadline)
+                    TextField("#RRGGBB", text: $hexText)
+                        .font(.body.monospaced())
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .focused($isHexFocused)
+                        .submitLabel(.done)
+                        .onChange(of: hexText) { _, newValue in
+                            // Only the marker follows the typing: applying every
+                            // intermediate value would record half-typed junk.
+                            updateHexValidity(newValue)
+                        }
+                        .onSubmit {
+                            applyTypedHex()
+                            isHexFocused = false
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
+                                .strokeBorder(hexIsInvalid ? Color.red : Color.secondary.opacity(0.3), lineWidth: 1)
+                                .padding(Self.hexBorderInset)
+                        }
+                        .accessibilityLabel("Hex colour, hash R R G B B")
+                }
+                ColorPicker(
+                    "Custom Colour",
+                    selection: Binding(
+                        get: { Color(shownColor) },
+                        set: { color in
+                            let updated = RGBAColor(color)
+                            select(updated)
+                            showHex(of: updated)
+                        }
+                    ),
+                    supportsOpacity: false
+                )
+                .font(.subheadline)
+                .fixedSize()
             }
             if hexIsInvalid {
                 Text("Use #RRGGBB, for example #1E90FF.")
@@ -193,24 +226,6 @@ struct ColorPalettePopover: View {
                     .foregroundStyle(.red)
             }
         }
-    }
-
-    /// The system picker covers everything the grid cannot: exact matches to
-    /// an imported style, eyedropper, and so on.
-    private var systemPicker: some View {
-        ColorPicker(
-            "Custom Colour",
-            selection: Binding(
-                get: { Color(shownColor) },
-                set: { color in
-                    let updated = RGBAColor(color)
-                    select(updated)
-                    showHex(of: updated)
-                }
-            ),
-            supportsOpacity: false
-        )
-        .font(.subheadline)
     }
 
     private func apply(_ color: RGBAColor) {

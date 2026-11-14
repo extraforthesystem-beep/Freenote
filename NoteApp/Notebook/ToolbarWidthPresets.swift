@@ -8,6 +8,9 @@ import SwiftUI
 /// slot's editor in place, below the dots.
 struct ToolbarWidthPresets: View {
     @Bindable var editor: EditorToolState
+    /// True in the tool popovers: the width slider sits directly under the
+    /// preset dots, so the section names its value once instead of twice.
+    var showsSlider = false
     /// The slot being edited, shown as an inline slider under the dots.
     @State private var editingWidth: Int?
 
@@ -36,6 +39,9 @@ struct ToolbarWidthPresets: View {
                         && abs(width - current) < max(0.15, current * 0.05)
                     presetButton(index: index, width: width, rank: ranks[index], isSelected: isSelected)
                 }
+            }
+            if showsSlider {
+                WidthSlider(editor: editor, showsHeader: false)
             }
             if let slot = editingWidth {
                 editingSection(slot)

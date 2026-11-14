@@ -1109,14 +1109,6 @@ struct NotebookPane: View {
             bookmarksMenu
         }
         Section {
-            Button("Page Template…", systemImage: "square.grid.3x3") {
-                showsTemplatePicker = true
-            }
-            .disabled(session.currentPageID == nil)
-            Button("Layers…", systemImage: "square.3.layers.3d") {
-                showsLayers = true
-            }
-            .disabled(session.currentPageID == nil)
             pageActionsMenu
         }
         Section {
@@ -1167,11 +1159,21 @@ struct NotebookPane: View {
         #endif
     }
 
-    /// Page edits that have no other entry point: insert, duplicate, move,
-    /// rotate, clear, delete and export the page.
+    /// Everything that happens to the current page, template and layers first:
+    /// the More menu has to fit a portrait iPad without scrolling, so the page
+    /// edits sit one level down rather than in the top-level list.
     @ViewBuilder
     private var pageActionsMenu: some View {
-        Menu("Page Actions", systemImage: "doc") {
+        Menu("Page", systemImage: "doc") {
+            Button("Page Template…", systemImage: "square.grid.3x3") {
+                showsTemplatePicker = true
+            }
+            .disabled(session.currentPageID == nil)
+            Button("Layers…", systemImage: "square.3.layers.3d") {
+                showsLayers = true
+            }
+            .disabled(session.currentPageID == nil)
+            Divider()
             Button("Add Page After", systemImage: "plus") {
                 Task { await session.addPage() }
             }

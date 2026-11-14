@@ -20,18 +20,29 @@ enum LibraryCovers {
     private static var inFlight: [String: Task<InkImage?, Never>] = [:]
 
     /// A cached image, or nil when the cover has to be produced.
-    static func cached(notebook: NotebookManifest) -> InkImage? {
+    static func cached(notebook: NotebookManifest, usesDarkPaper: Bool = false) -> InkImage? {
         guard let pageID = notebook.pageOrder.first else { return nil }
-        let key = cacheKey(notebookID: notebook.id, pageID: pageID, updatedAt: notebook.updatedAt)
+        let key = cacheKey(
+            notebookID: notebook.id,
+            pageID: pageID,
+            updatedAt: notebook.updatedAt,
+            usesDarkPaper: usesDarkPaper
+        )
         return memory.object(forKey: key as NSString)
     }
 
     static func image(
         for notebook: NotebookManifest,
-        store: LibraryStore
+        store: LibraryStore,
+        usesDarkPaper: Bool = false
     ) async -> InkImage? {
         guard let pageID = notebook.pageOrder.first else { return nil }
-        let key = cacheKey(notebookID: notebook.id, pageID: pageID, updatedAt: notebook.updatedAt)
+        let key = cacheKey(
+            notebookID: notebook.id,
+            pageID: pageID,
+            updatedAt: notebook.updatedAt,
+            usesDarkPaper: usesDarkPaper
+        )
         if let cached = memory.object(forKey: key as NSString) { return cached }
         // The card that asked may already have scrolled away.
         if Task.isCancelled { return nil }
@@ -59,7 +70,12 @@ enum LibraryCovers {
                 guard let page = try? await store.loadPage(pageID, in: notebookID) else { return nil }
                 if Task.isCancelled { return nil }
                 let assets = store.assetsDirectoryURL(for: notebookID)
-                return await rendered(page: page, assetsDirectory: assets, diskURL: diskURL)
+                return await rendered(
+                    page: page,
+                    assetsDirectory: assets,
+                    diskURL: diskURL,
+                    usesDarkPaper: usesDarkPaper
+                )
             }
             inFlight[key] = task
             startsWork = true
@@ -102,20 +118,27 @@ enum LibraryCovers {
     /// Renders the notebook's first page off the main actor, writes the disk
     /// cache and returns the image. Cancellation is checked between the render
     /// and the write, so a cover for a vanished card is not encoded or stored.
+    ///
+    /// Dark paper covers go through `PaperAppearance`, the app's one dark-paper
+    /// renderer: dark sheet, light template lines, ink inverted for display, the
+    /// same picture the editor shows. The cache key carries the paper, so the
+    /// white render of the same page stays cached beside it.
     nonisolated private static func rendered(
         page: Page,
         assetsDirectory: URL,
-        diskURL: URL
+        diskURL: URL,
+        usesDarkPaper: Bool
     ) async -> InkImage? {
         await Task.detached(priority: .utility) { () -> InkImage? in
             guard !Task.isCancelled else { return nil }
-            guard let rendered = PageRenderer.image(
+            guard let rendered = PaperAppearance.image(
                 strokes: page.renderStrokes,
                 pageSize: CGSize(width: page.width, height: page.height),
                 template: page.template,
                 elements: page.visibleElements,
                 assetsDirectory: assetsDirectory,
-                scale: 1
+                scale: 1,
+                usesDarkPaper: usesDarkPaper
             ) else { return nil }
             if Task.isCancelled { return rendered }
 
@@ -184,10 +207,16 @@ enum LibraryCovers {
         }
     }
 
-    private static func cacheKey(notebookID: UUID, pageID: UUID, updatedAt: Date) -> String {
+    private static func cacheKey(
+        notebookID: UUID,
+        pageID: UUID,
+        updatedAt: Date,
+        usesDarkPaper: Bool = false
+    ) -> String {
         // Whole seconds are enough to tell one cover render from the next.
         let seconds = Int(updatedAt.timeIntervalSince1970)
-        return "\(notebookID.uuidString.lowercased())-\(pageID.uuidString.lowercased())-\(seconds)"
+        let paper = usesDarkPaper ? "-dark" : ""
+        return "\(notebookID.uuidString.lowercased())-\(pageID.uuidString.lowercased())-\(seconds)\(paper)"
     }
 
     nonisolated private static func coversDirectory(store: LibraryStore) -> URL {

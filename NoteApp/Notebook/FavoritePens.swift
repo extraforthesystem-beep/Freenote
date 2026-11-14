@@ -145,26 +145,37 @@ struct FavoritePensContent: View {
         VStack(alignment: .leading, spacing: AppSpacing.m) {
             header
             if editor.favoritePens.pens.isEmpty {
-                emptyState
+                addButton
+                Text(footer)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             } else {
                 penList
+                Divider()
+                addButton
+                Text(footer)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Divider()
-            Button {
-                editor.saveCurrentPen()
-            } label: {
-                Label("Add Current Pen", systemImage: "plus")
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(editor.favoritePens.isFull || editor.isCurrentPenSaved)
-            .accessibilityHint("Saves the current pen style, colour and width")
-            Text(footer)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
+    }
+
+    /// The one row the empty list shows: no heading over an explanation, just
+    /// the offer to save the pen in hand and one line about what it stores.
+    private var addButton: some View {
+        Button {
+            editor.saveCurrentPen()
+        } label: {
+            Label("Add Current Pen", systemImage: "plus")
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(editor.favoritePens.isFull || editor.isCurrentPenSaved)
+        .accessibilityHint("Saves the current pen style, colour and width")
     }
 
     private var header: some View {
@@ -188,18 +199,6 @@ struct FavoritePensContent: View {
                 )
             }
         }
-    }
-
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("No saved pens yet.")
-                .font(.subheadline)
-            Text("Pick a pen colour and width, then add it here for one-tap recall.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 8)
     }
 
     private var penList: some View {
