@@ -831,7 +831,8 @@ final class AppModel {
     /// Opens `notebook`; with `highlighting`, the page marks that search's matches.
     func open(_ notebook: NotebookManifest, pageID: UUID? = nil, highlighting query: SearchHighlight? = nil) async {
         if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
-            await show(existing, pageID: pageID, highlighting: query)
+            // Re-finding a notebook in the library counts as opening it again.
+            await show(existing, pageID: pageID, highlighting: query, markOpened: true)
             return
         }
 
@@ -840,9 +841,10 @@ final class AppModel {
         if let opening = openingTabs[notebook.id] {
             await opening.value
             // The tap that started the load owns its page request; this one
-            // applies its own once the session exists.
+            // applies its own once the session exists. It was marked as opened
+            // by the load, milliseconds ago.
             if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
-                await show(existing, pageID: pageID, highlighting: query)
+                await show(existing, pageID: pageID, highlighting: query, markOpened: false)
             }
             return
         }
@@ -857,8 +859,16 @@ final class AppModel {
     private func show(
         _ existing: NotebookSession,
         pageID: UUID?,
-        highlighting query: SearchHighlight?
+        highlighting query: SearchHighlight?,
+        markOpened: Bool
     ) async {
+        if markOpened {
+            let openedAt = Date()
+            try? await store.markOpened(existing.notebookID, at: openedAt)
+            if let index = notebooks.firstIndex(where: { $0.id == existing.notebookID }) {
+                notebooks[index].lastOpenedAt = openedAt
+            }
+        }
         existing.searchHighlight = query
         activeNotebookID = existing.notebookID
         isShowingLibrary = false
@@ -886,7 +896,7 @@ final class AppModel {
         // Re-checked after every await: another path may have opened this
         // notebook while this one waited for the disk.
         if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
-            await show(existing, pageID: pageID, highlighting: query)
+            await show(existing, pageID: pageID, highlighting: query, markOpened: false)
             return
         }
 
@@ -904,7 +914,7 @@ final class AppModel {
             // The pages took time to load; never append a second session for a
             // notebook that is already in `tabs`.
             if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
-                await show(existing, pageID: pageID, highlighting: query)
+                await show(existing, pageID: pageID, highlighting: query, markOpened: false)
                 return
             }
             let newSession = NotebookSession(store: store, snapshot: snapshot, history: history)
