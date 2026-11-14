@@ -135,9 +135,9 @@ struct LibraryView: View {
                 renameFolderTarget = nil
             }
         }
-        .alert("Delete permanently?", isPresented: purgeAlert) {
+        .alert("Delete Permanently?", isPresented: purgeAlert) {
             Button("Cancel", role: .cancel) { purgeTarget = nil }
-            Button("Delete", role: .destructive) {
+            Button("Delete Permanently", role: .destructive) {
                 if let target = purgeTarget {
                     Task { await model.purge(target) }
                 }
@@ -148,7 +148,7 @@ struct LibraryView: View {
         }
         .alert("Empty Recently Deleted?", isPresented: $showsEmptyTrashAlert) {
             Button("Cancel", role: .cancel) {}
-            Button("Empty Trash", role: .destructive) {
+            Button("Delete Permanently", role: .destructive) {
                 Task { await model.emptyTrash() }
             }
         } message: {
@@ -752,7 +752,7 @@ struct LibraryView: View {
                 Button(role: .destructive) {
                     showsEmptyTrashAlert = true
                 } label: {
-                    Label("Empty Trash", systemImage: "trash.slash")
+                    Label("Empty Recently Deleted", systemImage: "trash.slash")
                 }
             }
         }
@@ -1240,7 +1240,7 @@ struct LibraryView: View {
                     .buttonStyle(.bordered)
                 }
                 .swipeActions {
-                    Button("Delete", role: .destructive) {
+                    Button("Delete Permanently", role: .destructive) {
                         purgeTarget = notebook
                     }
                 }
