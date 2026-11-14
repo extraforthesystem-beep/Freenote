@@ -177,6 +177,11 @@ public enum SearchIndexError: Error, Hashable, Sendable, CustomStringConvertible
     }
 }
 
+/// Extracts the text of one page of a PDF asset. Production reads the text
+/// layer with PDFKit and falls back to on-device OCR for a scanned page. The
+/// call runs off the index actor, so a slow scan never stalls a search.
+typealias PDFTextExtractor = @Sendable (_ url: URL, _ pageIndex: Int) async -> String
+
 /// Page text plus the ink fingerprint it was recognised from, persisted as one JSON file.
 public actor SearchIndex {
     private struct PageKey: Hashable, Sendable {
@@ -202,9 +207,17 @@ public actor SearchIndex {
     private static let tolerantMinimumLength = 3
     private static let matchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
     private static let foldOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+    /// Extracted PDF pages kept in memory. Assets are named by SHA-256 and never
+    /// change, so a cached entry never goes stale; the cap only bounds memory.
+    private static let pdfTextCacheLimit = 256
 
     private let root: URL
+    private let pdfTextExtractor: PDFTextExtractor
     private var records: [PageKey: PageSearchRecord] = [:]
+    /// Text of PDF asset pages, keyed `"\(assetName)#\(pageIndex)"`.
+    private var pdfTextCache: [String: String] = [:]
+    /// Insertion order of `pdfTextCache`, oldest first, for eviction.
+    private var pdfTextCacheOrder: [String] = []
     private var loaded = false
     /// Open `beginDeferringWrites()` calls. While above zero, changes stay in
     /// memory and `isDirty` records that the file is behind.
@@ -213,7 +226,15 @@ public actor SearchIndex {
 
     /// `root` is the library cache directory; the index lives at `root/search-index.json`.
     public init(root: URL) {
+        self.init(root: root) { url, pageIndex in
+            SearchIndex.pdfPageText(at: url, pageIndex: pageIndex)
+        }
+    }
+
+    /// `pdfTextExtractor` is a test seam: production always uses PDFKit.
+    init(root: URL, pdfTextExtractor: @escaping PDFTextExtractor) {
         self.root = root
+        self.pdfTextExtractor = pdfTextExtractor
     }
 
     // MARK: Loading and saving
@@ -366,7 +387,7 @@ public actor SearchIndex {
         if !typed.isEmpty {
             segments.append(PageTextSegment(source: .typedText, text: typed))
         }
-        let pdfText = Self.pdfText(in: page, assetsDirectory: assetsDirectory)
+        let pdfText = await pdfText(for: page, assetsDirectory: assetsDirectory)
         if !pdfText.isEmpty {
             segments.append(PageTextSegment(source: .pdf, text: pdfText))
         }
@@ -648,31 +669,78 @@ public actor SearchIndex {
         .joined(separator: "\n")
     }
 
-    /// The text of every PDF page on the page. A scanned page has no text layer,
-    /// so its words are read from an on-device image render instead.
-    private static func pdfText(in page: Page, assetsDirectory: URL?) -> String {
+    /// The text of every PDF page on the page, read outside the actor. A scanned
+    /// page has no text layer, so its words are read from an on-device image
+    /// render instead. Extracted text is cached per immutable asset page, so two
+    /// pages showing the same scan extract it once.
+    private func pdfText(for page: Page, assetsDirectory: URL?) async -> String {
         guard let assetsDirectory else { return "" }
         var parts: [String] = []
-        for element in page.elements {
-            guard case let .pdfPage(assetName, pageIndex) = element.content,
-                  pageIndex >= 0
-            else { continue }
-            let url = assetsDirectory.appendingPathComponent(assetName)
-            guard let document = PDFDocument(url: url),
-                  let pdfPage = document.page(at: pageIndex)
-            else { continue }
-            let stored = pdfPage.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let text = stored.isEmpty ? ocrText(from: pdfPage) : stored
-            guard !text.isEmpty else { continue }
-            parts.append(text)
+        for reference in Self.pdfReferences(in: page) {
+            let key = "\(reference.assetName)#\(reference.pageIndex)"
+            let text: String
+            if let cached = pdfTextCache[key] {
+                text = cached
+            } else {
+                let url = assetsDirectory.appendingPathComponent(reference.assetName)
+                text = await Self.extractPDFPageText(
+                    pdfTextExtractor,
+                    at: url,
+                    pageIndex: reference.pageIndex
+                )
+                cachePDFText(text, for: key)
+            }
+            if !text.isEmpty {
+                parts.append(text)
+            }
         }
         return parts.joined(separator: "\n")
+    }
+
+    private func cachePDFText(_ text: String, for key: String) {
+        if pdfTextCache[key] == nil {
+            pdfTextCacheOrder.append(key)
+        }
+        pdfTextCache[key] = text
+        while pdfTextCacheOrder.count > Self.pdfTextCacheLimit {
+            let oldest = pdfTextCacheOrder.removeFirst()
+            pdfTextCache[oldest] = nil
+        }
+    }
+
+    /// Runs the extractor on a detached task so PDFKit and Vision never hold the
+    /// actor while a search is waiting. Cancellation propagates to the work.
+    private static func extractPDFPageText(
+        _ extractor: @escaping PDFTextExtractor,
+        at url: URL,
+        pageIndex: Int
+    ) async -> String {
+        let work = Task.detached(priority: .utility) {
+            await extractor(url, pageIndex)
+        }
+        return await withTaskCancellationHandler {
+            await work.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    /// The text layer of one PDF page, or its scanned words. Synchronous, so only
+    /// call it from `extractPDFPageText`'s detached task.
+    static func pdfPageText(at url: URL, pageIndex: Int) -> String {
+        guard !Task.isCancelled,
+              let document = PDFDocument(url: url),
+              let pdfPage = document.page(at: pageIndex)
+        else { return "" }
+        let stored = pdfPage.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? ocrText(from: pdfPage) : stored
     }
 
     /// Reads the words in a scanned PDF page with Vision. Runs once per page,
     /// because the index keeps the result until the page or PDF reference
     /// changes; it is deliberately not run on every search.
     private static func ocrText(from pdfPage: PDFPage) -> String {
+        guard !Task.isCancelled else { return "" }
         let bounds = pdfPage.bounds(for: .mediaBox)
         guard bounds.width > 0, bounds.height > 0 else { return "" }
         // A4 at about 2.5× is enough for the recogniser without a huge bitmap.
@@ -720,6 +788,16 @@ public actor SearchIndex {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The PDF pages on a page that can be read, in element order.
+    private static func pdfReferences(in page: Page) -> [(assetName: String, pageIndex: Int)] {
+        page.elements.compactMap { element in
+            guard case let .pdfPage(assetName, pageIndex) = element.content,
+                  pageIndex >= 0
+            else { return nil }
+            return (assetName, pageIndex)
+        }
+    }
+
     private static func pdfRefs(in page: Page) -> [String] {
         page.elements.compactMap { element in
             guard case let .pdfPage(assetName, pageIndex) = element.content else { return nil }
@@ -728,7 +806,7 @@ public actor SearchIndex {
         .sorted()
     }
 
-    private static func contentHash(of page: Page) -> String {
+    static func contentHash(of page: Page) -> String {
         let snapshot = InkSnapshot(
             strokes: page.strokes,
             deletedStrokeIDs: page.deletedStrokeIDs.map(\.uuidString).sorted(),
