@@ -797,8 +797,60 @@ final class AppModel {
 
     // MARK: - Notebook session
 
+    /// The open still building each notebook's session. A notebook is recorded
+    /// here synchronously, before its first disk call, so a second tap on the
+    /// same card joins that open instead of starting another session over the
+    /// same pages: two sessions would both save the same page and the later
+    /// write would win.
+    private var openingTabs: [UUID: Task<Void, Never>] = [:]
+
     /// Opens `notebook`; with `highlighting`, the page marks that search's matches.
     func open(_ notebook: NotebookManifest, pageID: UUID? = nil, highlighting query: SearchHighlight? = nil) async {
+        if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
+            await show(existing, pageID: pageID, highlighting: query)
+            return
+        }
+
+        // Registered on the main actor with no suspension point in between, so
+        // two taps in one frame cannot both get past this check.
+        if let opening = openingTabs[notebook.id] {
+            await opening.value
+            // The tap that started the load owns its page request; this one
+            // applies its own once the session exists.
+            if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
+                await show(existing, pageID: pageID, highlighting: query)
+            }
+            return
+        }
+
+        let opening = Task { await self.loadAndOpen(notebook, pageID: pageID, highlighting: query) }
+        openingTabs[notebook.id] = opening
+        await opening.value
+        openingTabs[notebook.id] = nil
+    }
+
+    /// Brings a loaded notebook to the front, on the requested page.
+    private func show(
+        _ existing: NotebookSession,
+        pageID: UUID?,
+        highlighting query: SearchHighlight?
+    ) async {
+        existing.searchHighlight = query
+        activeNotebookID = existing.notebookID
+        isShowingLibrary = false
+        // Page one is a valid target: a search hit there used to be ignored.
+        if let pageID, let index = existing.manifest.pageOrder.firstIndex(of: pageID) {
+            await existing.goToPage(index)
+        }
+    }
+
+    /// Builds the session for `notebook` and shows it. Runs as the only open of
+    /// its notebook; `open` joins this task rather than starting a second one.
+    private func loadAndOpen(
+        _ notebook: NotebookManifest,
+        pageID: UUID?,
+        highlighting query: SearchHighlight?
+    ) async {
         // Last Opened is kept apart from Date Modified: opening a notebook is
         // re-finding it, not editing it.
         let openedAt = Date()
@@ -807,14 +859,10 @@ final class AppModel {
             notebooks[index].lastOpenedAt = openedAt
         }
 
+        // Re-checked after every await: another path may have opened this
+        // notebook while this one waited for the disk.
         if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
-            existing.searchHighlight = query
-            activeNotebookID = existing.notebookID
-            isShowingLibrary = false
-            // Page one is a valid target: a search hit there used to be ignored.
-            if let pageID, let index = existing.manifest.pageOrder.firstIndex(of: pageID) {
-                await existing.goToPage(index)
-            }
+            await show(existing, pageID: pageID, highlighting: query)
             return
         }
 
@@ -829,6 +877,12 @@ final class AppModel {
 
         do {
             let snapshot = try await store.loadNotebook(notebook.id)
+            // The pages took time to load; never append a second session for a
+            // notebook that is already in `tabs`.
+            if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
+                await show(existing, pageID: pageID, highlighting: query)
+                return
+            }
             let newSession = NotebookSession(store: store, snapshot: snapshot, history: history)
             newSession.onPageDeleted = { [weak self] pageID in
                 guard let self else { return }
