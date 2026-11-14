@@ -202,6 +202,7 @@ extension BlockTextEditor {
             coordinator.view = view
 
             let label = coordinator.placeholder
+            let hidesPlaceholder = !text.isEmpty
             let textChanged = view.text != text
             let styleChanged = view.font != font
                 || view.textColor != textColor
@@ -209,7 +210,7 @@ extension BlockTextEditor {
                 || view.typingAttributes[.foregroundColor] as? UIColor != textColor
             let placeholderChanged = label?.text != placeholder
                 || label?.font != font
-                || label?.isHidden != text.isEmpty
+                || label?.isHidden != hidesPlaceholder
 
             // Everything this update would apply is already applied: a
             // keystroke stays in the text view, and no text is reset (which
@@ -247,7 +248,7 @@ extension BlockTextEditor {
             if placeholderChanged {
                 label?.text = placeholder
                 label?.font = font
-                label?.isHidden = !text.isEmpty
+                label?.isHidden = hidesPlaceholder
             }
 
             coordinator.applyFocusIfNeeded()
