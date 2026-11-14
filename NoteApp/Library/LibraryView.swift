@@ -946,7 +946,7 @@ struct LibraryView: View {
 
                 if visibleNotebooks.isEmpty && groups.isEmpty {
                     if model.search.isIndexing {
-                        HStack(spacing: 10) {
+                        HStack(spacing: AppSpacing.s) {
                             ProgressView()
                             Text("Reading handwriting… \(model.search.indexedPages) of \(model.search.totalPages)")
                                 .foregroundStyle(.secondary)
@@ -981,7 +981,7 @@ struct LibraryView: View {
     }
 
     private func searchErrorRow(_ error: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: AppSpacing.s) {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
             Text(error)
@@ -1017,7 +1017,7 @@ struct LibraryView: View {
 
     @ViewBuilder
     private func notebookSearchGroupView(_ group: NotebookSearchGroup) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.l) {
             HStack(spacing: 12) {
                 SearchNotebookCover(notebook: group.notebook, store: model.store)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1039,7 +1039,7 @@ struct LibraryView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 10) {
+                            LazyHStack(alignment: .top, spacing: AppSpacing.s) {
                                 ForEach(sourceHits.prefix(Self.searchChipsPerSource)) { hit in
                                     SearchHitChip(hit: hit, pageLabel: hit.pageLabel) {
                                         open(hit, in: group)
@@ -1061,7 +1061,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(AppSpacing.l)
         .background(
             Color.secondary.opacity(0.07),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1097,7 +1097,7 @@ struct LibraryView: View {
 
     private func notebookGrid(_ visibleNotebooks: [NotebookManifest]) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: AppSpacing.xxl) {
                 tagFilterBar
                 // The Continue rail is library-wide, so it sits under All only.
                 if model.selectedLocation == .all, activeTagKeys.isEmpty {
@@ -1227,7 +1227,7 @@ struct LibraryView: View {
         let visibleNotebooks = model.visibleNotebooks
         return List {
             ForEach(visibleNotebooks, id: \.id) { notebook in
-                HStack(spacing: 14) {
+                HStack(spacing: AppSpacing.l) {
                     Image(systemName: "book.closed")
                         .font(.title3)
                         .foregroundStyle(.secondary)
@@ -1342,7 +1342,7 @@ private struct SearchHitChip: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.s) {
                 Text(pageLabel)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -1350,7 +1350,7 @@ private struct SearchHitChip: View {
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(10)
+            .padding(AppSpacing.m)
             .frame(width: 150, height: 92, alignment: .topLeading)
             .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -1373,7 +1373,7 @@ private struct SearchMoreChip: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            VStack(spacing: AppSpacing.s) {
                 Text("+\(count)")
                     .font(.headline.monospacedDigit())
                 Text("more from \(pageLabel)")
@@ -1382,7 +1382,7 @@ private struct SearchMoreChip: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
             }
-            .padding(10)
+            .padding(AppSpacing.m)
             .frame(width: 150, height: 92)
             .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -1442,9 +1442,9 @@ private struct SearchNotebookCover: View {
             }
         }
         .frame(width: 34, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous)
                 .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
         }
         .task(id: coverTaskID) {
@@ -1510,9 +1510,9 @@ private struct NotebookCard: View {
 
     var body: some View {
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: AppSpacing.s) {
                 coverArt
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
                     Text(notebook.title)
                         .font(.headline)
                         .lineLimit(1)
@@ -1554,7 +1554,7 @@ private struct NotebookCard: View {
                     .font(.system(size: symbolSize * 1.8, weight: .light))
                     .foregroundStyle(coverTint.opacity(0.35))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(18)
+                    .padding(AppSpacing.xl)
             } else if let cover {
                 Image(inkImage: cover)
                     .resizable()
@@ -1565,7 +1565,7 @@ private struct NotebookCard: View {
                     endPoint: .bottom
                 )
             } else if coverFailed {
-                VStack(spacing: 6) {
+                VStack(spacing: AppSpacing.s) {
                     Image(systemName: "eye.slash")
                         .font(.system(size: symbolSize))
                     Text("Preview unavailable")
@@ -1574,7 +1574,7 @@ private struct NotebookCard: View {
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(spacing: 10) {
+                VStack(spacing: AppSpacing.s) {
                     Image(systemName: "book.closed")
                         .font(.system(size: symbolSize))
                     ProgressView()
@@ -1586,7 +1586,7 @@ private struct NotebookCard: View {
             }
         }
         .aspectRatio(3 / 4, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
         .overlay(alignment: .topLeading) {
             if isOpen {
                 Text("Open")
@@ -1594,7 +1594,7 @@ private struct NotebookCard: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(.thinMaterial, in: Capsule())
-                    .padding(10)
+                    .padding(AppSpacing.m)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -1607,14 +1607,14 @@ private struct NotebookCard: View {
             }
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous)
                 .strokeBorder(.white.opacity(0.15), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.14), radius: 6, y: 3)
     }
 
     private var tagRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: AppSpacing.s) {
             ForEach(tags.prefix(3), id: \.self) { tag in
                 TagChip(tag: tag)
             }

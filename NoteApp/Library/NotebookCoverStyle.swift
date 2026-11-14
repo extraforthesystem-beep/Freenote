@@ -71,7 +71,7 @@ struct NotebookCoverPicker: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 18) {
+                LazyVGrid(columns: columns, spacing: AppSpacing.xl) {
                     option(title: "First Page", name: nil, isPage: true)
                     ForEach(NotebookCoverStyle.allCases) { style in
                         option(title: style.name, name: style.rawValue, style: style)
@@ -125,7 +125,7 @@ struct NotebookCoverPicker: View {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.title3)
                             .foregroundStyle(.white, Color.accentColor)
-                            .padding(7)
+                            .padding(AppSpacing.s)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     }
                 }
