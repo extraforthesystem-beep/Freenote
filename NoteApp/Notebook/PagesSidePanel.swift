@@ -3,27 +3,22 @@ import NoteCore
 import SearchKit
 import SwiftUI
 
-/// The two things the side panel can show.
-enum NotebookPanelTab: Hashable {
-    case pages
-    case search
-}
-
 /// A vertical page switcher that sits beside the page. Only the cells the
 /// viewport reaches decode their page, and rendering happens off the main actor.
 ///
-/// The caller sets the panel's width: a fixed column on a regular-width iPad,
-/// or the whole sheet when width is compact.
+/// The search field above the grid filters the notebook; with the field empty
+/// the grid is what shows. The caller sets the panel's width: a fixed column on
+/// a regular-width iPad, or the whole sheet when width is compact.
 struct PagesSidePanel: View {
     let session: NotebookSession
     /// Which edge the panel sits on; its divider faces the page.
     let isOnLeft: Bool
-    /// The app's shared search, shown in the Search tab.
+    /// The app's shared search, behind the panel's field.
     let search: HandwritingSearch
-    @Binding var tab: NotebookPanelTab
+    /// Asks the panel's field for the keyboard; cleared once it has it.
+    @Binding var searchFocusRequest: Bool
     let onHighlight: (SearchHighlight?) -> Void
     let onSelect: (Int) -> Void
-    let onClose: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -41,14 +36,10 @@ struct PagesSidePanel: View {
         HStack(spacing: 0) {
             if !isOnLeft { edge }
             VStack(spacing: 0) {
-                header
-                Divider()
-                switch tab {
-                case .pages:
-                    pagesGrid
-                case .search:
-                    searchTab
-                }
+                findBar
+                    // A new bar per notebook, so one notebook's results never
+                    // list in another.
+                    .id(session.notebookID)
             }
             if isOnLeft { edge }
         }
@@ -65,28 +56,22 @@ struct PagesSidePanel: View {
         Divider()
     }
 
-    private var header: some View {
-        HStack(spacing: AppSpacing.s) {
-            Picker("Panel", selection: $tab) {
-                Text("Pages").tag(NotebookPanelTab.pages)
-                Text("Search").tag(NotebookPanelTab.search)
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .labelsHidden()
-            .accessibilityLabel("Pages or search")
-
-            Button(action: onClose) {
-                Image(systemName: isOnLeft ? "sidebar.leading" : "sidebar.trailing")
-                    .font(.system(size: 15, weight: .medium))
-                    .hitTarget()
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Hide Panel")
-            .help("Hide Panel")
-        }
-        .padding(.horizontal, AppSpacing.s)
-        .frame(height: 44)
+    private var findBar: some View {
+        NotebookFindBar(
+            notebookID: session.notebookID,
+            search: search,
+            pageCount: session.pageCount,
+            activeHighlight: session.searchHighlight,
+            initialPageID: session.currentPageID,
+            focusRequest: $searchFocusRequest,
+            onHighlight: onHighlight,
+            onSelectPage: { pageID in
+                guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
+                onSelect(index)
+            },
+            onGoToPage: { index in onSelect(index) },
+            idle: { pagesGrid }
+        )
     }
 
     private var pagesGrid: some View {
@@ -109,29 +94,6 @@ struct PagesSidePanel: View {
                 proxy.scrollTo(session.pageIndex, anchor: .center)
             }
         }
-    }
-
-    /// The find bar fills the panel: field pinned on top, results scrolling
-    /// beneath. The panel's own header closes it.
-    private var searchTab: some View {
-        NotebookFindBar(
-            notebookID: session.notebookID,
-            search: search,
-            pageCount: session.pageCount,
-            isEmbedded: true,
-            activeHighlight: session.searchHighlight,
-            initialPageID: session.currentPageID,
-            onHighlight: onHighlight,
-            onSelectPage: { pageID in
-                guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
-                onSelect(index)
-            },
-            onGoToPage: { index in onSelect(index) },
-            onClose: onClose
-        )
-        // A new bar per notebook, so one notebook's results never list in another.
-        .id(session.notebookID)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private func pageCell(_ index: Int) -> some View {

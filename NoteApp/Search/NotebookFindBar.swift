@@ -30,6 +30,16 @@ struct FindBarPageResult: Identifiable, Hashable {
         .sorted { $0.pageIndex < $1.pageIndex }
     }
 
+    /// The hits on the pages inside `pageRange`. A hit with no page number (0)
+    /// has no page to judge it by, so it stays.
+    static func filter(
+        _ hits: [SearchKit.SearchHit],
+        pageRange: ClosedRange<Int>?
+    ) -> [SearchKit.SearchHit] {
+        guard let pageRange else { return hits }
+        return hits.filter { $0.pageIndex == 0 || pageRange.contains($0.pageIndex) }
+    }
+
     var title: String {
         pageIndex > 0 ? "Page \(pageIndex)" : "Page"
     }
@@ -46,27 +56,30 @@ struct FindBarPageResult: Identifiable, Hashable {
     }
 }
 
-/// In-notebook search as a find bar: one query row over the page and the
-/// results dropping beneath it in the same material.
+/// The pages panel's search: one field over the page grid it filters.
 ///
-/// The editor owns where the bar is shown and what a jump means; this view only
-/// reports the page the reader picked, so the bar can float over the page.
-struct NotebookFindBar: View {
+/// The bar owns where a jump goes and what the pages mark; `idle` is what fills
+/// the panel while the field is empty, which is the page grid it lives above.
+struct NotebookFindBar<Idle: View>: View {
     private let notebookID: UUID
     private let search: HandwritingSearch
     private let pageCount: Int
-    /// Set when the bar fills a side panel instead of floating over the page.
-    private let isEmbedded: Bool
     /// The search the pages already mark, e.g. from the library search.
     private let activeHighlight: SearchHighlight?
     private let onHighlight: (SearchHighlight?) -> Void
     private let onSelectPage: (UUID) -> Void
     private let onGoToPage: (Int) -> Void
-    private let onClose: () -> Void
+    private let idle: Idle
+
+    /// Asks for the keyboard. Set by ⌘F, the toolbar's Search item and the More
+    /// menu; cleared as soon as it is honoured, so showing the panel alone never
+    /// opens the keyboard.
+    @Binding var focusRequest: Bool
 
     @State private var query = ""
     @State private var sources = Set(PageTextSource.allCases)
     @State private var dateRange = SearchDateRange.anyTime
+    @State private var pageRange: ClosedRange<Int>?
     @State private var hits: [SearchKit.SearchHit] = []
     /// The hits grouped into rows when they arrive, so a body pass never
     /// regroups or re-sorts them.
@@ -77,69 +90,74 @@ struct NotebookFindBar: View {
     /// The query whose hits are in `hits`, so an empty list is not shown mid-search.
     @State private var settledQuery = ""
     @State private var searchTask: Task<Void, Never>?
-    @State private var showsResults = true
     @FocusState private var isFieldFocused: Bool
 
     /// - Parameters:
     ///   - notebookID: the notebook to search; the index is scoped to it.
     ///   - search: the app's shared `HandwritingSearch`, which owns the index.
     ///   - pageCount: the notebook's pages, so page numbers can be range-checked.
-    ///   - isEmbedded: fills a panel; no floating material or close button.
     ///   - activeHighlight: the search the pages already mark; the bar adopts it.
     ///   - initialPageID: the page the first search should land on, when it has a match.
+    ///   - focusRequest: set to focus the field; the bar clears it once it has.
     ///   - onHighlight: called with the query the page should mark, or nil to clear the marks.
     ///   - onSelectPage: called with the page ID of the chosen text hit.
     ///   - onGoToPage: called with the 0-based page of a page-number query.
-    ///   - onClose: called when the bar asks to close.
+    ///   - idle: what fills the panel while the field is empty.
     init(
         notebookID: UUID,
         search: HandwritingSearch,
         pageCount: Int,
-        isEmbedded: Bool = false,
         activeHighlight: SearchHighlight? = nil,
         initialPageID: UUID? = nil,
+        focusRequest: Binding<Bool>,
         onHighlight: @escaping (SearchHighlight?) -> Void = { _ in },
         onSelectPage: @escaping (UUID) -> Void,
         onGoToPage: @escaping (Int) -> Void,
-        onClose: @escaping () -> Void
+        @ViewBuilder idle: () -> Idle
     ) {
         self.notebookID = notebookID
         self.search = search
         self.pageCount = pageCount
-        self.isEmbedded = isEmbedded
         self.activeHighlight = activeHighlight
         self.onHighlight = onHighlight
         _pendingInitialPageID = State(initialValue: initialPageID)
+        _focusRequest = focusRequest
         self.onSelectPage = onSelectPage
         self.onGoToPage = onGoToPage
-        self.onClose = onClose
+        self.idle = idle()
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            bar
-            if isEmbedded, trimmedQuery.isEmpty {
-                Divider()
-                searchHint
-            } else if showsResults, !trimmedQuery.isEmpty {
+            header
+            Divider()
+            if trimmedQuery.isEmpty {
+                idle
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                resultsHeader
                 Divider()
                 results
             }
         }
-        .frame(maxWidth: isEmbedded ? .infinity : 620, alignment: .top)
-        .modifier(FindBarChrome(isEmbedded: isEmbedded))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Notebook search")
-        .task { isFieldFocused = true }
+        .task(id: focusRequest) {
+            guard focusRequest else { return }
+            isFieldFocused = true
+            focusRequest = false
+        }
         .onChange(of: query) { _, value in
-            // A new query reopens the list after a jump folded it away.
-            showsResults = true
             scheduleSearch(value)
         }
         .onChange(of: sources) { _, _ in
             scheduleSearch(query)
         }
         .onChange(of: dateRange) { _, _ in
+            scheduleSearch(query)
+        }
+        .onChange(of: pageRange) { _, _ in
             scheduleSearch(query)
         }
         .onAppear { adopt(activeHighlight) }
@@ -152,191 +170,108 @@ struct NotebookFindBar: View {
         }
         #if os(iOS)
         .onKeyPress(.escape) {
-            onClose()
+            guard !trimmedQuery.isEmpty else { return .ignored }
+            query = ""
             return .handled
         }
         #else
-        .onExitCommand(perform: onClose)
+        .onExitCommand {
+            if !trimmedQuery.isEmpty { query = "" }
+        }
         #endif
     }
 
-    // MARK: Bar
+    // MARK: Header
 
-    /// One 44 pt row. Floating, at narrow widths the count goes first, then the
-    /// steppers; in a narrow split view everything but the field and close moves
-    /// into one menu. Inside the panel's 220 pt column the same menu holds the
-    /// controls that cannot be 44 pt wide; the panel's sheet is wide enough for
-    /// the full row.
-    private var bar: some View {
-        Group {
-            if isEmbedded {
-                ViewThatFits(in: .horizontal) {
-                    barRow(showsCount: true, showsSteppers: true)
-                    embeddedBarRow
-                }
-            } else {
-                ViewThatFits(in: .horizontal) {
-                    barRow(showsCount: true, showsSteppers: true)
-                    barRow(showsCount: false, showsSteppers: true)
-                    barRow(showsCount: false, showsSteppers: false)
-                    compactBarRow
-                }
-            }
-        }
-        .frame(height: 44)
-        .padding(.horizontal, AppSpacing.s)
-    }
-
-    private func barRow(showsCount: Bool, showsSteppers: Bool) -> some View {
+    /// One 44 pt row: the field's capsule and the filter button. The field
+    /// takes Pencil Scribble as typed text; nothing else competes with it.
+    private var header: some View {
         HStack(spacing: AppSpacing.s) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            searchField
-            clearButton
-            #if os(iOS)
-            PencilSearchButton(search: search) { query = $0 }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .hitTarget()
-            #endif
-            SearchFilterMenu(sources: $sources, dateRange: $dateRange)
-                .labelStyle(.iconOnly)
-                .hitTarget()
-            if showsCount, !hits.isEmpty {
-                Text(matchCountText)
-                    .font(.caption)
+            HStack(spacing: AppSpacing.xs) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .fixedSize()
+                searchField
+                clearButton
             }
-            if showsSteppers {
-                iconButton("chevron.up", label: "Previous Result", shortcut: .previousResult) {
-                    step(-1)
-                }
-                .disabled(!canStepBack)
-                iconButton("chevron.down", label: "Next Result", shortcut: .nextResult) {
-                    step(1)
-                }
-                .disabled(!canStepForward)
-            }
-            resultsToggle
-            if !isEmbedded {
-                iconButton("xmark", label: "Close Search") {
-                    onClose()
-                }
-            }
-        }
-    }
+            .padding(.horizontal, AppSpacing.s)
+            .frame(height: 34)
+            .background(
+                Color.secondary.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
+            )
 
-    /// The narrowest floating bar: the field, its clear button, one menu for the
-    /// result steps and filters, and close. Used in a 1/3 split.
-    private var compactBarRow: some View {
-        HStack(spacing: AppSpacing.s) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            searchField
-            clearButton
-            moreMenu
-            iconButton("xmark", label: "Close Search") {
-                onClose()
-            }
+            PanelSearchFilterButton(
+                sources: $sources,
+                dateRange: $dateRange,
+                pageRange: $pageRange,
+                pageCount: pageCount
+            )
         }
-    }
-
-    /// The panel's bar: the field, its clear button and one menu at 44 pt each.
-    /// Search results step from that menu; nothing here is a 28 pt target.
-    private var embeddedBarRow: some View {
-        HStack(spacing: AppSpacing.s) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            searchField
-            clearButton
-            moreMenu
-        }
+        .padding(.horizontal, AppSpacing.s)
+        .frame(height: 44)
     }
 
     private var searchField: some View {
-        TextField("Search this notebook", text: $query)
+        TextField("Search pages", text: $query)
             .textFieldStyle(.plain)
             .autocorrectionDisabled()
             .focused($isFieldFocused)
             .submitLabel(.go)
             .onSubmit(go)
             .layoutPriority(1)
-            .frame(minWidth: 56)
     }
 
     private var clearButton: some View {
         Group {
             if !query.isEmpty {
-                iconButton("xmark.circle.fill", label: "Clear Search") {
+                Button {
                     query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 34)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear Search")
             }
         }
-    }
-
-    private var resultsToggle: some View {
-        Button {
-            showsResults.toggle()
-        } label: {
-            Image(systemName: "list.bullet")
-                .hitTarget()
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(showsResults ? Color.accentColor : .secondary)
-        .accessibilityLabel(showsResults ? "Hide Results" : "Show Results")
-        .disabled(trimmedQuery.isEmpty)
-    }
-
-    /// The controls the panel's width cannot hold at 44 pt each.
-    private var moreMenu: some View {
-        Menu {
-            Button("Previous Result", systemImage: "chevron.up") { step(-1) }
-                .disabled(!canStepBack)
-            Button("Next Result", systemImage: "chevron.down") { step(1) }
-                .disabled(!canStepForward)
-            Button(showsResults ? "Hide Results" : "Show Results", systemImage: "list.bullet") {
-                showsResults.toggle()
-            }
-            .disabled(trimmedQuery.isEmpty)
-            Divider()
-            SearchFilterMenu(sources: $sources, dateRange: $dateRange)
-        } label: {
-            Image(systemName: "ellipsis.circle")
-                .hitTarget()
-        }
-        .accessibilityLabel("Search Options")
-    }
-
-    private func iconButton(
-        _ systemImage: String,
-        label: String,
-        shortcut: ResultShortcut? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .hitTarget()
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .accessibilityLabel(label)
-        .modifier(ResultShortcutModifier(shortcut: shortcut))
     }
 
     // MARK: Results
 
-    /// Shown in the panel while the field is empty: what a search looks at.
-    private var searchHint: some View {
-        Text("Searches handwriting, typed text, PDF text and page numbers.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, AppSpacing.m)
-            .padding(.vertical, AppSpacing.m)
+    /// How many matches over how many pages, above the list.
+    private var matchSummary: String {
+        guard !hits.isEmpty else {
+            // A page-number query has no text matches, but is still a target.
+            if let pageTarget { return "Page \(pageTarget)" }
+            return "No matches"
+        }
+        let matchWord = hits.count == 1 ? "match" : "matches"
+        let pageWord = pageResults.count == 1 ? "page" : "pages"
+        return "\(hits.count) \(matchWord) · \(pageResults.count) \(pageWord)"
+    }
+
+    private var resultsHeader: some View {
+        HStack(spacing: AppSpacing.xs) {
+            Text(matchSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            iconButton("chevron.up", label: "Previous Result", shortcut: .previousResult) {
+                step(-1)
+            }
+            .disabled(!canStepBack)
+            iconButton("chevron.down", label: "Next Result", shortcut: .nextResult) {
+                step(1)
+            }
+            .disabled(!canStepForward)
+        }
+        .padding(.leading, AppSpacing.m)
+        .padding(.trailing, AppSpacing.xs)
+        .frame(minHeight: 44)
     }
 
     private var results: some View {
@@ -355,13 +290,12 @@ struct NotebookFindBar: View {
                 }
             }
         }
-        .frame(maxHeight: isEmbedded ? .infinity : 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func pageNumberRow(_ page: Int) -> some View {
         Button {
-            showsResults = false
-            onGoToPage(page - 1)
+            jumpToPage(page)
         } label: {
             HStack(spacing: AppSpacing.s) {
                 Image(systemName: "number.square")
@@ -425,6 +359,22 @@ struct NotebookFindBar: View {
             .padding(.vertical, AppSpacing.m)
     }
 
+    private func iconButton(
+        _ systemImage: String,
+        label: String,
+        shortcut: ResultShortcut? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .hitTarget()
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel(label)
+        .modifier(ResultShortcutModifier(shortcut: shortcut))
+    }
+
     // MARK: State
 
     private var trimmedQuery: String {
@@ -449,11 +399,6 @@ struct NotebookFindBar: View {
         !pageResults.isEmpty && selectedIndex < pageResults.count - 1
     }
 
-    private var matchCountText: String {
-        let count = hits.count
-        return "\(count) match\(count == 1 ? "" : "es")"
-    }
-
     private func scheduleSearch(_ value: String) {
         searchTask?.cancel()
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -467,15 +412,19 @@ struct NotebookFindBar: View {
         }
         let sources = sources
         let dateRange = dateRange
+        let pageRange = pageRange
         searchTask = Task {
             // Debounce: one scoped search per pause, not per keystroke.
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
             let found = await search.search(trimmed, in: notebookID, sources: sources, dateRange: dateRange)
             guard !Task.isCancelled else { return }
+            // The page filter is applied before grouping, so a page outside the
+            // range never gets a row of its own.
+            let kept = FindBarPageResult.filter(found, pageRange: pageRange)
             // Group once, here, so the body never sorts the whole result set.
-            let grouped = FindBarPageResult.group(found)
-            hits = found
+            let grouped = FindBarPageResult.group(kept)
+            hits = kept
             pageResults = grouped
             settledQuery = trimmed
             onHighlight(SearchHighlight(query: trimmed, sources: sources, dateRange: dateRange))
@@ -504,11 +453,17 @@ struct NotebookFindBar: View {
         query = highlight.query
     }
 
-    /// Tapping a row jumps and folds the list away; the toggle brings it back.
+    /// Tapping a row jumps and keeps the list, so the reader can try the next one.
     private func jump(to result: FindBarPageResult) {
         selectedPageID = result.pageID
-        showsResults = false
         onSelectPage(result.pageID)
+    }
+
+    /// Jumps to a page-number query and drops the query, so the panel goes back
+    /// to the grid showing that page.
+    private func jumpToPage(_ page: Int) {
+        onGoToPage(page - 1)
+        query = ""
     }
 
     /// Moves the selection by `offset` and reports the page it lands on.
@@ -526,8 +481,7 @@ struct NotebookFindBar: View {
     /// Return jumps to the page number, else the first text hit.
     private func go() {
         if let pageTarget {
-            showsResults = false
-            onGoToPage(pageTarget - 1)
+            jumpToPage(pageTarget)
         } else if let first = pageResults.first {
             jump(to: first)
         }
@@ -560,34 +514,17 @@ private struct ResultShortcutModifier: ViewModifier {
     }
 }
 
-/// Floating over the page the bar is a material card; inside a panel it is
-/// just the row and its results.
-private struct FindBarChrome: ViewModifier {
-    let isEmbedded: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isEmbedded {
-            content
-        } else {
-            content
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
-                .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
-        }
-    }
-}
-
 #Preview("Notebook Find Bar") {
     NotebookFindBar(
         notebookID: UUID(),
         search: HandwritingSearch(root: FileManager.default.temporaryDirectory
             .appendingPathComponent("NotebookFindBarPreview", isDirectory: true)),
         pageCount: 24,
+        focusRequest: .constant(false),
         onSelectPage: { _ in },
         onGoToPage: { _ in },
-        onClose: {}
+        idle: { Color.clear }
     )
-    .frame(width: 620)
+    .frame(width: 240, height: 500)
     .padding()
 }

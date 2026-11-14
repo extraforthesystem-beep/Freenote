@@ -172,7 +172,7 @@ struct NotebookPane: View {
     @State private var pdfImport: PDFImportFlow?
     @State private var showsLayers = false
     @State private var showsOutline = false
-    @State private var pagesPanelTab: NotebookPanelTab = .pages
+    @State private var searchFocusRequest = false
     @State private var showsAudio = false
     @State private var showsAI = false
     @State private var showsToolbarEditor = false
@@ -278,27 +278,19 @@ struct NotebookPane: View {
                                         .padding(.horizontal, 12)
                                 }
                                 #endif
-                                // Reading Mode is one clean page: no page chrome.
-                                if !editor.isReadingMode {
-                                    PageCounterPill(
-                                        session: session,
-                                        onSelect: { index in
-                                            Task { await session.goToPage(index) }
-                                        },
-                                        onGoToPage: { showsGoToPage = true },
-                                        onShowOverview: { showsPageOverview = true }
-                                    )
-                                    .padding(.bottom, 12)
-                                }
                             }
                         }
                         .overlay(alignment: .bottomLeading) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                PageHistoryControls(session: session)
-                                pdfLinkHistoryChip
+                            pdfLinkHistoryChip
+                                .padding(.leading, 12)
+                                .padding(.bottom, 12)
+                        }
+                        .overlay(alignment: .topLeading) {
+                            if !editor.isReadingMode {
+                                PageChangeIndicator(session: session)
+                                    .padding(.leading, 12)
+                                    .padding(.top, 12)
                             }
-                            .padding(.leading, 12)
-                            .padding(.bottom, 12)
                         }
                         .overlay(alignment: .topTrailing) { readingModeExit }
                     #if os(iOS)
@@ -538,10 +530,9 @@ struct NotebookPane: View {
                 session: session,
                 isOnLeft: pagesOnLeft,
                 search: model.search,
-                tab: $pagesPanelTab,
+                searchFocusRequest: $searchFocusRequest,
                 onHighlight: { session.searchHighlight = $0 },
-                onSelect: { index in Task { await session.goToPage(index) } },
-                onClose: { pagesPanelBinding.wrappedValue = false }
+                onSelect: { index in Task { await session.goToPage(index) } }
             )
             .presentationDetents([.medium, .large])
         }
@@ -636,7 +627,6 @@ struct NotebookPane: View {
         Binding(
             get: { pagesPanelIsInline ? showsThumbnails : showsCompactPages },
             set: { isShown in
-                if isShown { pagesPanelTab = .pages }
                 if pagesPanelIsInline {
                     showsThumbnails = isShown
                 } else {
@@ -662,15 +652,10 @@ struct NotebookPane: View {
             session: session,
             isOnLeft: pagesOnLeft,
             search: model.search,
-            tab: $pagesPanelTab,
+            searchFocusRequest: $searchFocusRequest,
             onHighlight: { session.searchHighlight = $0 },
             onSelect: { index in
                 Task { await session.goToPage(index) }
-            },
-            onClose: {
-                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
-                    pagesPanelBinding.wrappedValue = false
-                }
             }
         )
         .frame(width: 220)
@@ -730,15 +715,16 @@ struct NotebookPane: View {
 
     // MARK: - Search
 
-    /// True while the side panel is showing its Search tab.
+    /// True while the pages panel is showing. The panel's field is always there,
+    /// so a visible panel is a visible search.
     private var isSearchVisible: Bool {
-        guard pagesPanelTab == .search else { return false }
-        return pagesPanelIsInline ? showsThumbnails : showsCompactPages
+        pagesPanelIsInline ? showsThumbnails : showsCompactPages
     }
 
-    /// Opens the side panel on its Search tab; the page keeps its size.
+    /// Opens the side panel and asks its field for the keyboard; the page keeps
+    /// its size.
     private func openSearch() {
-        pagesPanelTab = .search
+        searchFocusRequest = true
         AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
             showsThumbnails = true
             if !pagesPanelIsInline { showsCompactPages = true }

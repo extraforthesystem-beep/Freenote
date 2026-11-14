@@ -6,11 +6,12 @@ import UniformTypeIdentifiers
 
 /// The editor's single toolbar row.
 ///
-/// Left (pinned): back and the Pages toggle. Centre: the pen chip and the
-/// customisable tool items, the colour favourites and the width presets.
-/// Right: recording and the More menu. Only the colour favourites scroll; when
-/// the row is too narrow for every tool the extra ones move into an overflow
-/// menu. Reading a notebook hides the tools and shows a Read Only pill instead.
+/// Left (pinned): back. Centre: the pen chip and the customisable tool items,
+/// the colour favourites and the width presets. Right: read only, recording,
+/// the More menu, then the Pages toggle at the far right edge. Only the colour
+/// favourites scroll; when the row is too narrow for every tool the extra ones
+/// move into an overflow menu. Reading a notebook hides the tools and shows a
+/// Read Only pill instead.
 struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     @Bindable var editor: EditorToolState
     /// Observed, so an Undo/Redo item added in Customise Toolbar follows the
@@ -140,15 +141,6 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     private var leading: some View {
         HStack(spacing: 2) {
             ToolbarIconButton(backLabel, systemImage: "chevron.backward", action: onBack)
-            if showsPageControls {
-                ToolbarIconButton(
-                    showsThumbnails ? "Hide Pages" : "Show Pages",
-                    systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing",
-                    isSelected: showsThumbnails
-                ) {
-                    AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { showsThumbnails.toggle() }
-                }
-            }
         }
     }
 
@@ -164,6 +156,15 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             .menuStyle(.button)
             .buttonStyle(.plain)
             .accessibilityLabel("More")
+            if showsPageControls {
+                ToolbarIconButton(
+                    showsThumbnails ? "Hide Pages" : "Show Pages",
+                    systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing",
+                    isSelected: showsThumbnails
+                ) {
+                    AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { showsThumbnails.toggle() }
+                }
+            }
         }
     }
 
