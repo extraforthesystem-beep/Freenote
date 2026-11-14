@@ -45,6 +45,10 @@ struct BoardEditorView: View {
     /// would only bump the modified date.
     @State private var savedCamera: BoardCamera?
     @State private var didRestoreCamera = false
+    #if os(macOS)
+    /// The Mac preview's ink, rasterised off the main actor.
+    @State private var macInk: CGImage?
+    #endif
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -340,8 +344,8 @@ struct BoardEditorView: View {
                         assetsDirectory: assetsDirectory
                     )
 
-                    if let ink = macInkImage(in: content) {
-                        Image(nsImage: ink)
+                    if let macInk {
+                        Image(decorative: macInk, scale: 1)
                             .resizable()
                             .interpolation(.high)
                             .frame(width: width, height: height)
@@ -351,6 +355,12 @@ struct BoardEditorView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
                 .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                // Rasterising the ink at up to 2,048 px used to run inside the
+                // body, so every layout pass — dragging the window edge — drew
+                // the whole board again. It runs once per content change now.
+                .task(id: MacInkKey(content: content, signature: macInkSignature)) {
+                    await renderMacInk(in: content)
+                }
             } else {
                 ContentUnavailableView {
                     Label("Empty Board", systemImage: "square.dashed")
@@ -363,20 +373,50 @@ struct BoardEditorView: View {
         .background(AppColor.groupedBackground)
     }
 
-    private func macInkImage(in content: CGRect) -> NSImage? {
-        guard !inkStrokes.isEmpty else { return nil }
+    /// What the Mac preview's ink image depends on: the content rectangle that
+    /// is drawn, and a cheap signature for the strokes in it.
+    private struct MacInkKey: Equatable {
+        let content: CGRect
+        let signature: MacInkSignature
+    }
+
+    private struct MacInkSignature: Equatable {
+        let strokeCount: Int
+        let lastStrokeID: UUID?
+    }
+
+    private var macInkSignature: MacInkSignature {
+        let strokes = inkStrokes
+        return MacInkSignature(strokeCount: strokes.count, lastStrokeID: strokes.last?.id)
+    }
+
+    /// Renders the ink off the main actor, keeping the last image up meanwhile.
+    private func renderMacInk(in content: CGRect) async {
         let strokes = Self.translatedStrokes(
             inkStrokes,
             by: CGPoint(x: -content.minX, y: -content.minY)
         )
+        guard !strokes.isEmpty else {
+            macInk = nil
+            return
+        }
+
         let size = CGSize(width: content.width, height: content.height)
         let scale = min(2, max(0.01, 2_048 / max(size.width, size.height)))
-        return PageRenderer.image(
-            strokes: strokes,
-            pageSize: size,
-            template: .blank,
-            scale: scale
-        )
+        let rendered = await Task.detached(priority: .utility) { () -> CGImage? in
+            guard !Task.isCancelled else { return nil }
+            guard let image = PageRenderer.image(
+                strokes: strokes,
+                pageSize: size,
+                template: .blank,
+                scale: scale
+            ) else {
+                return nil
+            }
+            return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        }.value
+        guard !Task.isCancelled else { return }
+        macInk = rendered
     }
     #endif
 
