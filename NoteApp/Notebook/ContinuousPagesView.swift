@@ -236,6 +236,9 @@ class PagesView: UIView {
     }
 
     private(set) var pageOrder: [UUID] = []
+    /// Where each page sits in `pageOrder`, so a page's index is a lookup
+    /// rather than a scan of a 1,000-page notebook.
+    private(set) var pageIndices: [UUID: Int] = [:]
     private(set) var activePageID: UUID?
     private var activePage: Page?
     private var source: PageImageSource?
@@ -315,7 +318,7 @@ class PagesView: UIView {
     }
 
     var activeIndex: Int? {
-        activePageID.flatMap { pageOrder.firstIndex(of: $0) }
+        activePageID.flatMap { pageIndices[$0] }
     }
 
     var displayScale: CGFloat {
@@ -344,8 +347,8 @@ class PagesView: UIView {
         }
         source = newSource
 
-        if newOrder != pageOrder {
-            pageOrder = newOrder
+        if !Self.sameOrder(newOrder, pageOrder) {
+            setOrder(newOrder)
             layoutChanged = true
         }
         let size = CGSize(width: newPage.width, height: newPage.height)
@@ -358,7 +361,7 @@ class PagesView: UIView {
         let previousID = activePageID
         let activeChanged = previousID != newPage.id
         if activeChanged, let previousID, let leaving = activePage, leaving.id == previousID,
-           newOrder.contains(previousID) {
+           pageIndices[previousID] != nil {
             // Keep the page being left on screen as it looks now, then redraw
             // it from the in-memory copy, which may hold ink not yet on disk.
             if let slot = slots[previousID] {
@@ -388,6 +391,28 @@ class PagesView: UIView {
         controller?.scrollView = zoomingScrollView
         scheduleRenders()
         performPendingReveal()
+    }
+
+    private func setOrder(_ newOrder: [UUID]) {
+        pageOrder = newOrder
+        pageIndices.removeAll(keepingCapacity: true)
+        pageIndices.reserveCapacity(newOrder.count)
+        // First occurrence wins, like `firstIndex(of:)` did.
+        for (index, pageID) in newOrder.enumerated() where pageIndices[pageID] == nil {
+            pageIndices[pageID] = index
+        }
+    }
+
+    /// Whether the two orders are the same. The page content is handed back on
+    /// every stroke, so this runs per stroke; the manifest's array storage is
+    /// reused until the order changes, so comparing identity first settles the
+    /// usual case without walking every id.
+    private static func sameOrder(_ new: [UUID], _ old: [UUID]) -> Bool {
+        guard new.count == old.count else { return false }
+        let newStart = new.withUnsafeBufferPointer { $0.baseAddress }
+        let oldStart = old.withUnsafeBufferPointer { $0.baseAddress }
+        if let newStart, newStart == oldStart { return true }
+        return new == old
     }
 
     // MARK: Revealing a rect
@@ -995,7 +1020,7 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
     override func renderPriority() -> [UUID] {
         guard let centre = centreIndex() else { return [] }
         return slots.keys
-            .compactMap { id in pageOrder.firstIndex(of: id).map { (id, abs($0 - centre)) } }
+            .compactMap { id in pageIndices[id].map { (id, abs($0 - centre)) } }
             .sorted { $0.1 < $1.1 }
             .map(\.0)
     }
@@ -1248,7 +1273,7 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
     override func renderPriority() -> [UUID] {
         guard let current = currentIndex() else { return [] }
         return cells.keys
-            .compactMap { id in pageOrder.firstIndex(of: id).map { (id, abs($0 - current)) } }
+            .compactMap { id in pageIndices[id].map { (id, abs($0 - current)) } }
             .sorted { $0.1 < $1.1 }
             .map(\.0)
     }
