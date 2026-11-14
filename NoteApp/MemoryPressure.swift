@@ -34,6 +34,7 @@ enum MemoryPressure {
         TemplateImageCache.removeAll()
         CustomTemplateStore.removeAllPreviews()
         LibraryCovers.removeAllFromMemory()
+        BoardImageCache.removeAll()
         // PDFKit's page caches for the last linked PDF.
         PDFLinkHandler.removeCachedDocument()
     }
