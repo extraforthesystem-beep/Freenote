@@ -102,6 +102,10 @@ final class NotebookSession: Identifiable {
     /// rebuilt while writing.
     private(set) var currentPageID: UUID?
     private(set) var activeLayer: Page.Layer?
+    /// The ids of the tape pieces on the page, in page order. Like
+    /// `currentPageID`, it changes only when the page's tape does, so the tape
+    /// study chrome is not rebuilt on every stroke.
+    private(set) var tapeIDs: [UUID] = []
     private(set) var isLoadingPage = false
     private(set) var isSaving = false
     private(set) var isApplyingTemplate = false
@@ -216,6 +220,11 @@ final class NotebookSession: Identifiable {
             layer = page.layers.first { $0.id == activeLayerID }
         }
         if activeLayer != layer { activeLayer = layer }
+        let tapes = page?.visibleElements.compactMap { element -> UUID? in
+            if case .tape = element.content { return element.id }
+            return nil
+        } ?? []
+        if tapeIDs != tapes { tapeIDs = tapes }
     }
 
     /// Ink the canvas may show and edit: every stroke on a visible layer, in
@@ -544,12 +553,16 @@ final class NotebookSession: Identifiable {
     /// the manifest is rewritten. Pages are written one file at a time and then
     /// placed in the order, so a crash in between leaves orphan page files the
     /// next open recovers rather than a manifest entry with no page.
+    ///
+    /// A cancelled insert throws `CancellationError` at a page boundary: every
+    /// page already written is on disk and in the manifest, no page is
+    /// half-written, and the caller can tell a stop from a failure.
     @discardableResult
     func insertPages(
         _ pages: [Page],
         at index: Int,
         onProgress: ((_ written: Int, _ total: Int) -> Void)? = nil
-    ) async -> Int {
+    ) async throws -> Int {
         guard !pages.isEmpty else { return 0 }
         guard await commitSucceeded() else {
             errorMessage = "The pages could not be added because this page is not saved yet."
@@ -557,6 +570,9 @@ final class NotebookSession: Identifiable {
         }
         do {
             for (written, page) in pages.enumerated() {
+                // Checked before each page, so a cancel between pages leaves
+                // only whole pages behind.
+                try Task.checkCancellation()
                 try await store.savePage(page, in: manifest.id)
                 onProgress?(written + 1, pages.count)
             }
@@ -572,6 +588,11 @@ final class NotebookSession: Identifiable {
             await reloadManifest()
             await loadPage(at: position)
             return pages.count
+        } catch is CancellationError {
+            // The page files written so far stay, and the manifest lists them;
+            // a stop is not a failure, so no error banner.
+            await reloadManifest()
+            throw CancellationError()
         } catch {
             // The page files that were written are on disk already and the
             // manifest lists them, so show what is really there.
@@ -1021,6 +1042,13 @@ final class NotebookSession: Identifiable {
         }
     }
 
+    /// Replaces the revealed tape set in one state change, so Reveal All and
+    /// Hide All animate once instead of once per piece of tape.
+    func setRevealedTape(_ ids: Set<UUID>) {
+        guard revealedTapeIDs != ids else { return }
+        revealedTapeIDs = ids
+    }
+
     /// A default-sized element kept on the page, centred on it.
     private static func centredFrame(size: CGSize, in page: Page) -> ElementFrame {
         let width = min(size.width, page.width)
@@ -1278,10 +1306,12 @@ final class NotebookSession: Identifiable {
 
     /// Newest first. Notebook-level snapshots (`pageID == nil`) are included
     /// with the current page so a future whole-notebook history can use them.
-    func pageHistory() async -> [VersionSnapshot] {
+    /// Throws when the history could not be read, so a caller can tell a
+    /// failed read from an empty history.
+    func pageHistory() async throws -> [VersionSnapshot] {
         guard let page else { return [] }
         await snapshotChain?.value
-        let snapshots = (try? await history.list(notebookID: manifest.id)) ?? []
+        let snapshots = try await history.list(notebookID: manifest.id)
         return snapshots
             .filter { $0.pageID == page.id || $0.pageID == nil }
             .sorted { $0.createdAt > $1.createdAt }

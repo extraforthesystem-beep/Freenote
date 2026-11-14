@@ -16,9 +16,9 @@ struct TapeStudyControls: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
-            // Each child reads `session.page` itself. The bar's own layout no
-            // longer depends on the page, so writing a stroke does not rebuild
-            // it; only the status text and the actions re-evaluate.
+            // Each child reads `session.tapeIDs` itself. Neither the bar nor its
+            // children read `session.page`, which changes with every stroke, so
+            // writing ink does not rebuild this chrome.
             TapeStudyStatus(session: session)
 
             Divider()
@@ -40,7 +40,7 @@ private struct TapeStudyStatus: View {
     let session: NotebookSession
 
     var body: some View {
-        let ids = TapeStudy.tapeIDs(in: session.page)
+        let ids = session.tapeIDs
         let revealed = ids.filter { session.revealedTapeIDs.contains($0) }.count
         VStack(alignment: .leading, spacing: AppSpacing.xxs) {
             Text("Tape Study")
@@ -64,7 +64,7 @@ private struct TapeStudyActions: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let ids = TapeStudy.tapeIDs(in: session.page)
+        let ids = session.tapeIDs
         let revealed = ids.filter { session.revealedTapeIDs.contains($0) }.count
         HStack(spacing: AppSpacing.m) {
             Button("Reveal All") {
@@ -72,7 +72,7 @@ private struct TapeStudyActions: View {
             }
             .disabled(ids.isEmpty || revealed == ids.count)
             Button("Hide All") {
-                hideAll(ids)
+                hideAll()
             }
             .disabled(revealed == 0)
             Button {
@@ -90,28 +90,13 @@ private struct TapeStudyActions: View {
 
     private func revealAll(_ ids: [UUID]) {
         AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
-            for id in ids where !session.revealedTapeIDs.contains(id) {
-                session.toggleTapeRevealed(id)
-            }
+            session.setRevealedTape(Set(ids))
         }
     }
 
-    private func hideAll(_ ids: [UUID]) {
+    private func hideAll() {
         AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
-            for id in ids where session.revealedTapeIDs.contains(id) {
-                session.toggleTapeRevealed(id)
-            }
-        }
-    }
-}
-
-private enum TapeStudy {
-    /// The tape pieces on `page`, in page order. Reading the page only here
-    /// keeps the bar itself independent of the page's per-stroke updates.
-    static func tapeIDs(in page: Page?) -> [UUID] {
-        (page?.visibleElements ?? []).compactMap { element in
-            if case .tape = element.content { return element.id }
-            return nil
+            session.setRevealedTape([])
         }
     }
 }
