@@ -83,7 +83,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             Color.clear
                 .contentShape(Rectangle())
                 .contextMenu {
-                    Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
+                    Button("Customise Toolbar…", systemImage: "slider.horizontal.3") {
                         onCustomizeToolbar()
                     }
                 }

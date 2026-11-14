@@ -102,7 +102,7 @@ struct OutlinePanel: View {
                     .foregroundStyle(isBookmarked ? Color.accentColor : Color.secondary)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(isBookmarked ? "Remove bookmark" : "Bookmark page")
+            .accessibilityLabel(isBookmarked ? "Remove Bookmark" : "Bookmark This Page")
 
             Button {
                 editText = outline.title(notebookID: session.notebookID, pageID: pageID) ?? ""

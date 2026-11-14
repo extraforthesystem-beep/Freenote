@@ -58,7 +58,7 @@ struct ToolbarEditorView: View {
             #if os(iOS)
             .environment(\.editMode, .constant(.active))
             #endif
-            .navigationTitle("Customize Toolbar")
+            .navigationTitle("Customise Toolbar")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
