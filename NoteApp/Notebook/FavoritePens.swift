@@ -138,6 +138,7 @@ struct FavoritePensPopover: View {
 struct FavoritePensContent: View {
     @Bindable var editor: EditorToolState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editMode: EditMode = .inactive
 
     var body: some View {
@@ -173,7 +174,7 @@ struct FavoritePensContent: View {
             Spacer(minLength: 0)
             if !editor.favoritePens.pens.isEmpty {
                 Button(editMode.isEditing ? "Done" : "Edit") {
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
                         editMode = editMode.isEditing ? .inactive : .active
                     }
                 }

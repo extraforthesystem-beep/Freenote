@@ -46,6 +46,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
 
     @AppStorage(ToolbarLayout.storageKey) private var layoutStorage = ToolbarLayout.defaultStorage
     @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesOnLeft = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var popover: ToolPopover?
     @State private var showsPalette = false
     @State private var showsFavoritePens = false
@@ -145,7 +146,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                     systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing",
                     isSelected: showsThumbnails
                 ) {
-                    withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails.toggle() }
+                    AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { showsThumbnails.toggle() }
                 }
             }
         }
@@ -171,7 +172,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     private var readOnlyButton: some View {
         if !editor.isReadOnly {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { editor.isReadOnly = true }
+                AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) { editor.isReadOnly = true }
             } label: {
                 ToolbarIcon(systemImage: "lock.doc")
             }
@@ -197,7 +198,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     /// edited, but pages still scroll, zoom and follow PDF links.
     private var readOnlyPill: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { editor.isReadOnly = false }
+            AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) { editor.isReadOnly = false }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "lock.fill")
@@ -417,7 +418,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         case .followLinks:
             editor.tool = .links
         case .zoomView:
-            withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown.toggle() }
+            AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { editor.isZoomViewShown.toggle() }
         case .ruler:
             isRulerActive.toggle()
         case .textBox, .image, .addPage, .search:
@@ -645,13 +646,13 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             if editor.isZoomViewShown {
                 showsZoomOptions = true
             } else {
-                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = true }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { editor.isZoomViewShown = true }
             }
         }
         .popover(isPresented: $showsZoomOptions) {
             ZoomViewOptions {
                 showsZoomOptions = false
-                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) { editor.isZoomViewShown = false }
             }
             .padding(AppSpacing.l)
             .frame(width: 320)
@@ -731,7 +732,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     private func revealSelectedColor(_ proxy: ScrollViewProxy) {
         guard let index = editor.favoriteColors.colors.firstIndex(where: { editor.isCurrentColor($0) })
         else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
             proxy.scrollTo(index, anchor: .center)
         }
     }
@@ -793,7 +794,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
         .dropDestination(for: FavoriteColorSlot.self) { slots, _ in
             guard let source = slots.first?.index, source != index else { return false }
             dropTarget = nil
-            withAnimation(.easeInOut(duration: 0.15)) {
+            AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
                 editor.moveFavoriteColor(from: source, to: index)
             }
             return true
