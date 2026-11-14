@@ -15,12 +15,22 @@ enum NotebookPanelTab: Hashable {
 /// The caller sets the panel's width: a fixed column on a regular-width iPad,
 /// or the whole sheet when width is compact.
 struct PagesSidePanel: View {
+    /// Where the panel is being shown. An inline column is toggled by the
+    /// toolbar's Pages button, so it has no close button of its own; the
+    /// compact-width sheet needs one to get back to the page.
+    enum Presentation {
+        case inline
+        case sheet
+    }
+
     let session: NotebookSession
     /// Which edge the panel sits on; its divider faces the page.
     let isOnLeft: Bool
     /// The app's shared search, shown in the Search tab.
     let search: HandwritingSearch
     @Binding var tab: NotebookPanelTab
+    /// How the panel arrived, which decides whether it offers a way out.
+    var presentation: Presentation = .inline
     let onHighlight: (SearchHighlight?) -> Void
     let onSelect: (Int) -> Void
     let onClose: () -> Void
@@ -76,14 +86,15 @@ struct PagesSidePanel: View {
             .labelsHidden()
             .accessibilityLabel("Pages or search")
 
-            Button(action: onClose) {
-                Image(systemName: isOnLeft ? "sidebar.leading" : "sidebar.trailing")
-                    .font(.system(size: 15, weight: .medium))
-                    .hitTarget()
+            // Inline, the toolbar's Pages button is the close control; a sheet
+            // has no switch behind it, so it carries its own way out.
+            if presentation == .sheet {
+                Button("Done", action: onClose)
+                    .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.borderless)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Done with pages panel")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Hide Panel")
-            .help("Hide Panel")
         }
         .padding(.horizontal, AppSpacing.s)
         .frame(height: 44)
@@ -92,13 +103,22 @@ struct PagesSidePanel: View {
     private var pagesGrid: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: columns, spacing: AppSpacing.s) {
-                    ForEach(0..<session.pageCount, id: \.self) { index in
-                        pageCell(index)
+                VStack(spacing: AppSpacing.s) {
+                    if session.pageCount == 0 {
+                        Text("No pages yet. Use the + beside the page count to add one.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, AppSpacing.s)
+                            .padding(.top, AppSpacing.m)
                     }
-                    addPageTile
+                    LazyVGrid(columns: columns, spacing: AppSpacing.s) {
+                        ForEach(0..<session.pageCount, id: \.self) { index in
+                            pageCell(index)
+                        }
+                    }
+                    .padding(AppSpacing.s)
                 }
-                .padding(AppSpacing.s)
             }
             .onChange(of: session.pageIndex) { _, index in
                 AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
@@ -159,28 +179,6 @@ struct PagesSidePanel: View {
         .accessibilityLabel("Page \(index + 1)")
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { onSelect(index) }
-    }
-
-    private var addPageTile: some View {
-        Button {
-            Task { await session.addPage() }
-        } label: {
-            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
-                .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                .aspectRatio(pageAspect, contentMode: .fit)
-                .overlay {
-                    VStack(spacing: AppSpacing.xs) {
-                        Image(systemName: "plus")
-                            .font(.title3)
-                        Text("Page")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Add Page")
-        .help("Add Page")
     }
 
     /// Reads the page's shape once per page change, outside `body`, so the
