@@ -6,7 +6,7 @@ nonisolated enum ToolbarItemID: String, CaseIterable, Codable, Identifiable, Sen
     case highlighter, eraser, lasso, elements, insert
     case laser, zoomView, followLinks, ruler, shapes
     case textBox, image, stickyNote, addPage, search, favoritePens
-    // Opt-in, at the end so the order of the existing items never changes.
+    // Undo and Redo, shown at the leading edge rather than in the tool group.
     case undo, redo
 
     var id: String { rawValue }
@@ -16,7 +16,7 @@ nonisolated enum ToolbarItemID: String, CaseIterable, Codable, Identifiable, Sen
         case .highlighter: "Highlighter"
         case .eraser: "Eraser"
         case .lasso: "Lasso"
-        case .elements: "Select Elements"
+        case .elements: "Select Objects"
         case .insert: "Insert"
         case .laser: "Laser Pointer"
         case .zoomView: "Zoom View"
@@ -39,7 +39,9 @@ nonisolated enum ToolbarItemID: String, CaseIterable, Codable, Identifiable, Sen
         case .highlighter: "highlighter"
         case .eraser: "eraser"
         case .lasso: "lasso"
-        case .elements: "cursorarrow.rays"
+        // A hand pointing at a box reads as "pick an object", where the old
+        // cursorarrow.rays read as a sparkle.
+        case .elements: "rectangle.and.hand.point.up.left"
         case .insert: "plus.circle"
         case .laser: "cursorarrow"
         case .zoomView: "plus.magnifyingglass"
@@ -64,8 +66,16 @@ nonisolated struct ToolbarLayout: Equatable, Sendable {
     /// The key `@AppStorage` writes to.
     static let storageKey = "toolbar.items.v1"
 
-    /// Pen chip, Highlighter, Eraser, Lasso, Select Elements, Insert.
-    static let defaultItems: [ToolbarItemID] = [.highlighter, .eraser, .lasso, .elements, .insert]
+    /// One-time flag for the Undo/Redo migration below.
+    static let undoRedoMigrationKey = "toolbar.undoRedoAdded.v2"
+
+    /// Undo and Redo. They are customisable items, but the toolbar draws them
+    /// at the leading edge, next to Back, instead of in the tool group.
+    static let historyItems: [ToolbarItemID] = [.undo, .redo]
+
+    /// Undo, Redo, then the drawing tools: Undo and Redo lead, so they are
+    /// visible by default rather than opt-in.
+    static let defaultItems: [ToolbarItemID] = [.undo, .redo, .highlighter, .eraser, .lasso, .elements, .insert]
 
     /// `defaultItems` as the stored string, for `@AppStorage` defaults.
     static var defaultStorage: String {
@@ -107,6 +117,17 @@ nonisolated struct ToolbarLayout: Equatable, Sendable {
         items == Self.defaultItems
     }
 
+    /// True when either history control is in the toolbar.
+    var hasHistoryItems: Bool {
+        items.contains(.undo) || items.contains(.redo)
+    }
+
+    /// The items the toolbar draws in its tool group: everything except Undo
+    /// and Redo, which sit at the leading edge.
+    var toolItems: [ToolbarItemID] {
+        items.filter { !Self.historyItems.contains($0) }
+    }
+
     mutating func add(_ item: ToolbarItemID) {
         guard !items.contains(item) else { return }
         items.append(item)
@@ -137,7 +158,36 @@ nonisolated struct ToolbarLayout: Equatable, Sendable {
         items = remaining
     }
 
+    /// Puts Undo and Redo first, in that order, skipping either one already
+    /// present. Used by the one-time migration, and by Reset to Default.
+    mutating func insertHistoryItemsAtFront() {
+        let missing = Self.historyItems.filter { !items.contains($0) }
+        guard !missing.isEmpty else { return }
+        items.insert(contentsOf: missing, at: 0)
+    }
+
     mutating func reset() {
         items = Self.defaultItems
+    }
+
+    /// One-time migration for installs whose stored layout predates Undo and
+    /// Redo being visible by default: adds them once. The flag means a user
+    /// who removes them afterwards keeps that choice.
+    ///
+    /// A layout that already has either control is left alone, as is an
+    /// install that has never customised the toolbar (the `@AppStorage`
+    /// default already leads with both).
+    @discardableResult
+    static func migrateUndoRedoIfNeeded(in defaults: UserDefaults = .standard) -> Bool {
+        guard !defaults.bool(forKey: undoRedoMigrationKey) else { return false }
+        defaults.set(true, forKey: undoRedoMigrationKey)
+        guard let stored = defaults.string(forKey: storageKey) else { return false }
+        let layout = ToolbarLayout(storage: stored)
+        guard !layout.hasHistoryItems else { return false }
+        var migrated = layout
+        migrated.insertHistoryItemsAtFront()
+        guard migrated.storage != stored else { return false }
+        defaults.set(migrated.storage, forKey: storageKey)
+        return true
     }
 }

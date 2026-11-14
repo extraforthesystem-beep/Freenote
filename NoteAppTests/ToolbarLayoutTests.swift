@@ -29,7 +29,10 @@ final class ToolbarLayoutTests: XCTestCase {
 
     func testDefaultStorageRoundTrip() {
         XCTAssertEqual(ToolbarLayout(storage: ToolbarLayout.defaultStorage).items, ToolbarLayout.defaultItems)
-        XCTAssertEqual(ToolbarLayout.defaultStorage, "highlighter,eraser,lasso,elements,insert")
+        XCTAssertEqual(
+            ToolbarLayout.defaultStorage,
+            "undo,redo,highlighter,eraser,lasso,elements,insert"
+        )
     }
 
     func testMoveKeepsOrder() {
@@ -78,17 +81,111 @@ final class ToolbarLayoutTests: XCTestCase {
         XCTAssertEqual(available, ToolbarItemID.allCases)
     }
 
-    func testUndoAndRedoAreOptIn() {
-        XCTAssertFalse(ToolbarLayout.defaultItems.contains(.undo))
-        XCTAssertFalse(ToolbarLayout.defaultItems.contains(.redo))
-        XCTAssertTrue(ToolbarLayout().available.contains(.undo))
-        XCTAssertTrue(ToolbarLayout().available.contains(.redo))
+    // MARK: - Undo and Redo
+
+    func testUndoAndRedoLeadTheDefaults() {
+        XCTAssertEqual(Array(ToolbarLayout.defaultItems.prefix(2)), [.undo, .redo])
+        XCTAssertTrue(ToolbarLayout.defaultItems.contains(.undo))
+        XCTAssertTrue(ToolbarLayout.defaultItems.contains(.redo))
+        XCTAssertTrue(ToolbarLayout().hasHistoryItems)
+        XCTAssertFalse(ToolbarLayout().available.contains(.undo))
+        XCTAssertFalse(ToolbarLayout().available.contains(.redo))
     }
+
+    func testToolItemsLeaveOutUndoAndRedo() {
+        let layout = ToolbarLayout(items: [.undo, .redo, .highlighter, .eraser])
+        XCTAssertEqual(layout.toolItems, [.highlighter, .eraser])
+        XCTAssertTrue(layout.hasHistoryItems)
+        XCTAssertFalse(ToolbarLayout(items: [.highlighter]).hasHistoryItems)
+    }
+
+    func testInsertHistoryItemsGoesFirstWithoutDuplicates() {
+        var layout = ToolbarLayout(items: [.highlighter, .eraser])
+        layout.insertHistoryItemsAtFront()
+        XCTAssertEqual(layout.items, [.undo, .redo, .highlighter, .eraser])
+
+        layout.insertHistoryItemsAtFront()
+        XCTAssertEqual(layout.items, [.undo, .redo, .highlighter, .eraser])
+
+        var partial = ToolbarLayout(items: [.highlighter, .undo])
+        partial.insertHistoryItemsAtFront()
+        XCTAssertEqual(partial.items, [.redo, .highlighter, .undo])
+    }
+
+    func testMigrationAddsUndoAndRedoToAnExistingLayout() {
+        let defaults = makeDefaults()
+        defaults.set("highlighter,eraser,lasso,elements,insert", forKey: ToolbarLayout.storageKey)
+
+        XCTAssertTrue(ToolbarLayout.migrateUndoRedoIfNeeded(in: defaults))
+        XCTAssertEqual(
+            defaults.string(forKey: ToolbarLayout.storageKey),
+            "undo,redo,highlighter,eraser,lasso,elements,insert"
+        )
+        XCTAssertTrue(defaults.bool(forKey: ToolbarLayout.undoRedoMigrationKey))
+    }
+
+    func testMigrationRunsOnceAndRespectsLaterRemoval() {
+        let defaults = makeDefaults()
+        defaults.set("highlighter,eraser", forKey: ToolbarLayout.storageKey)
+        XCTAssertTrue(ToolbarLayout.migrateUndoRedoIfNeeded(in: defaults))
+
+        // The user removes Undo and Redo in Customise Toolbar.
+        defaults.set("highlighter,eraser", forKey: ToolbarLayout.storageKey)
+        XCTAssertFalse(ToolbarLayout.migrateUndoRedoIfNeeded(in: defaults))
+        XCTAssertEqual(defaults.string(forKey: ToolbarLayout.storageKey), "highlighter,eraser")
+    }
+
+    func testMigrationLeavesALayoutThatAlreadyHasAHistoryControl() {
+        let defaults = makeDefaults()
+        defaults.set("redo,highlighter,eraser", forKey: ToolbarLayout.storageKey)
+
+        XCTAssertFalse(ToolbarLayout.migrateUndoRedoIfNeeded(in: defaults))
+        XCTAssertEqual(defaults.string(forKey: ToolbarLayout.storageKey), "redo,highlighter,eraser")
+    }
+
+    func testMigrationWithoutAStoredLayoutWritesNothingButRecordsTheRun() {
+        let defaults = makeDefaults()
+
+        XCTAssertFalse(ToolbarLayout.migrateUndoRedoIfNeeded(in: defaults))
+        XCTAssertNil(defaults.string(forKey: ToolbarLayout.storageKey))
+        XCTAssertTrue(defaults.bool(forKey: ToolbarLayout.undoRedoMigrationKey))
+    }
+
+    func testMigrationAddsUndoAndRedoToAPenOnlyLayout() {
+        // An explicitly emptied toolbar still gets the history controls once:
+        // they were never offered when the layout was emptied.
+        let defaults = makeDefaults()
+        defaults.set("", forKey: ToolbarLayout.storageKey)
+
+        XCTAssertTrue(ToolbarLayout.migrateUndoRedoIfNeeded(in: defaults))
+        XCTAssertEqual(defaults.string(forKey: ToolbarLayout.storageKey), "undo,redo")
+    }
+
+    // MARK: - Titles and symbols
 
     func testEveryItemHasATitleAndSymbol() {
         for item in ToolbarItemID.allCases {
             XCTAssertFalse(item.title.isEmpty)
             XCTAssertFalse(item.systemImage.isEmpty)
         }
+    }
+
+    func testSelectObjectsKeepsItsStorageIDAndReadsAsASelection() {
+        XCTAssertEqual(ToolbarItemID.elements.rawValue, "elements")
+        XCTAssertEqual(ToolbarItemID.elements.title, "Select Objects")
+        XCTAssertEqual(ToolbarItemID.elements.systemImage, "rectangle.and.hand.point.up.left")
+        XCTAssertEqual(ToolbarLayout(storage: "elements").items, [.elements])
+    }
+
+    private func makeDefaults() -> UserDefaults {
+        let name = "ToolbarLayoutTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        // Only the suite name crosses into the teardown block: UserDefaults
+        // itself is not Sendable.
+        addTeardownBlock {
+            UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
+        }
+        return defaults
     }
 }

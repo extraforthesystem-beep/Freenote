@@ -4,12 +4,16 @@ import SwiftUI
 
 /// The colour palette: 64 presets, the last colours used, a hex field and the
 /// system picker for anything else. Picking a colour applies it to the active
-/// ink tool and closes the popover. Opened from a favourite's Edit… command it
-/// replaces that favourite slot instead.
+/// ink tool and closes the popover. The colour well embeds it below the
+/// favourite colours; opened from a favourite's Edit… command it replaces that
+/// favourite slot instead.
 struct ColorPalettePopover: View {
     @Bindable var editor: EditorToolState
     /// The favourite slot this palette replaces, when one is being edited.
     var replacingFavorite: Int? = nil
+    /// True when the palette is a section of another popover, which owns the
+    /// padding and the width.
+    var embedded = false
 
     @Environment(\.dismiss) private var dismiss
 
@@ -72,8 +76,8 @@ struct ColorPalettePopover: View {
             hexRow
             systemPicker
         }
-        .padding(AppSpacing.l)
-        .frame(width: 320)
+        .padding(embedded ? 0 : AppSpacing.l)
+        .frame(width: embedded ? nil : 320)
         .onAppear {
             showHex(of: shownColor)
         }
