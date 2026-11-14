@@ -178,6 +178,10 @@ struct NotebookPane: View {
     @State private var showsHistory = false
     @State private var showsPageOverview = false
     @State private var showsLassoHint = false
+    /// Set once a page load has outlasted the flash-free threshold.
+    @State private var showsPageSpinner = false
+    /// Set while a picked image is being read off the main actor.
+    @State private var isPreparingImage = false
     @State private var studyScope: NotebookStudyScope?
     @State private var showsTapeStudy = false
     /// The lasso's selection and the elements the Select Elements tool picked.
@@ -584,17 +588,11 @@ struct NotebookPane: View {
             allowedContentTypes: [.image],
             allowsMultipleSelection: false
         ) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else {
-                session.errorMessage = "The image could not be read."
-                return
-            }
-            let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
-            Task {
-                await session.addImageElement(data: data, fileExtension: ext)
-                editor.tool = .elements
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { insertImage(from: url) }
+            case .failure(let error):
+                session.errorMessage = error.localizedDescription
             }
         }
     }
@@ -707,6 +705,7 @@ struct NotebookPane: View {
         if hasLayerBlock { state.append("layer") }
         if showsLassoHint { state.append("lasso") }
         if isExporting || isExportingPNG { state.append("export") }
+        if isPreparingImage { state.append("image") }
         return state
     }
 
@@ -795,8 +794,15 @@ struct NotebookPane: View {
                     onDismiss: { showsLassoHint = false }
                 )
             }
+            if isPreparingImage {
+                EditorBanner(
+                    systemImage: "photo",
+                    message: "Adding the image…",
+                    tint: .accentColor
+                )
+            }
         }
-        .padding(.top, 10)
+        .padding(.top, AppSpacing.s)
     }
 
     /// What the export banner says: page progress for a PDF export, or which
@@ -1137,6 +1143,35 @@ struct NotebookPane: View {
                 exportError = error.localizedDescription
             }
         }
+    }
+
+    /// Insert → Image: read the picked file off the main actor, then add it.
+    ///
+    /// A photo is several megabytes, so reading it on the main actor freezes
+    /// the editor from the picker's dismissal until the read finishes.
+    private func insertImage(from url: URL) {
+        let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        Task {
+            isPreparingImage = true
+            defer { isPreparingImage = false }
+            do {
+                let data = try await Self.readFile(at: url)
+                await session.addImageElement(data: data, fileExtension: ext)
+                editor.tool = .elements
+            } catch {
+                session.errorMessage = "The image could not be read: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// The security-scoped access has to hold for the read itself, so it is
+    /// opened and released inside the detached read, never around it.
+    nonisolated private static func readFile(at url: URL) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            return try Data(contentsOf: url)
+        }.value
     }
 
     private func exportPNG() {
