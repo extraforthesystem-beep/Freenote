@@ -46,6 +46,9 @@ public final class PencilCanvasController: ObservableObject {
     }
 
     private let undoObservers = UndoObservers()
+    /// The undo manager the observations belong to, so a re-assignment of the
+    /// same canvas does no work.
+    private weak var observedUndoManager: UndoManager?
 
     public func undo() {
         target?.undoManager?.undo()
@@ -59,12 +62,17 @@ public final class PencilCanvasController: ObservableObject {
 
     /// Watches the target's undo manager: every closed group, undo and redo
     /// changes the stack, so each is a chance for the published value to move.
+    /// Re-installs only when the manager itself changed: the canvas is
+    /// re-assigned on every SwiftUI update, and that must not churn observers.
     private func observeUndoManager() {
+        let undoManager = target?.undoManager
+        if let undoManager, undoManager === observedUndoManager { return }
+        observedUndoManager = undoManager
         for token in undoObservers.tokens {
             NotificationCenter.default.removeObserver(token)
         }
         undoObservers.tokens.removeAll()
-        if let undoManager = target?.undoManager {
+        if let undoManager {
             let names: [Notification.Name] = [
                 .NSUndoManagerDidCloseUndoGroup,
                 .NSUndoManagerDidUndoChange,
@@ -81,7 +89,11 @@ public final class PencilCanvasController: ObservableObject {
                 undoObservers.tokens.append(token)
             }
         }
-        refreshUndoAvailability()
+        // The canvas is assigned while SwiftUI lays the view out, so publish
+        // after that pass rather than in the middle of it.
+        Task { @MainActor [weak self] in
+            self?.refreshUndoAvailability()
+        }
     }
 
     private func refreshUndoAvailability() {
