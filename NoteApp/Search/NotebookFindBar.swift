@@ -162,42 +162,42 @@ struct NotebookFindBar: View {
 
     // MARK: Bar
 
-    /// One 44 pt row. At narrow widths the count goes first, then the
-    /// steppers; the field never does.
+    /// One 44 pt row. Floating, at narrow widths the count goes first, then the
+    /// steppers; in a narrow split view everything but the field and close moves
+    /// into one menu. Inside the panel's 220 pt column the same menu holds the
+    /// controls that cannot be 44 pt wide.
     private var bar: some View {
-        ViewThatFits(in: .horizontal) {
-            barRow(showsCount: true, showsSteppers: true)
-            barRow(showsCount: false, showsSteppers: true)
-            barRow(showsCount: false, showsSteppers: false)
+        Group {
+            if isEmbedded {
+                embeddedBarRow
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    barRow(showsCount: true, showsSteppers: true)
+                    barRow(showsCount: false, showsSteppers: true)
+                    barRow(showsCount: false, showsSteppers: false)
+                    compactBarRow
+                }
+            }
         }
         .frame(height: 44)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, AppSpacing.s)
     }
 
     private func barRow(showsCount: Bool, showsSteppers: Bool) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: AppSpacing.s) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search this notebook", text: $query)
-                .textFieldStyle(.plain)
-                .autocorrectionDisabled()
-                .focused($isFieldFocused)
-                .submitLabel(.go)
-                .onSubmit(go)
-                .layoutPriority(1)
-                .frame(minWidth: 70)
-            if !query.isEmpty {
-                iconButton("xmark.circle.fill", label: "Clear search") {
-                    query = ""
-                }
-            }
+            searchField
+            clearButton
             #if os(iOS)
             PencilSearchButton(search: search) { query = $0 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
+                .hitTarget()
             #endif
             SearchFilterMenu(sources: $sources, dateRange: $dateRange)
                 .labelStyle(.iconOnly)
+                .hitTarget()
             if showsCount, !hits.isEmpty {
                 Text(matchCountText)
                     .font(.caption)
@@ -207,47 +207,119 @@ struct NotebookFindBar: View {
                     .fixedSize()
             }
             if showsSteppers {
-                iconButton("chevron.up", label: "Previous result") {
+                iconButton("chevron.up", label: "Previous Result", shortcut: .previousResult) {
                     step(-1)
                 }
                 .disabled(!canStepBack)
-                iconButton("chevron.down", label: "Next result") {
+                iconButton("chevron.down", label: "Next Result", shortcut: .nextResult) {
                     step(1)
                 }
                 .disabled(!canStepForward)
             }
-            Button {
-                showsResults.toggle()
-            } label: {
-                Image(systemName: "list.bullet")
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(showsResults ? Color.accentColor : .secondary)
-            .accessibilityLabel(showsResults ? "Hide results" : "Show results")
-            .disabled(trimmedQuery.isEmpty)
+            resultsToggle
             if !isEmbedded {
-                iconButton("xmark", label: "Close search") {
+                iconButton("xmark", label: "Close Search") {
                     onClose()
                 }
             }
         }
     }
 
+    /// The narrowest floating bar: the field, its clear button, one menu for the
+    /// result steps and filters, and close. Used in a 1/3 split.
+    private var compactBarRow: some View {
+        HStack(spacing: AppSpacing.s) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            searchField
+            clearButton
+            moreMenu
+            iconButton("xmark", label: "Close Search") {
+                onClose()
+            }
+        }
+    }
+
+    /// The panel's bar: the field, its clear button and one menu at 44 pt each.
+    /// Search results step from that menu; nothing here is a 28 pt target.
+    private var embeddedBarRow: some View {
+        HStack(spacing: AppSpacing.s) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            searchField
+            clearButton
+            moreMenu
+        }
+    }
+
+    private var searchField: some View {
+        TextField("Search this notebook", text: $query)
+            .textFieldStyle(.plain)
+            .autocorrectionDisabled()
+            .focused($isFieldFocused)
+            .submitLabel(.go)
+            .onSubmit(go)
+            .layoutPriority(1)
+            .frame(minWidth: 56)
+    }
+
+    private var clearButton: some View {
+        Group {
+            if !query.isEmpty {
+                iconButton("xmark.circle.fill", label: "Clear Search") {
+                    query = ""
+                }
+            }
+        }
+    }
+
+    private var resultsToggle: some View {
+        Button {
+            showsResults.toggle()
+        } label: {
+            Image(systemName: "list.bullet")
+                .hitTarget()
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(showsResults ? Color.accentColor : .secondary)
+        .accessibilityLabel(showsResults ? "Hide Results" : "Show Results")
+        .disabled(trimmedQuery.isEmpty)
+    }
+
+    /// The controls the panel's width cannot hold at 44 pt each.
+    private var moreMenu: some View {
+        Menu {
+            Button("Previous Result", systemImage: "chevron.up") { step(-1) }
+                .disabled(!canStepBack)
+            Button("Next Result", systemImage: "chevron.down") { step(1) }
+                .disabled(!canStepForward)
+            Button(showsResults ? "Hide Results" : "Show Results", systemImage: "list.bullet") {
+                showsResults.toggle()
+            }
+            .disabled(trimmedQuery.isEmpty)
+            Divider()
+            SearchFilterMenu(sources: $sources, dateRange: $dateRange)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .hitTarget()
+        }
+        .accessibilityLabel("Search Options")
+    }
+
     private func iconButton(
         _ systemImage: String,
         label: String,
+        shortcut: ResultShortcut? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+                .hitTarget()
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .accessibilityLabel(label)
+        .modifier(ResultShortcutModifier(shortcut: shortcut))
     }
 
     // MARK: Results
@@ -287,15 +359,15 @@ struct NotebookFindBar: View {
             showsResults = false
             onGoToPage(page - 1)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: AppSpacing.s) {
                 Image(systemName: "number.square")
                     .foregroundStyle(.secondary)
                 Text("Go to Page \(page)")
                     .font(.callout.weight(.medium))
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.s)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -308,8 +380,8 @@ struct NotebookFindBar: View {
         return Button {
             jump(to: result)
         } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                HStack(spacing: AppSpacing.s) {
                     Text(result.title)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -330,8 +402,8 @@ struct NotebookFindBar: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.s)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
             .contentShape(Rectangle())
@@ -345,8 +417,8 @@ struct NotebookFindBar: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 14)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.m)
     }
 
     // MARK: State
@@ -458,6 +530,32 @@ struct NotebookFindBar: View {
     }
 }
 
+/// The two result steppers and the Mac shortcuts that reach them: ⌘G next,
+/// ⇧⌘G previous.
+enum ResultShortcut {
+    case nextResult
+    case previousResult
+
+    var key: KeyEquivalent { "g" }
+
+    var modifiers: EventModifiers {
+        self == .nextResult ? .command : [.command, .shift]
+    }
+}
+
+private struct ResultShortcutModifier: ViewModifier {
+    let shortcut: ResultShortcut?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let shortcut {
+            content.keyboardShortcut(shortcut.key, modifiers: shortcut.modifiers)
+        } else {
+            content
+        }
+    }
+}
+
 /// Floating over the page the bar is a material card; inside a panel it is
 /// just the row and its results.
 private struct FindBarChrome: ViewModifier {
@@ -469,8 +567,8 @@ private struct FindBarChrome: ViewModifier {
             content
         } else {
             content
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
                 .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
         }
     }
