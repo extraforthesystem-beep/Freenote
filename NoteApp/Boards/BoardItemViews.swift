@@ -1,11 +1,6 @@
 import BoardKit
 import NoteCore
 import SwiftUI
-#if os(iOS)
-import UIKit
-#else
-import AppKit
-#endif
 
 /// The six pastel card colours the board's sticky notes offer.
 enum BoardStickyPalette {
