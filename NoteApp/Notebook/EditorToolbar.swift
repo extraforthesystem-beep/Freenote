@@ -653,8 +653,8 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
                 showsZoomOptions = false
                 withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
             }
-            .padding(16)
-            .frame(width: 300)
+            .padding(AppSpacing.l)
+            .frame(width: 320)
             .presentationCompactAdaptation(.popover)
         }
     }
@@ -977,7 +977,7 @@ private struct PenSettingsPopover: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: AppSpacing.m) {
                 FavoritePensContent(editor: editor)
                 Divider()
                 Text("Pen")
@@ -1015,7 +1015,7 @@ private struct PenSettingsPopover: View {
                 SmoothingSlider(title: "Stabilisation", editor: editor)
                 ScratchOutToggle()
             }
-            .padding(16)
+            .padding(AppSpacing.l)
         }
         .frame(width: 320)
         .frame(maxHeight: 620)
@@ -1028,7 +1028,7 @@ private struct WidthSettingsPopover: View {
     @AppStorage(AppSettings.Key.highlighterStraightLines) private var straightLines = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text(title)
                 .font(.headline)
             WidthSlider(editor: editor)
@@ -1043,8 +1043,8 @@ private struct WidthSettingsPopover: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 }
 
@@ -1057,7 +1057,7 @@ private struct WidthPresetPopover: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Edit Width Preset")
                     .font(.headline)
@@ -1069,8 +1069,8 @@ private struct WidthPresetPopover: View {
             }
             WidthSlider(editor: editor, presetSlot: slot)
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 }
 
@@ -1214,7 +1214,7 @@ private struct EraserSettingsPopover: View {
     @AppStorage(AppSettings.Key.eraserFilter) private var filterRaw = AppSettings.eraserFilterUnset
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text("Eraser")
                 .font(.headline)
             Picker("Eraser", selection: Binding(
@@ -1278,8 +1278,8 @@ private struct EraserSettingsPopover: View {
             }
             .font(.subheadline)
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 
     /// The filter shown, with the old "Erase Highlighter Only" switch
@@ -1309,7 +1309,7 @@ private struct LaserSettingsPopover: View {
     @Bindable var editor: EditorToolState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text("Laser Pointer")
                 .font(.headline)
             Picker("Laser pointer", selection: Binding(
@@ -1329,8 +1329,8 @@ private struct LaserSettingsPopover: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(16)
-        .frame(width: 280)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
     }
 }
 

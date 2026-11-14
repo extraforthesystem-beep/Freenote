@@ -562,7 +562,7 @@ struct ZoomViewOptions: View {
     @AppStorage(AppSettings.Key.zoomMagnification) private var magnification = ZoomBand.defaultMagnification
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             if onClose != nil {
                 Text("Zoom View")
                     .font(.headline)
@@ -582,7 +582,7 @@ struct ZoomViewSettingsRows: View {
 
     var body: some View {
         Toggle("Auto-Advance", isOn: $autoAdvance)
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             HStack {
                 Text("Magnification")
                 Spacer()

@@ -18,7 +18,8 @@ struct ColorPalettePopover: View {
     @FocusState private var isHexFocused: Bool
 
     private let swatchSize: CGFloat = 34
-    private let swatchSpacing: CGFloat = 4
+    /// Tight enough that eight preset columns still fit the 320 pt popover.
+    private let swatchSpacing: CGFloat = AppSpacing.xxs
     /// Optical inset of the hex field's border: it hugs the text, not the row.
     private static let hexBorderInset = EdgeInsets(top: -5, leading: -6, bottom: -5, trailing: -6)
 
@@ -68,8 +69,8 @@ struct ColorPalettePopover: View {
             hexRow
             systemPicker
         }
-        .padding(16)
-        .frame(width: 340)
+        .padding(AppSpacing.l)
+        .frame(width: 320)
         .onAppear {
             hexText = ColorHex.string(from: shownColor)
         }

@@ -127,8 +127,8 @@ struct FavoritePensPopover: View {
 
     var body: some View {
         FavoritePensContent(editor: editor)
-            .padding(16)
-            .frame(width: 300)
+            .padding(AppSpacing.l)
+            .frame(width: 320)
     }
 }
 
@@ -141,7 +141,7 @@ struct FavoritePensContent: View {
     @State private var editMode: EditMode = .inactive
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             header
             if editor.favoritePens.pens.isEmpty {
                 emptyState
