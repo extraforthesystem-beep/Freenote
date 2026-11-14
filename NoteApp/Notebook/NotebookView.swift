@@ -273,9 +273,14 @@ struct NotebookPane: View {
                                 #endif
                                 // Reading Mode is one clean page: no page chrome.
                                 if !editor.isReadingMode {
-                                    PageCounterPill(session: session) { index in
-                                        Task { await session.goToPage(index) }
-                                    }
+                                    PageCounterPill(
+                                        session: session,
+                                        onSelect: { index in
+                                            Task { await session.goToPage(index) }
+                                        },
+                                        onGoToPage: { showsGoToPage = true },
+                                        onShowOverview: { showsPageOverview = true }
+                                    )
                                     .padding(.bottom, 12)
                                 }
                             }
