@@ -1,7 +1,7 @@
 import NoteCore
 import SwiftUI
 
-/// Tape study: the floating controls for reviewing a page of taped-over ink.
+/// Quiz with Tape: the floating controls for reviewing a page of taped-over ink.
 ///
 /// The tape itself is already tappable on the page. This bar adds the two
 /// things a study pass needs — a count of how many pieces have been lifted and
@@ -43,7 +43,7 @@ private struct TapeStudyStatus: View {
         let ids = session.tapeIDs
         let revealed = ids.filter { session.revealedTapeIDs.contains($0) }.count
         VStack(alignment: .leading, spacing: AppSpacing.xxs) {
-            Text("Tape Study")
+            Text("Quiz with Tape")
                 .font(.caption.weight(.semibold))
             Text(
                 ids.isEmpty
@@ -84,7 +84,7 @@ private struct TapeStudyActions: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .accessibilityLabel("End tape study")
+            .accessibilityLabel("End quiz with tape")
         }
     }
 
