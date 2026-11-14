@@ -193,7 +193,9 @@ public extension RGBAColor {
     /// stable: PencilKit normalises ink colours to sRGB on its own.
     var inkColor: InkPlatformColor {
         #if os(iOS)
-        UIColor(red: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a))
+        // `UIColor(red:green:blue:alpha:)` is extended sRGB, which does not
+        // convert back to exactly the same sRGB components.
+        UIColor(cgColor: CGColor(srgbRed: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a)))
         #else
         NSColor(srgbRed: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a))
         #endif
