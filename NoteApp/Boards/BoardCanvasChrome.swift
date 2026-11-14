@@ -371,6 +371,8 @@ private struct BoardSelectionBar: View {
                 colorMenu
             }
         }
+        // 6, as in the notebook's `SelectionActionBar`: the two bars are one
+        // element and must not drift apart.
         .padding(.horizontal, 6)
         // The notebook's selection bar is the same element, so both use its
         // metrics: 48 pt tall, 44 pt targets, a hairline border and a 2 pt drop.
