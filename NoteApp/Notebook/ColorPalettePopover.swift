@@ -19,6 +19,8 @@ struct ColorPalettePopover: View {
 
     private let swatchSize: CGFloat = 34
     private let swatchSpacing: CGFloat = 4
+    /// Optical inset of the hex field's border: it hugs the text, not the row.
+    private static let hexBorderInset = EdgeInsets(top: -5, leading: -6, bottom: -5, trailing: -6)
 
     private var columns: [GridItem] {
         Array(
@@ -70,6 +72,10 @@ struct ColorPalettePopover: View {
         .frame(width: 340)
         .onAppear {
             hexText = ColorHex.string(from: shownColor)
+        }
+        .onDisappear {
+            // Closed without submitting: the typed value still counts.
+            applyTypedHex()
         }
     }
 
@@ -158,20 +164,18 @@ struct ColorPalettePopover: View {
                     .focused($isHexFocused)
                     .submitLabel(.done)
                     .onChange(of: hexText) { _, newValue in
-                        applyHex(newValue)
+                        // Only the marker follows the typing: applying every
+                        // intermediate value would record half-typed junk.
+                        updateHexValidity(newValue)
                     }
                     .onSubmit {
-                        if ColorHex.color(from: hexText) == nil {
-                            hexText = ColorHex.string(from: shownColor)
-                            hexIsInvalid = false
-                        }
+                        applyTypedHex()
                         isHexFocused = false
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                             .strokeBorder(hexIsInvalid ? Color.red : Color.secondary.opacity(0.3), lineWidth: 1)
-                            .padding(.horizontal, -6)
-                            .padding(.vertical, -5)
+                            .padding(Self.hexBorderInset)
                     }
                     .accessibilityLabel("Hex colour, hash R R G B B")
             }
@@ -215,15 +219,29 @@ struct ColorPalettePopover: View {
         }
     }
 
-    private func applyHex(_ text: String) {
-        guard let color = ColorHex.color(from: text) else {
-            // Still typing: only flag text that cannot become a colour.
-            let trimmed = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "")
-            hexIsInvalid = !trimmed.isEmpty && (trimmed.count > 6 || !trimmed.allSatisfy(\.isHexDigit))
+    /// Applies the typed value: once when the field is submitted, and once when
+    /// the popover closes on a value that was never submitted.
+    private func applyTypedHex() {
+        guard let color = ColorHex.color(from: hexText) else {
+            updateHexValidity(hexText)
             return
         }
+        hexText = ColorHex.string(from: color)
         hexIsInvalid = false
-        select(color)
+        if !isShown(color) {
+            select(color)
+        }
+    }
+
+    /// Keeps the invalid marker live while typing. Nothing else changes until
+    /// the value is submitted or the popover closes.
+    private func updateHexValidity(_ text: String) {
+        guard ColorHex.color(from: text) == nil else {
+            hexIsInvalid = false
+            return
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "")
+        hexIsInvalid = !trimmed.isEmpty && (trimmed.count > 6 || !trimmed.allSatisfy(\.isHexDigit))
     }
 
     private func dismissPopover() {
