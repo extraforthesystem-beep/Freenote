@@ -118,7 +118,10 @@ struct NotebookFindBar: View {
     var body: some View {
         VStack(spacing: 0) {
             bar
-            if showsResults, !trimmedQuery.isEmpty {
+            if isEmbedded, trimmedQuery.isEmpty {
+                Divider()
+                searchHint
+            } else if showsResults, !trimmedQuery.isEmpty {
                 Divider()
                 results
             }
@@ -248,6 +251,17 @@ struct NotebookFindBar: View {
     }
 
     // MARK: Results
+
+    /// Shown in the panel while the field is empty: what a search looks at.
+    private var searchHint: some View {
+        Text("Searches handwriting, typed text, PDF text and page numbers.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, AppSpacing.m)
+            .padding(.vertical, AppSpacing.m)
+    }
 
     private var results: some View {
         ScrollView {
