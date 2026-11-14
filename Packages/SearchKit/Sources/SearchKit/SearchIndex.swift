@@ -274,6 +274,49 @@ public actor SearchIndex {
         var pageID: UUID
     }
 
+    /// One searchable word of a segment, folded once, with its range in the
+    /// original text so a hit snippet reads exactly like the stored text.
+    private struct FoldedWord {
+        var text: String
+        var range: Range<String.Index>
+    }
+
+    /// A segment's text folded for case and diacritics, plus its folded words.
+    /// Built once and reused by every query; never written to disk. The whole
+    /// text is UTF-8 so a miss can be ruled out with a byte scan.
+    private struct FoldedSegment {
+        var text: Data
+        var words: [FoldedWord]
+    }
+
+    private struct PreparedTerm {
+        var text: String
+        var folded: String
+        var foldedBytes: Data
+        var isPhrase: Bool
+
+        init(term: SearchQuery.Term) {
+            text = term.text
+            folded = SearchIndex.fold(term.text)
+            foldedBytes = Data(
+                term.text.folding(options: SearchIndex.foldOptions, locale: nil).utf8
+            )
+            isPhrase = term.isPhrase
+        }
+    }
+
+    private struct PreparedQuery {
+        var groups: [[PreparedTerm]]
+        var excluded: [String]
+
+        init(_ query: SearchQuery) {
+            groups = query.groups.map { group in
+                group.map(PreparedTerm.init(term:))
+            }
+            excluded = query.excluded.map(\.text)
+        }
+    }
+
     private static let indexFileName = "search-index.json"
     private static let snippetLength = 80
     /// Characters kept before the match so the excerpt opens with context.
@@ -289,6 +332,11 @@ public actor SearchIndex {
     private let root: URL
     private let pdfTextExtractor: PDFTextExtractor
     private var records: [PageKey: PageSearchRecord] = [:]
+    /// Per-record folded segment text, built when a record is written and
+    /// reused by every later query. Memory only; the file format is unchanged.
+    private var foldedTextCache: [PageKey: [FoldedSegment]] = [:]
+    /// Test seam: false folds each segment during every search, the old way.
+    private var usesFoldedTextCache = true
     /// Text of PDF asset pages, keyed `"\(assetName)#\(pageIndex)"`.
     private var pdfTextCache: [String: String] = [:]
     /// Insertion order of `pdfTextCache`, oldest first, for eviction.
@@ -321,6 +369,7 @@ public actor SearchIndex {
         let url = indexURL
         guard FileManager.default.fileExists(atPath: url.path) else {
             records = [:]
+            foldedTextCache = [:]
             loaded = true
             return
         }
@@ -334,9 +383,11 @@ public actor SearchIndex {
                 current.map { (PageKey(notebookID: $0.notebookID, pageID: $0.pageID), $0) },
                 uniquingKeysWith: { _, latest in latest }
             )
+            foldedTextCache = [:]
             loaded = true
         } catch {
             records = [:]
+            foldedTextCache = [:]
             loaded = false
             throw SearchIndexError.corruptIndex(
                 file: url.lastPathComponent,
@@ -497,15 +548,20 @@ public actor SearchIndex {
             editedAt: Self.editedAt(of: page)
         )
         records[key] = record
+        if usesFoldedTextCache {
+            foldedTextCache[key] = Self.foldedSegments(of: record)
+        }
         try persist()
         return record
     }
 
     public func remove(pageID: UUID, notebookID: UUID) throws {
         try ensureLoaded()
-        guard records.removeValue(forKey: PageKey(notebookID: notebookID, pageID: pageID)) != nil else {
+        let key = PageKey(notebookID: notebookID, pageID: pageID)
+        guard records.removeValue(forKey: key) != nil else {
             return
         }
+        foldedTextCache[key] = nil
         try persist()
     }
 
@@ -514,6 +570,7 @@ public actor SearchIndex {
         let kept = records.filter { $0.key.notebookID != notebookID }
         guard kept.count != records.count else { return }
         records = kept
+        foldedTextCache = foldedTextCache.filter { $0.key.notebookID != notebookID }
         try persist()
     }
 
@@ -542,11 +599,26 @@ public actor SearchIndex {
             candidates = Array(records.values)
         }
 
+        // Folding the query terms once is enough for every segment.
+        let prepared = PreparedQuery(query)
         var hits: [SearchHit] = []
         for record in candidates {
             if let editedAfter = filter.editedAfter, record.lastEdited < editedAfter { continue }
-            for segment in record.segments where !segment.text.isEmpty && filter.sources.contains(segment.source) {
-                guard let excerpt = Self.excerpt(in: segment.text, matching: query) else { continue }
+            let hasSearchableSegment = record.segments.contains {
+                !$0.text.isEmpty && filter.sources.contains($0.source)
+            }
+            guard hasSearchableSegment else { continue }
+            let key = PageKey(notebookID: record.notebookID, pageID: record.pageID)
+            let folded: [FoldedSegment]? = usesFoldedTextCache
+                ? foldedSegments(for: key, record: record)
+                : nil
+            for (index, segment) in record.segments.enumerated()
+            where !segment.text.isEmpty && filter.sources.contains(segment.source) {
+                guard let excerpt = Self.excerpt(
+                    in: segment.text,
+                    matching: prepared,
+                    folded: folded.flatMap { index < $0.count ? $0[index] : nil }
+                ) else { continue }
                 hits.append(
                     SearchHit(
                         id: "\(record.notebookID.uuidString):\(record.pageID.uuidString):\(segment.source.rawValue)",
@@ -580,15 +652,54 @@ public actor SearchIndex {
         return hits
     }
 
+    /// The folded text and words for one record, computed on first use when a
+    /// record came from disk and after every write otherwise.
+    private func foldedSegments(for key: PageKey, record: PageSearchRecord) -> [FoldedSegment] {
+        if let cached = foldedTextCache[key] { return cached }
+        let built = Self.foldedSegments(of: record)
+        foldedTextCache[key] = built
+        return built
+    }
+
+    private static func foldedSegments(of record: PageSearchRecord) -> [FoldedSegment] {
+        record.segments.map { segment in
+            var words: [FoldedWord] = []
+            let text = segment.text
+            text.enumerateSubstrings(
+                in: text.startIndex..<text.endIndex,
+                options: [.byWords, .substringNotRequired]
+            ) { _, range, _, _ in
+                let folded = fold(String(text[range]))
+                // Shorter words cannot satisfy either tolerant direction.
+                guard folded.count >= tolerantMinimumLength else { return }
+                words.append(FoldedWord(text: folded, range: range))
+            }
+            return FoldedSegment(text: Data(foldForBytes(text).utf8), words: words)
+        }
+    }
+
+    /// Test seam: false folds every segment during each search instead of using
+    /// the precomputed copy.
+    func setFoldedTextCacheEnabled(_ enabled: Bool) {
+        usesFoldedTextCache = enabled
+        if !enabled { foldedTextCache = [:] }
+    }
+
     /// Every group must match and no excluded term may appear. Returns the earliest match's excerpt.
-    private static func excerpt(in text: String, matching query: SearchQuery) -> (snippet: String, matchRange: Range<String.Index>?)? {
-        for term in query.excluded where phraseMatch(of: term.text, in: text) != nil {
+    private static func excerpt(
+        in text: String,
+        matching query: PreparedQuery,
+        folded: FoldedSegment?
+    ) -> (snippet: String, matchRange: Range<String.Index>?)? {
+        for term in query.excluded where phraseMatch(of: term, in: text) != nil {
             return nil
         }
         var matches: [Range<String.Index>] = []
         for group in query.groups {
             let found = group.compactMap { term in
-                term.isPhrase ? phraseMatch(of: term.text, in: text) : firstMatch(of: term.text, in: text)
+                term.isPhrase
+                    ? phraseMatch(of: term.text, in: text)
+                    : firstMatch(of: term, in: text, folded: folded)
             }
             guard let earliest = found.min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
             matches.append(earliest)
@@ -611,27 +722,48 @@ public actor SearchIndex {
 
     /// An exact case- and diacritic-insensitive substring match first, then a
     /// tolerant word-prefix match so "force" still finds the misrecognised "forc"
-    /// and "forc" finds "force".
-    private static func firstMatch(of term: String, in text: String) -> Range<String.Index>? {
-        guard !term.isEmpty else { return nil }
-        if let range = text.range(of: term, options: matchOptions) {
+    /// and "forc" finds "force". `folded` is the segment's precomputed form; the
+    /// exact scan still runs on the original text so the returned range is exact.
+    private static func firstMatch(
+        of term: PreparedTerm,
+        in text: String,
+        folded: FoldedSegment?
+    ) -> Range<String.Index>? {
+        guard !term.text.isEmpty else { return nil }
+        if let folded, !term.foldedBytes.isEmpty {
+            if folded.text.range(of: term.foldedBytes) != nil,
+               let range = text.range(of: term.text, options: matchOptions) {
+                return range
+            }
+        } else if let range = text.range(of: term.text, options: matchOptions) {
             return range
         }
 
-        let foldedTerm = fold(term)
-        guard foldedTerm.count >= tolerantMinimumLength else { return nil }
+        guard term.folded.count >= tolerantMinimumLength else { return nil }
+
+        if let folded {
+            for word in folded.words {
+                // The query may be longer than the recognised word ("force" → "forc"),
+                // but only for words long enough to be a real recognition, so a short
+                // query is not answered by a stray fragment.
+                if word.text.hasPrefix(term.folded) {
+                    return word.range
+                }
+                if word.text.count >= 4, term.folded.hasPrefix(word.text) {
+                    return word.range
+                }
+            }
+            return nil
+        }
 
         var found: Range<String.Index>?
         text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byWords, .substringNotRequired]) { _, range, _, stop in
             let foldedWord = fold(String(text[range]))
             guard foldedWord.count >= tolerantMinimumLength else { return }
-            // The query may be longer than the recognised word ("force" → "forc"),
-            // but only for words long enough to be a real recognition, so a short
-            // query is not answered by a stray fragment.
-            if foldedWord.hasPrefix(foldedTerm) {
+            if foldedWord.hasPrefix(term.folded) {
                 found = range
                 stop = true
-            } else if foldedWord.count >= 4, foldedTerm.hasPrefix(foldedWord) {
+            } else if foldedWord.count >= 4, term.folded.hasPrefix(foldedWord) {
                 found = range
                 stop = true
             }
@@ -641,6 +773,13 @@ public actor SearchIndex {
 
     private static func fold(_ text: String) -> String {
         text.folding(options: foldOptions, locale: .current)
+    }
+
+    /// Folding for the byte prefilter, without a locale, so it matches the
+    /// `range(of:options:)` call it stands in for. Tolerant word matching keeps
+    /// the `.current` locale `fold` has always used.
+    private static func foldForBytes(_ text: String) -> String {
+        text.folding(options: foldOptions, locale: nil)
     }
 
     /// A single-line excerpt of about `snippetLength` characters around `match`,

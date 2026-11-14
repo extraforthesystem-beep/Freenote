@@ -13,13 +13,14 @@ import Testing
     .enabled(if: ProcessInfo.processInfo.environment["NOTEAPP_BENCH"] == "1")
 )
 struct SearchIndexBenchmarks {
-    @Test func BenchmarkContentHash() throws {
+    @Test func BenchmarkContentHash() {
         let page = benchmarkPage(strokeCount: 2_000, pointsPerStroke: 100)
         var samples: [Duration] = []
         for _ in 0..<5 {
-            samples.append(try ContinuousClock().measure {
-                _ = SearchIndex.contentHash(of: page)
-            })
+            let clock = ContinuousClock()
+            let start = clock.now
+            _ = SearchIndex.contentHash(of: page)
+            samples.append(clock.now - start)
         }
         recordBenchmark("contentHash-2000x100", medianMilliseconds(samples))
     }
@@ -40,7 +41,7 @@ struct SearchIndexBenchmarks {
                     zIndex: 0,
                     updatedAt: Date(timeIntervalSince1970: 0),
                     content: .text(
-                        benchmarkText(page: offset),
+                        benchmarkText(page: offset, rare: offset % 50 == 0),
                         fontName: "System",
                         fontSize: 14,
                         color: .black
@@ -51,24 +52,28 @@ struct SearchIndexBenchmarks {
                 page: page,
                 in: notebookID,
                 pageIndex: offset + 1,
-                transcriptText: benchmarkText(page: offset + 1),
+                transcriptText: benchmarkText(page: offset + 1, rare: false),
                 using: recognizer
             )
         }
         try await index.endDeferringWrites()
 
-        // A common word hits many pages; a made-up word misses every segment and
-        // takes the tolerant prefix path on all 6,000 segments.
-        for query in ["lecture", "zebrafish", "lecture notes"] {
+        // `zebrafish` misses every segment and takes the tolerant prefix path
+        // on all 6,000. `seminar` is on 40 pages. `lecture` is on every page, so
+        // it also builds 6,000 result snippets.
+        for query in ["zebrafish", "seminar", "lecture", "lecture notes"] {
+            let clock = ContinuousClock()
+            let coldStart = clock.now
             _ = await index.search(query)
+            let cold = clock.now - coldStart
             var samples: [Duration] = []
             for _ in 0..<5 {
-                let clock = ContinuousClock()
                 let start = clock.now
                 _ = await index.search(query)
                 samples.append(clock.now - start)
             }
             recordBenchmark("search-2000x3-\(query)", medianMilliseconds(samples))
+            recordBenchmark("search-2000x3-\(query)-cold", milliseconds(cold))
         }
     }
 }
@@ -77,12 +82,15 @@ private actor BenchmarkRecognizer: HandwritingRecognizing {
     nonisolated let recognitionVersion = 1
 
     func text(for strokes: [StrokeRecord]) async -> String? {
-        benchmarkText(page: 0)
+        benchmarkText(page: 0, rare: false)
     }
 }
 
-private func benchmarkText(page: Int) -> String {
-    let base = "lecture notes about integrals limits and the fundamental theorem "
+private func benchmarkText(page: Int, rare: Bool) -> String {
+    let head = rare
+        ? "lecture seminar notes about integrals limits and the fundamental theorem "
+        : "lecture notes about integrals limits and the fundamental theorem "
+    let base = head
         + "with worked examples and a short summary of the reading for page \(page % 97) "
     var text = ""
     while text.count < 500 {
@@ -133,11 +141,14 @@ private func benchmarkRoot() throws -> URL {
     return url
 }
 
+private func milliseconds(_ duration: Duration) -> Double {
+    Double(duration.components.seconds) * 1_000
+        + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+}
+
 private func medianMilliseconds(_ samples: [Duration]) -> Double {
     let sorted = samples.sorted()
-    let median = sorted[sorted.count / 2]
-    return Double(median.components.seconds) * 1_000
-        + Double(median.components.attoseconds) / 1_000_000_000_000_000
+    return milliseconds(sorted[sorted.count / 2])
 }
 
 private func recordBenchmark(_ name: String, _ milliseconds: Double) {
