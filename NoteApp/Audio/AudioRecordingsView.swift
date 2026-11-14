@@ -1,5 +1,8 @@
 import AudioKit
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Record, play and delete the audio clips attached to one notebook.
 struct AudioRecordingsView: View {
@@ -9,36 +12,22 @@ struct AudioRecordingsView: View {
     var onTranscriptStored: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The clip whose transcript is open.
     @State private var transcriptClip: AudioClip?
 
     var body: some View {
         NavigationStack {
             Group {
-                if session.audio.clips.isEmpty {
-                    emptyState
+                if showsList {
+                    recordingsList
+                } else if !session.audio.hasLoaded {
+                    loadingState
                 } else {
-                    List {
-                        if session.audio.isRecording {
-                            Section {
-                                recordingRow
-                            }
-                        }
-                        Section {
-                            ForEach(session.audio.clips) { clip in
-                                row(clip)
-                            }
-                            .onDelete(perform: delete)
-                        } footer: {
-                            Text("Audio files stay inside this notebook's assets. Deleting a clip only removes it from this list; its file stays in the notebook.")
-                        }
-                    }
-#if os(iOS)
-                    .listStyle(.insetGrouped)
-#endif
+                    emptyState
                 }
             }
-            .navigationTitle("Audio")
+            .navigationTitle("Recordings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -74,6 +63,19 @@ struct AudioRecordingsView: View {
             } message: {
                 Text(session.audio.errorText ?? "")
             }
+            .alert("Microphone Access Needed", isPresented: Binding(
+                get: { session.audio.showsMicrophonePermissionHelp },
+                set: { if !$0 { session.audio.showsMicrophonePermissionHelp = false } }
+            )) {
+                #if os(iOS)
+                Button("Open Settings") { openSettings() }
+                #endif
+                Button("OK", role: .cancel) {
+                    session.audio.showsMicrophonePermissionHelp = false
+                }
+            } message: {
+                Text(microphoneMessage)
+            }
             .sheet(item: $transcriptClip) { clip in
                 ClipTranscriptView(
                     session: session,
@@ -84,27 +86,64 @@ struct AudioRecordingsView: View {
         }
     }
 
+    /// The list is shown while there is a clip to show, a recording running, or
+    /// a stopped clip still being written; the empty state waits for both.
+    private var showsList: Bool {
+        !session.audio.clips.isEmpty
+            || session.audio.isRecording
+            || session.audio.isSavingRecording
+    }
+
+    private var recordingsList: some View {
+        List {
+            if session.audio.isRecording {
+                Section {
+                    recordingRow
+                }
+            }
+            if session.audio.isSavingRecording {
+                Section {
+                    savingRow
+                }
+            }
+            if !session.audio.clips.isEmpty {
+                Section {
+                    ForEach(session.audio.clips) { clip in
+                        row(clip)
+                    }
+                    .onDelete(perform: delete)
+                } footer: {
+                    Text("Audio files stay inside this notebook's assets. Deleting a clip only removes it from this list; its file stays in the notebook.")
+                }
+            }
+        }
+#if os(iOS)
+        .listStyle(.insetGrouped)
+#endif
+        .appAnimation(AppMotion.quick, value: session.audio.isRecording)
+        .appAnimation(AppMotion.quick, value: session.audio.isSavingRecording)
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: AppSpacing.m) {
+            ProgressView()
+            Text("Loading recordings…")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(
-                session.audio.isRecording ? "Recording…" : "No Recordings",
-                systemImage: "waveform"
-            )
+            Label("No Recordings", systemImage: "waveform")
         } description: {
-            Text(
-                session.audio.isRecording
-                    ? "\(elapsedText) recorded so far. Stop when you are done; the audio is saved with this notebook."
-                    : "Record a lecture or a thought while you write. The audio is saved with this notebook."
-            )
+            Text("Record a lecture or a thought while you write. The audio is saved with this notebook.")
         } actions: {
             Button {
                 toggleRecording()
             } label: {
-                Label(
-                    session.audio.isRecording ? "Stop Recording" : "Start Recording",
-                    systemImage: session.audio.isRecording ? "stop.fill" : "record.circle"
-                )
-                .frame(minHeight: 32)
+                Label("Start Recording", systemImage: "record.circle")
+                    .frame(minHeight: 32)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -113,20 +152,18 @@ struct AudioRecordingsView: View {
     }
 
     private var recordingRow: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: AppSpacing.m) {
             Image(systemName: "waveform")
-                .symbolEffect(.variableColor.iterative)
+                .symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
                 .foregroundStyle(Color.red)
                 .frame(width: 44, height: 44)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text("Recording")
                     .font(.body.weight(.medium))
-                Text(elapsedText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                RecordingElapsedLabel(audio: session.audio)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: AppSpacing.s)
             Button {
                 toggleRecording()
             } label: {
@@ -141,10 +178,25 @@ struct AudioRecordingsView: View {
         .frame(minHeight: 56)
     }
 
+    private var savingRow: some View {
+        HStack(spacing: AppSpacing.m) {
+            ProgressView()
+                .accessibilityHidden(true)
+            Text("Saving recording…")
+                .font(.body.weight(.medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: AppSpacing.s)
+        }
+        .frame(minHeight: 56)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Saving recording")
+    }
+
     private func row(_ clip: AudioClip) -> some View {
         let isPlaying = session.audio.playingClipID == clip.id && session.audio.isPlaying
         let isLoaded = session.audio.playingClipID == clip.id
-        return HStack(spacing: 14) {
+        let clipTitle = clip.title.isEmpty ? "recording" : clip.title
+        return HStack(spacing: AppSpacing.m) {
             Button {
                 session.audio.togglePlayback(clip)
             } label: {
@@ -158,9 +210,9 @@ struct AudioRecordingsView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isPlaying ? "Pause playback" : "Play recording")
+            .accessibilityLabel("\(isPlaying ? "Pause" : "Play") \(clipTitle)")
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text(clip.title.isEmpty ? "Recording" : clip.title)
                     .font(.body.weight(.medium))
                     .lineLimit(1)
@@ -169,7 +221,7 @@ struct AudioRecordingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: AppSpacing.s)
 
             if session.audio.isTranscribing(clip) {
                 ProgressView()
@@ -177,7 +229,7 @@ struct AudioRecordingsView: View {
                     .accessibilityLabel("Transcribing")
             } else if isPlaying {
                 Image(systemName: "waveform")
-                    .symbolEffect(.variableColor.iterative)
+                    .symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
                     .foregroundStyle(Color.accentColor)
                     .accessibilityHidden(true)
             }
@@ -197,7 +249,7 @@ struct AudioRecordingsView: View {
             .buttonStyle(.borderless)
             .accessibilityLabel(
                 session.audio.transcript(for: clip) == nil
-                    ? "Transcribe recording"
+                    ? "Transcribe"
                     : "Show transcript"
             )
 
@@ -209,13 +261,9 @@ struct AudioRecordingsView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Delete \(clip.title.isEmpty ? "recording" : clip.title)")
+            .accessibilityLabel("Delete \(clipTitle)")
         }
         .frame(minHeight: 56)
-    }
-
-    private var elapsedText: String {
-        duration(session.audio.elapsed)
     }
 
     private func toggleRecording() {
@@ -242,7 +290,39 @@ struct AudioRecordingsView: View {
         }
     }
 
+    private var microphoneMessage: String {
+        #if os(iOS)
+        "NOTEAPP cannot record without microphone access. Open Settings and allow the Microphone for NOTEAPP."
+        #else
+        "NOTEAPP cannot record without microphone access. Allow it in System Settings → Privacy & Security → Microphone."
+        #endif
+    }
+
+    #if os(iOS)
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+    #endif
+
     private func duration(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// The recording timer on its own, so the audio sheet's body does not read
+/// `elapsed` and re-run the whole list twice a second.
+private struct RecordingElapsedLabel: View {
+    let audio: NotebookAudio
+
+    var body: some View {
+        Text(Self.text(for: audio.elapsed))
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+    }
+
+    static func text(for seconds: TimeInterval) -> String {
         let total = max(0, Int(seconds.rounded()))
         return String(format: "%d:%02d", total / 60, total % 60)
     }

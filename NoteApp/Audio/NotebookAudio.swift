@@ -73,7 +73,17 @@ final class NotebookAudio {
     private var timerTask: Task<Void, Never>?
     private var playheadTask: Task<Void, Never>?
     /// Serialises ``load()``; the notebook and the audio sheet both call it.
-    private var isLoading = false
+    private(set) var isLoading = false
+    /// True once the first `load()` has finished, so the sheet can tell "still
+    /// loading" from "nothing recorded yet".
+    private(set) var hasLoaded = false
+    /// True while a stopped recording is being copied into the notebook. The
+    /// recording row is already gone at this point, so this is what tells the
+    /// user the audio is still being saved.
+    private(set) var isSavingRecording = false
+    /// Set instead of `errorText` when the microphone itself is denied, so the
+    /// sheet can offer a way to grant it.
+    var showsMicrophonePermissionHelp = false
     #if os(iOS)
     /// Listening only while a recording runs, so an interruption can finalise it.
     private var interruptionObserver: (any NSObjectProtocol)?
@@ -92,6 +102,9 @@ final class NotebookAudio {
     /// The stroke that was being written at ``playheadSeconds``, when the page
     /// on screen has one.
     private(set) var activeStrokeID: UUID?
+    /// The transcript line the playhead is inside, when the playing clip has a
+    /// transcript. Changes only at a line boundary, not four times a second.
+    private(set) var activeSegmentID: UUID?
     private(set) var isPlaying = false
     /// The clip whose transcript is being recognised, if any.
     private(set) var transcribingClipID: UUID?
@@ -131,7 +144,10 @@ final class NotebookAudio {
         // recover the same pending file twice.
         guard !isLoading else { return }
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            hasLoaded = true
+        }
 
         await recoverPendingRecordings()
         do {
@@ -174,7 +190,11 @@ final class NotebookAudio {
             start = try await recorder.start(writingTo: pendingStore.audioURL(for: clipID))
         } catch {
             try? pendingStore.remove(id: clipID)
-            errorText = error.localizedDescription
+            if case AudioKitError.permissionDenied = error {
+                showsMicrophonePermissionHelp = true
+            } else {
+                errorText = error.localizedDescription
+            }
             return
         }
 
@@ -210,7 +230,11 @@ final class NotebookAudio {
         isRecording = false
         elapsed = 0
         isBusy = true
-        defer { isBusy = false }
+        isSavingRecording = true
+        defer {
+            isSavingRecording = false
+            isBusy = false
+        }
         #if os(iOS)
         endInterruptionObserving()
         #endif
@@ -441,7 +465,8 @@ final class NotebookAudio {
         playingClipID = nil
         isPlaying = false
         playheadSeconds = 0
-        activeStrokeID = nil
+        publishActiveStroke(nil)
+        publishActiveSegment(nil)
         playheadTask?.cancel()
         playheadTask = nil
     }
@@ -455,7 +480,8 @@ final class NotebookAudio {
         playingClipID = nil
         isPlaying = false
         playheadSeconds = 0
-        activeStrokeID = nil
+        publishActiveStroke(nil)
+        publishActiveSegment(nil)
         playheadTask?.cancel()
         playheadTask = nil
     }
@@ -529,13 +555,33 @@ final class NotebookAudio {
 
     private func refreshActiveStroke() async {
         guard let clip = activeClip else {
-            activeStrokeID = nil
+            publishActiveStroke(nil)
+            publishActiveSegment(nil)
             return
         }
         if await playback.currentClip != clip {
             await playback.configure(clip: clip, strokes: replayStrokes)
         }
-        activeStrokeID = await playback.activeStrokeID(atPlaybackOffset: playheadSeconds)
+        publishActiveStroke(
+            await playback.activeStrokeID(atPlaybackOffset: playheadSeconds)
+        )
+        publishActiveSegment(
+            transcripts[clip.id]?.segment(at: playheadSeconds)?.id
+        )
+    }
+
+    /// Publishes the stroke under the playhead only when it changed. Assigning
+    /// an `@Observable` property notifies its readers even for the same value,
+    /// and the notebook page reads this one to re-apply the page's ink.
+    func publishActiveStroke(_ id: UUID?) {
+        if activeStrokeID != id { activeStrokeID = id }
+    }
+
+    /// Publishes the highlighted transcript line only when the playhead entered
+    /// a different line. This is what keeps the 250 ms tick from re-running
+    /// every visible transcript row.
+    private func publishActiveSegment(_ id: UUID?) {
+        if activeSegmentID != id { activeSegmentID = id }
     }
 
     // MARK: - Transcripts
@@ -557,11 +603,15 @@ final class NotebookAudio {
         do {
             let url = store.assetURL(named: clip.assetName, in: notebookID)
             let transcript = try await transcriber.transcribe(url: url, clipID: clip.id)
+            try Task.checkCancellation()
             try await transcriptStore.save(transcript)
             transcripts[clip.id] = transcript
         } catch is CancellationError {
             // Leaving the transcript closes the work; nothing was stored.
         } catch {
+            // A cancelled asset download can surface as a plain error; a cancel
+            // must not raise an alert for work the user stopped.
+            guard !Task.isCancelled else { return }
             errorText = (error as? AudioKitError)?.description ?? error.localizedDescription
         }
     }

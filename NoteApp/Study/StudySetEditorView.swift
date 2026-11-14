@@ -89,7 +89,7 @@ struct StudySetEditorView: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                             }
-                            .padding(.vertical, 6)
+                            .padding(.vertical, AppSpacing.s)
                             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                             .contentShape(Rectangle())
                         }

@@ -77,6 +77,30 @@ public enum StudyQueue {
         ).count
     }
 
+    /// How many due cards each set has at `now`, in one pass over the library.
+    ///
+    /// Sets with no due cards are absent; callers treat a missing id as zero.
+    public static func dueCounts(
+        in sets: [StudySet],
+        states: [UUID: [UUID: ReviewState]] = [:],
+        now: Date,
+        notebookID: UUID? = nil,
+        pageID: UUID? = nil
+    ) -> [UUID: Int] {
+        var counts: [UUID: Int] = [:]
+        for entry in collected(
+            in: sets,
+            states: states,
+            now: now,
+            notebookID: notebookID,
+            pageID: pageID,
+            dueOnly: true
+        ) {
+            counts[entry.item.setID, default: 0] += 1
+        }
+        return counts
+    }
+
     /// Every card that matches the filters, due or not, earliest due first and
     /// then in set and card order.
     ///

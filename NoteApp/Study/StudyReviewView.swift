@@ -52,11 +52,18 @@ struct StudyReviewView: View {
     var onOpenSource: ((UUID, UUID) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pass: ReviewPass?
     @State private var revealed = false
     @State private var recallDraft = ""
     @State private var leech: LeechTarget?
     @State private var errorText: String?
+
+    /// The review card's text sizes keep their default appearance but follow
+    /// Dynamic Type, so the most-read text scales with the system setting.
+    @ScaledMetric(relativeTo: .largeTitle) private var questionSize: CGFloat = 28
+    @ScaledMetric(relativeTo: .title2) private var answerSize: CGFloat = 24
+    @ScaledMetric(relativeTo: .body) private var recallSize: CGFloat = 17
 
     var body: some View {
         NavigationStack {
@@ -64,6 +71,8 @@ struct StudyReviewView: View {
                 if let pass {
                     if let item = pass.currentItem {
                         cardView(item, pass: pass)
+                            .id(item.card.id)
+                            .transition(.opacity)
                     } else {
                         completionView(pass)
                     }
@@ -78,9 +87,14 @@ struct StudyReviewView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
                 }
             }
-            .onAppear(perform: startPassIfNeeded)
+            .task {
+                // Build the pass after the sheet is on screen: on a large
+                // library the queue scan would otherwise delay its animation.
+                startPassIfNeeded()
+            }
             .onDisappear {
                 // Leaving the pass writes the grades now instead of after the
                 // debounce, so a quick dismissal cannot lose the last one.
@@ -112,7 +126,7 @@ struct StudyReviewView: View {
 
     private func cardView(_ item: StudyQueueItem, pass: ReviewPass) -> some View {
         VStack(spacing: 0) {
-            VStack(spacing: 6) {
+            VStack(spacing: AppSpacing.s) {
                 ProgressView(value: pass.progress)
                 HStack {
                     Text("\(pass.reviewedCount) reviewed")
@@ -131,7 +145,7 @@ struct StudyReviewView: View {
             .padding(.top, 12)
 
             ScrollView {
-                VStack(spacing: 22) {
+                VStack(spacing: AppSpacing.xxl) {
                     if sourceAction(for: item.card) != nil {
                         sourceButton(for: item.card)
                     }
@@ -142,7 +156,7 @@ struct StudyReviewView: View {
                         .tracking(1.2)
 
                     Text(item.card.question)
-                        .font(.system(size: 28, weight: .semibold, design: .rounded))
+                        .font(.system(size: questionSize, weight: .semibold, design: .rounded))
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 620)
 
@@ -186,7 +200,7 @@ struct StudyReviewView: View {
                         .foregroundStyle(.secondary)
                         .tracking(1)
                     Text(recallDraft)
-                        .font(.system(size: 17, design: .rounded))
+                        .font(.system(size: recallSize, design: .rounded))
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: 620)
@@ -205,12 +219,12 @@ struct StudyReviewView: View {
                 .tracking(1.2)
 
             Text(item.card.answer)
-                .font(.system(size: 24, weight: .regular, design: .rounded))
+                .font(.system(size: answerSize, weight: .regular, design: .rounded))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 620)
 
             if leechNotice(item) {
-                HStack(spacing: 10) {
+                HStack(spacing: AppSpacing.m) {
                     Label(
                         "This card has lapsed \(leechCount(item)) times.",
                         systemImage: "exclamationmark.triangle"
@@ -240,22 +254,25 @@ struct StudyReviewView: View {
                 Text("How well did you recall it?")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    gradeButton("Again", quality: 1, color: .red, item: item, pass: pass)
-                    gradeButton("Hard", quality: 3, color: .orange, item: item, pass: pass)
-                    gradeButton("Good", quality: 4, color: .blue, item: item, pass: pass)
-                    gradeButton("Easy", quality: 5, color: .green, item: item, pass: pass)
+                HStack(spacing: AppSpacing.m) {
+                    gradeButton("Again", quality: 1, shortcut: "1", color: .red, item: item, pass: pass)
+                    gradeButton("Hard", quality: 3, shortcut: "2", color: .orange, item: item, pass: pass)
+                    gradeButton("Good", quality: 4, shortcut: "3", color: .blue, item: item, pass: pass)
+                    gradeButton("Easy", quality: 5, shortcut: "4", color: .green, item: item, pass: pass)
                 }
             } else {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { revealed = true }
+                    AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
+                        revealed = true
+                    }
                 } label: {
                     Label("Reveal Answer", systemImage: "eye")
                         .font(.headline)
                         .frame(maxWidth: 520)
-                        .padding(.vertical, 14)
+                        .padding(.vertical, AppSpacing.m)
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.space, modifiers: [])
             }
         }
         .padding(.horizontal, 24)
@@ -265,6 +282,7 @@ struct StudyReviewView: View {
     private func gradeButton(
         _ title: String,
         quality: Int,
+        shortcut: KeyEquivalent,
         color: Color,
         item: StudyQueueItem,
         pass: ReviewPass
@@ -290,11 +308,12 @@ struct StudyReviewView: View {
                     .opacity(0.8)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.vertical, AppSpacing.m)
+            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: AppRadius.m, style: .continuous))
             .foregroundStyle(color)
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(shortcut, modifiers: [])
     }
 
     private func completionView(_ pass: ReviewPass) -> some View {
@@ -305,7 +324,7 @@ struct StudyReviewView: View {
             )
         } description: {
             if pass.itemCount == 0 {
-                Text("No cards in this scope are due right now.")
+                Text("Nothing due right now.")
             } else {
                 Text("\(pass.reviewedCount) card\(pass.reviewedCount == 1 ? "" : "s") reviewed.")
             }
@@ -347,10 +366,14 @@ struct StudyReviewView: View {
         guard var current = pass, let item = current.currentItem else { return }
         do {
             let result = try current.gradeCurrent(quality: quality, now: Date())
-            pass = current
+            AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
+                revealed = false
+            }
+            AppMotion.animate(AppMotion.fade, reduceMotion: reduceMotion) {
+                pass = current
+            }
             study.record(result.state, for: result.setID)
             recallDraft = ""
-            withAnimation(.easeInOut(duration: 0.18)) { revealed = false }
             if result.state.lapses == ReviewState.leechThreshold {
                 leech = LeechTarget(setID: result.setID, card: item.card, lapses: result.state.lapses)
             }

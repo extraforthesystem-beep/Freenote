@@ -23,11 +23,16 @@ public enum AITone: String, Codable, Equatable, Sendable, CaseIterable {
 }
 
 /// One study card produced by a flashcard request.
-public struct AIFlashcard: Codable, Equatable, Hashable, Sendable {
+public struct AIFlashcard: Codable, Equatable, Hashable, Sendable, Identifiable {
     /// The prompt shown before the answer is revealed.
     public var question: String
     /// The answer revealed for `question`.
     public var answer: String
+
+    /// Identity from the card's content, so a regenerated set keeps the same
+    /// identity for a card that is still the same and never inherits another
+    /// card's "added" state.
+    public var id: String { question + "\u{1F}" + answer }
 
     /// Creates a card from a question and its answer.
     public init(question: String, answer: String) {

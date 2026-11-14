@@ -10,13 +10,15 @@ struct ClipTranscriptView: View {
     var onTranscriptStored: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
+    /// The recognition run, held so leaving the sheet stops the work instead of
+    /// letting it continue in the background.
+    @State private var transcribeTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
             Group {
                 if session.audio.isTranscribing(clip) {
-                    ProgressView("Transcribing on device…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    transcribingState
                 } else if let transcript = session.audio.transcript(for: clip),
                           !transcript.segments.isEmpty {
                     lines(transcript)
@@ -52,7 +54,26 @@ struct ClipTranscriptView: View {
             } message: {
                 Text(session.audio.errorText ?? "")
             }
+            .onDisappear {
+                transcribeTask?.cancel()
+            }
         }
+    }
+
+    private var transcribingState: some View {
+        VStack(spacing: AppSpacing.m) {
+            ProgressView()
+            Text("Transcribing \(NowPlayingBar.timeLabel(clip.durationSeconds)) of audio on device…")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Cancel") {
+                transcribeTask?.cancel()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func lines(_ transcript: Transcript) -> some View {
@@ -87,7 +108,7 @@ struct ClipTranscriptView: View {
         ContentUnavailableView {
             Label("No Transcript", systemImage: "text.quote")
         } description: {
-            Text("Recognise the speech in this recording on device. The words join the notebook's search.")
+            Text("The words join the notebook's search after transcription.")
         } actions: {
             Button {
                 transcribe()
@@ -103,16 +124,19 @@ struct ClipTranscriptView: View {
 
     /// Recognises the clip, then lets the owner refresh the search index.
     private func transcribe() {
-        Task {
+        transcribeTask?.cancel()
+        transcribeTask = Task {
             await session.audio.transcribe(clip)
+            guard !Task.isCancelled else { return }
             guard session.audio.transcript(for: clip) != nil else { return }
             onTranscriptStored()
         }
     }
 }
 
-/// One timed line. It reads the playhead itself, so the four-times-a-second
-/// position redraws this row and not the whole transcript.
+/// One timed line. It observes the playhead's line rather than the playhead
+/// itself, so the four-times-a-second position redraws nothing while it stays
+/// inside the same line.
 private struct TranscriptLine: View {
     let audio: NotebookAudio
     let clipID: UUID
@@ -121,7 +145,7 @@ private struct TranscriptLine: View {
 
     var body: some View {
         Button(action: onPlay) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: AppSpacing.m) {
                 Text(NowPlayingBar.timeLabel(segment.startSeconds))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -143,7 +167,6 @@ private struct TranscriptLine: View {
     /// The line the playhead is inside, while this clip is the one playing.
     private var isCurrent: Bool {
         guard audio.playingClipID == clipID else { return false }
-        let time = audio.playheadSeconds
-        return time >= segment.startSeconds && time < segment.endSeconds
+        return audio.activeSegmentID == segment.id
     }
 }
