@@ -885,9 +885,11 @@ private struct BlockRow: View {
 
     private func listContent(bulleted: Bool) -> some View {
         let items = listItems
-        let count = max(items.count, 1)
+        // A row per item identity, so splitting or merging above an item
+        // moves that row instead of pushing another item's text into it.
+        let rows = items.isEmpty ? [ListItem(id: block.id, text: "")] : items
         return VStack(alignment: .leading, spacing: 2) {
-            ForEach(0..<count, id: \.self) { index in
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
                 HStack(alignment: .top, spacing: 8) {
                     Text(bulleted ? "•" : "\(index + 1).")
                         .font(.system(size: 16, weight: .medium, design: .rounded))
@@ -896,7 +898,7 @@ private struct BlockRow: View {
                         .padding(.top, 3)
                     editor(
                         key: index,
-                        text: listItemText(index, bulleted: bulleted),
+                        text: listItemText(item.id, bulleted: bulleted),
                         font: BlockTypography.body,
                         placeholder: "List item"
                     )
@@ -907,31 +909,26 @@ private struct BlockRow: View {
 
     private var checklistContent: some View {
         let items = checklistItems
-        let count = max(items.count, 1)
+        let rows = items.isEmpty ? [ChecklistItem(id: block.id, text: "")] : items
         return VStack(alignment: .leading, spacing: 2) {
-            ForEach(0..<count, id: \.self) { index in
-                let checked = items.indices.contains(index) ? items[index].isChecked : false
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
                 HStack(alignment: .top, spacing: 6) {
                     Button {
-                        setChecked(index, !checked)
+                        setChecked(item.id, !item.isChecked)
                     } label: {
-                        Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                        Image(systemName: item.isChecked ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 20))
-                            .foregroundStyle(checked ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(item.isChecked ? Color.accentColor : Color.secondary)
                             .frame(width: 30, height: 28)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        items.indices.contains(index) && !items[index].text.isEmpty
-                            ? items[index].text
-                            : "Checklist item"
-                    )
+                    .accessibilityLabel(item.text.isEmpty ? "Checklist item" : item.text)
 
                     editor(
                         key: index,
-                        text: checklistItemText(index),
+                        text: checklistItemText(item.id),
                         font: BlockTypography.body,
-                        color: checked ? .secondary : .primary,
+                        color: item.isChecked ? .secondary : .primary,
                         placeholder: "To-do"
                     )
                 }
@@ -986,22 +983,22 @@ private struct BlockRow: View {
         )
     }
 
-    private var listItems: [String] {
+    private var listItems: [ListItem] {
         switch block.kind {
         case let .bulletList(items), let .numberedList(items): items
         default: []
         }
     }
 
-    private func listItemText(_ index: Int, bulleted: Bool) -> Binding<String> {
+    private func listItemText(_ itemID: UUID, bulleted: Bool) -> Binding<String> {
         Binding(
-            get: { listItems.indices.contains(index) ? listItems[index] : "" },
+            get: { listItems.first { $0.id == itemID }?.text ?? "" },
             set: { newValue in
                 var items = listItems
-                if items.indices.contains(index) {
-                    items[index] = newValue
+                if let index = items.firstIndex(where: { $0.id == itemID }) {
+                    items[index].text = newValue
                 } else {
-                    items = [newValue]
+                    items = [ListItem(id: itemID, text: newValue)]
                 }
                 block.kind = bulleted ? .bulletList(items: items) : .numberedList(items: items)
             }
@@ -1013,27 +1010,27 @@ private struct BlockRow: View {
         return []
     }
 
-    private func checklistItemText(_ index: Int) -> Binding<String> {
+    private func checklistItemText(_ itemID: UUID) -> Binding<String> {
         Binding(
-            get: { checklistItems.indices.contains(index) ? checklistItems[index].text : "" },
+            get: { checklistItems.first { $0.id == itemID }?.text ?? "" },
             set: { newValue in
                 var items = checklistItems
-                if items.indices.contains(index) {
+                if let index = items.firstIndex(where: { $0.id == itemID }) {
                     items[index].text = newValue
                 } else {
-                    items = [ChecklistItem(text: newValue)]
+                    items = [ChecklistItem(id: itemID, text: newValue)]
                 }
                 block.kind = .checklist(items: items)
             }
         )
     }
 
-    private func setChecked(_ index: Int, _ value: Bool) {
+    private func setChecked(_ itemID: UUID, _ value: Bool) {
         var items = checklistItems
-        if items.indices.contains(index) {
+        if let index = items.firstIndex(where: { $0.id == itemID }) {
             items[index].isChecked = value
         } else {
-            items = [ChecklistItem(text: "", isChecked: value)]
+            items = [ChecklistItem(id: itemID, text: "", isChecked: value)]
         }
         onChecklistChange()
         block.kind = .checklist(items: items)

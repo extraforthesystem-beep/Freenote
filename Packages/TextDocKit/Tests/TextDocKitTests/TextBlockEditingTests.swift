@@ -74,12 +74,12 @@ struct TextBlockEditingTests {
             Issue.record("Expected the first block to stay a bullet list")
             return
         }
-        #expect(head == ["One", "Two"])
+        #expect(head.texts == ["One", "Two"])
         guard case let .bulletList(tail) = document.blocks[1].kind else {
             Issue.record("Expected the continuation to be a bullet list")
             return
         }
-        #expect(tail == ["Three", "Four"])
+        #expect(tail.texts == ["Three", "Four"])
         #expect(document.blocks[2].text == "After")
         #expect(caret.blockID == document.blocks[1].id)
         #expect(caret.itemIndex == 0)
@@ -100,8 +100,8 @@ struct TextBlockEditingTests {
             Issue.record("Expected a numbered list continuation")
             return
         }
-        #expect(head == ["First"])
-        #expect(tail == [""])
+        #expect(head.texts == ["First"])
+        #expect(tail.texts == [""])
     }
 
     @Test("Return on an empty list item turns it into a paragraph")
@@ -116,7 +116,7 @@ struct TextBlockEditingTests {
             Issue.record("Expected the list to keep its first item")
             return
         }
-        #expect(items == ["One"])
+        #expect(items.texts == ["One"])
         guard case .paragraph = document.blocks[1].kind else {
             Issue.record("Expected a paragraph after the list")
             return
@@ -235,7 +235,7 @@ struct TextBlockEditingTests {
             Issue.record("Expected a numbered list")
             return
         }
-        #expect(items == ["HelloWorld"])
+        #expect(items.texts == ["HelloWorld"])
         #expect(caret.itemIndex == 0)
         #expect(caret.offset == 5)
     }
@@ -254,7 +254,7 @@ struct TextBlockEditingTests {
             Issue.record("Expected a bullet list")
             return
         }
-        #expect(items == ["One", "Two"])
+        #expect(items.texts == ["One", "Two"])
         #expect(caret.itemIndex == 1)
         #expect(caret.offset == 0)
     }

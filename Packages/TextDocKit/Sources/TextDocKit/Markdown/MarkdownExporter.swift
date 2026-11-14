@@ -38,10 +38,10 @@ public struct MarkdownExporter: Sendable {
         case let .paragraph(text):
             escapedParagraph(text)
         case let .bulletList(items):
-            items.map { "- " + $0 }.joined(separator: "\n")
+            items.map { "- " + $0.text }.joined(separator: "\n")
         case let .numberedList(items):
             items.enumerated()
-                .map { "\($0.offset + 1). " + $0.element }
+                .map { "\($0.offset + 1). " + $0.element.text }
                 .joined(separator: "\n")
         case let .quote(text):
             renderQuote(text)
