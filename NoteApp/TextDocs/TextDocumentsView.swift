@@ -14,6 +14,10 @@ struct TextDocumentsView: View {
     /// The document being renamed while `prompt` is open; nil means "create".
     @State private var renamedDocument: TextDocument?
 
+    /// Documents waiting for the delete confirmation. Empty when it is closed.
+    @State private var deletionTargets: [TextDocument] = []
+    @State private var isConfirmingDelete = false
+
     /// False when the view is embedded in the library's detail column instead of a sheet.
     private let showsDoneButton: Bool
 
@@ -30,6 +34,19 @@ struct TextDocumentsView: View {
                     Button("OK", role: .cancel) { model.clearError() }
                 } message: {
                     Text(model.lastError ?? "")
+                }
+                .confirmationDialog(
+                    deletionTitle,
+                    isPresented: $isConfirmingDelete,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete Document", role: .destructive) { confirmDeletion() }
+                    Button("Cancel", role: .cancel) { deletionTargets = [] }
+                } message: {
+                    Text(deletionMessage)
+                }
+                .onChange(of: isConfirmingDelete) { _, isPresented in
+                    if !isPresented { deletionTargets = [] }
                 }
                 .navigationTitle("Text Documents")
                 #if os(iOS)
@@ -93,12 +110,12 @@ struct TextDocumentsView: View {
                 .contextMenu {
                     Button("Rename", systemImage: "pencil") { beginRenaming(document) }
                     Button("Delete", systemImage: "trash", role: .destructive) {
-                        Task { await model.delete(document) }
+                        requestDeletion([document])
                     }
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button("Delete", systemImage: "trash", role: .destructive) {
-                        Task { await model.delete(document) }
+                        requestDeletion([document])
                     }
                     Button("Rename", systemImage: "pencil") { beginRenaming(document) }
                         .tint(.indigo)
@@ -121,7 +138,7 @@ struct TextDocumentsView: View {
 
     private func row(_ document: TextDocument) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(document.title.isEmpty ? "Untitled" : document.title)
+            Text(displayTitle(document))
                 .font(.body.weight(.medium))
                 .lineLimit(1)
 
@@ -133,7 +150,7 @@ struct TextDocumentsView: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, AppSpacing.xs)
     }
 
     // MARK: - Actions
@@ -171,18 +188,50 @@ struct TextDocumentsView: View {
         }
     }
 
-    /// Snapshots the targets before deleting: each delete shrinks the list, so
-    /// reading indices inside the loop would address the wrong rows.
-    private func deleteDocuments(_ offsets: IndexSet) {
-        let targets = offsets.compactMap { index in
-            model.documents.indices.contains(index) ? model.documents[index] : nil
-        }
+    /// Asks before deleting: a swipe or a context-menu tap used to remove the
+    /// file for good, unlike the notebook library, which keeps a Recently
+    /// Deleted copy.
+    private func requestDeletion(_ documents: [TextDocument]) {
+        guard !documents.isEmpty else { return }
+        deletionTargets = documents
+        isConfirmingDelete = true
+    }
+
+    private func confirmDeletion() {
+        let targets = deletionTargets
+        deletionTargets = []
         guard !targets.isEmpty else { return }
         Task {
             for document in targets {
                 await model.delete(document)
             }
         }
+    }
+
+    private var deletionTitle: String {
+        if deletionTargets.count == 1, let document = deletionTargets.first {
+            return "Delete \u{201C}\(displayTitle(document))\u{201D}?"
+        }
+        return "Delete \(deletionTargets.count) Documents?"
+    }
+
+    private var deletionMessage: String {
+        deletionTargets.count == 1
+            ? "The document will be deleted permanently."
+            : "These documents will be deleted permanently."
+    }
+
+    /// Snapshots the targets before deleting: each delete shrinks the list, so
+    /// reading indices inside the loop would address the wrong rows.
+    private func deleteDocuments(_ offsets: IndexSet) {
+        let targets = offsets.compactMap { index in
+            model.documents.indices.contains(index) ? model.documents[index] : nil
+        }
+        requestDeletion(targets)
+    }
+
+    private func displayTitle(_ document: TextDocument) -> String {
+        document.title.isEmpty ? "Untitled" : document.title
     }
 
     private func blockCountText(_ count: Int) -> String {

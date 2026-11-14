@@ -15,8 +15,12 @@ struct CaretRequest: Equatable {
 ///
 /// The iPad editor needs a `UIFont` and the Mac fallback wants a SwiftUI
 /// `Font`, so blocks describe the type once and each side converts it.
+/// `textStyle` is the closest system text style for the block's size, so the
+/// font follows the reader's Dynamic Type setting instead of staying at a
+/// fixed point size.
 struct BlockFont {
     var size: CGFloat
+    var textStyle: Font.TextStyle = .body
     var weight: Font.Weight = .regular
     var isMonospaced = false
     var isItalic = false
@@ -28,7 +32,12 @@ struct BlockFont {
     }
 
     #if os(iOS)
+    /// The font at the block's own size, scaled to the current text size.
     var uiFont: UIFont {
+        UIFontMetrics(forTextStyle: textStyle.uiTextStyle).scaledFont(for: unscaledUIFont)
+    }
+
+    private var unscaledUIFont: UIFont {
         var font = isMonospaced
             ? UIFont.monospacedSystemFont(ofSize: size, weight: weight.uiWeight)
             : UIFont.systemFont(ofSize: size, weight: weight.uiWeight)
@@ -39,6 +48,25 @@ struct BlockFont {
     }
     #endif
 }
+
+#if os(iOS)
+private extension Font.TextStyle {
+    /// The `UIFont.TextStyle` whose scaling curve matches this style.
+    var uiTextStyle: UIFont.TextStyle {
+        if self == .largeTitle { return .largeTitle }
+        if self == .title { return .title1 }
+        if self == .title2 { return .title2 }
+        if self == .title3 { return .title3 }
+        if self == .headline { return .headline }
+        if self == .subheadline { return .subheadline }
+        if self == .callout { return .callout }
+        if self == .footnote { return .footnote }
+        if self == .caption { return .caption1 }
+        if self == .caption2 { return .caption2 }
+        return .body
+    }
+}
+#endif
 
 #if os(iOS)
 private extension Font.Weight {
@@ -173,17 +201,38 @@ extension BlockTextEditor {
             coordinator.parent = self
             coordinator.view = view
 
-            if view.font != font {
-                view.font = font
+            let label = coordinator.placeholder
+            let hidesPlaceholder = !text.isEmpty
+            let textChanged = view.text != text
+            let styleChanged = view.font != font
+                || view.textColor != textColor
+                || view.typingAttributes[.font] as? UIFont != font
+                || view.typingAttributes[.foregroundColor] as? UIColor != textColor
+            let placeholderChanged = label?.text != placeholder
+                || label?.font != font
+                || label?.isHidden != hidesPlaceholder
+
+            // Everything this update would apply is already applied: a
+            // keystroke stays in the text view, and no text is reset (which
+            // would move the caret to the end).
+            guard textChanged || styleChanged || placeholderChanged else {
+                coordinator.applyFocusIfNeeded()
+                return
             }
-            if view.textColor != textColor {
-                view.textColor = textColor
+
+            if styleChanged {
+                if view.font != font {
+                    view.font = font
+                }
+                if view.textColor != textColor {
+                    view.textColor = textColor
+                }
+                view.typingAttributes = [.font: font, .foregroundColor: textColor]
             }
-            view.typingAttributes = [.font: font, .foregroundColor: textColor]
 
             // Only push model text in when the view does not already show it,
             // so typing never rewrites the buffer and resets the caret.
-            if view.text != text {
+            if textChanged {
                 let selection = view.selectedRange
                 view.text = text
                 view.font = font
@@ -196,9 +245,11 @@ extension BlockTextEditor {
                 }
             }
 
-            coordinator.placeholder?.text = placeholder
-            coordinator.placeholder?.font = font
-            coordinator.placeholder?.isHidden = !text.isEmpty
+            if placeholderChanged {
+                label?.text = placeholder
+                label?.font = font
+                label?.isHidden = hidesPlaceholder
+            }
 
             coordinator.applyFocusIfNeeded()
         }
@@ -231,10 +282,15 @@ extension BlockTextEditor {
                 guard let view else { return }
 
                 if let request = parent.focusRequest, request.token != appliedToken {
-                    appliedToken = request.token
                     let offset = request.offset
-                    DispatchQueue.main.async { [weak view] in
-                        guard let view, view.window != nil else { return }
+                    // Mark the token applied only once the view is really in a
+                    // window. In the lazy block list a row that is off screen
+                    // does not exist yet; the token then stays pending and
+                    // `BlockTextView.didMoveToWindow` retries it when the row
+                    // appears.
+                    DispatchQueue.main.async { [weak self, weak view] in
+                        guard let self, let view, view.window != nil else { return }
+                        self.appliedToken = request.token
                         if !view.isFirstResponder {
                             view.becomeFirstResponder()
                         }

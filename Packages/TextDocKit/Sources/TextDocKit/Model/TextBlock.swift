@@ -79,9 +79,9 @@ public enum TextBlockKind: Codable, Hashable, Sendable {
     /// A paragraph of running text; newlines inside `text` are preserved.
     case paragraph(text: String)
     /// An unordered list.
-    case bulletList(items: [String])
+    case bulletList(items: [ListItem])
     /// An ordered list; numbering is implicit in item order.
-    case numberedList(items: [String])
+    case numberedList(items: [ListItem])
     /// A block quotation; newlines inside `text` are preserved.
     case quote(text: String)
     /// A code block with an optional language identifier.
@@ -139,8 +139,8 @@ extension TextBlockKind {
         switch self {
         case let .heading(_, text): text
         case let .paragraph(text): text
-        case let .bulletList(items): items.joined(separator: "\n")
-        case let .numberedList(items): items.joined(separator: "\n")
+        case let .bulletList(items): items.texts.joined(separator: "\n")
+        case let .numberedList(items): items.texts.joined(separator: "\n")
         case let .quote(text): text
         case let .code(text, _): text
         case .image, .divider: ""

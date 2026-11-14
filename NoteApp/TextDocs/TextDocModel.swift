@@ -16,6 +16,10 @@ final class TextDocModel {
     private(set) var isLoading = true
     private(set) var lastError: String?
 
+    /// The folder the document files live in, and where an image block looks
+    /// for the file it names.
+    var documentsRoot: URL { store.root }
+
     /// Creates a model backed by text-document files under `root`.
     ///
     /// The directory is created on the first save, so a library that has never
