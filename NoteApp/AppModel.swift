@@ -162,31 +162,44 @@ final class AppModel {
         do {
             info = try await store.open()
             await reload()
-            templates.load()
-            await purgeExpiredTrash()
-            await sweepOrphanedHistory()
-            await study.load()
-            await textDocs.load()
-            await boards.load()
-            Task {
-                _ = try? await history.prune(keeping: .default)
-            }
-            Task.detached(priority: .utility) { [store] in
-                LibraryCovers.pruneStaleCovers(store: store)
-            }
-            Task {
-                await search.indexAll(notebooks: notebooks, store: store)
-                if let message = search.takeRecognitionNotice() {
-                    notice = Notice(title: "Handwriting re-read", message: message)
-                }
-                await search.search(searchText)
-            }
+            // The grid is what the user came for. It is shown as soon as the
+            // notebook list is in; the work below arrives on its own, so it can
+            // no longer hold up the first frame.
+            isLoading = false
+            await loadSupportingContent()
         } catch {
             // A failed open is recoverable: the library shows this message with a
             // retry button instead of an empty grid.
             loadError = error.localizedDescription
+            isLoading = false
         }
-        isLoading = false
+    }
+
+    /// Templates, the two library sweeps, study sets, text documents, boards,
+    /// the cover prune and the search index. None of them is needed to draw the
+    /// library, so they run after its first frame — but all of them still run on
+    /// every launch, and each keeps its own loading state where a screen shows
+    /// one.
+    private func loadSupportingContent() async {
+        templates.load()
+        await purgeExpiredTrash()
+        await sweepOrphanedHistory()
+        await study.load()
+        await textDocs.load()
+        await boards.load()
+        Task {
+            _ = try? await history.prune(keeping: .default)
+        }
+        Task.detached(priority: .utility) { [store] in
+            LibraryCovers.pruneStaleCovers(store: store)
+        }
+        Task {
+            await search.indexAll(notebooks: notebooks, store: store)
+            if let message = search.takeRecognitionNotice() {
+                notice = Notice(title: "Handwriting re-read", message: message)
+            }
+            await search.search(searchText)
+        }
     }
 
     /// Re-runs the whole load after a failure.
