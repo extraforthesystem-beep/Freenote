@@ -345,6 +345,9 @@ struct NotebookPane: View {
         .onDisappear {
             session.audio.stopPlayback()
             editor.saveNow()
+            // This pane's PDF is done with: drop the parsed document so PDFKit's
+            // page caches are freed instead of waiting for the idle timeout.
+            PDFLinkHandler.removeCachedDocument()
             Task {
                 await session.flushPendingSave()
                 await session.audio.stopRecording()
