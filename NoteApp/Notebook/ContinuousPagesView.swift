@@ -463,8 +463,36 @@ class PagesView: UIView {
         guard abs(target.x - scroll.contentOffset.x) > 0.5 || abs(target.y - scroll.contentOffset.y) > 0.5 else {
             return
         }
+        jump(scroll, to: target)
+    }
+
+    /// A page jump's timing, the `AppMotion.emphasized` spring: the same move
+    /// in both scroll modes.
+    private enum JumpMotion {
+        static let duration: TimeInterval = 0.35
+        static let damping: CGFloat = 0.82
+    }
+
+    /// Scrolls a programmatic page move into place. Reduce Motion makes it an
+    /// instant change; the completion does what `scrollViewDidEndScrollingAnimation`
+    /// does for the animated path.
+    func jump(_ scroll: UIScrollView, to target: CGPoint) {
+        guard !UIAccessibility.isReduceMotionEnabled else {
+            scroll.setContentOffset(target, animated: false)
+            return
+        }
         didStartProgrammaticScroll()
-        scroll.setContentOffset(target, animated: true)
+        UIView.animate(
+            withDuration: JumpMotion.duration,
+            delay: 0,
+            usingSpringWithDamping: JumpMotion.damping,
+            initialSpringVelocity: 0
+        ) {
+            scroll.setContentOffset(target, animated: false)
+        } completion: { _ in
+            self.scheduleRenders()
+            self.programmaticScrollDidEnd()
+        }
     }
 
     /// The content offset that brings `rect` (in `scroll`'s coordinates)
@@ -887,9 +915,11 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
         let minY = -scroll.contentInset.top
         let maxY = max(scroll.contentSize.height + scroll.contentInset.bottom - scroll.bounds.height, minY)
         let target = CGPoint(x: scroll.contentOffset.x, y: min(max(y, minY), maxY))
-        if abs(target.y - scroll.contentOffset.y) > 0.5 {
-            if animated { didStartProgrammaticScroll() }
-            scroll.setContentOffset(target, animated: animated)
+        guard abs(target.y - scroll.contentOffset.y) > 0.5 else { return }
+        if animated {
+            jump(scroll, to: target)
+        } else {
+            scroll.setContentOffset(target, animated: false)
         }
     }
 
@@ -1272,9 +1302,13 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
         guard stride > 1, let index = activeIndex else { return }
         let target = CGPoint(x: CGFloat(index) * stride, y: 0)
         guard abs(pager.contentOffset.x - target.x) > 0.5 else { return }
-        let isNeighbour = abs((currentIndex() ?? index) - index) == 1
-        if animated && isNeighbour { didStartProgrammaticScroll() }
-        pager.setContentOffset(target, animated: animated && isNeighbour)
+        // A far jump animates too: a thumbnail tap moves the page the same way
+        // in both scroll modes.
+        if animated {
+            jump(pager, to: target)
+        } else {
+            pager.setContentOffset(target, animated: false)
+        }
         refreshSlots()
     }
 
