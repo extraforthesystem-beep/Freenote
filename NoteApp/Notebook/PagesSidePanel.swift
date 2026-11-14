@@ -27,11 +27,13 @@ struct PagesSidePanel: View {
 
     private let columns = [GridItem(.adaptive(minimum: 84, maximum: 120), spacing: 10)]
 
-    /// Pages can be different sizes, so the grid follows the page on screen.
-    private var aspectRatio: CGFloat {
-        guard let page = session.page, page.height > 0 else { return 0.707 }
-        return page.width / page.height
-    }
+    /// The current page's shape, so cells that have no image yet match the
+    /// paper. It is read from the page when the page changes, not while the
+    /// panel draws: `session.page` changes with every stroke, and the panel —
+    /// grid and embedded find bar — must not redraw per stroke.
+    @State private var pageAspect = Self.defaultAspect
+
+    private static let defaultAspect: CGFloat = 0.707
 
     var body: some View {
         HStack(spacing: 0) {
@@ -49,6 +51,12 @@ struct PagesSidePanel: View {
             if isOnLeft { edge }
         }
         .background(.bar)
+        .onChange(of: session.currentPageID, initial: true) { _, _ in
+            refreshPageAspect()
+        }
+        .onChange(of: session.otherPagesToken) { _, _ in
+            refreshPageAspect()
+        }
     }
 
     private var edge: some View {
@@ -127,26 +135,29 @@ struct PagesSidePanel: View {
 
     private func pageCell(_ index: Int) -> some View {
         let isCurrent = index == session.pageIndex
-        return Button {
-            onSelect(index)
-        } label: {
-            VStack(spacing: 3) {
-                PageThumbnailCell(
-                    session: session,
-                    index: index,
-                    isCurrent: isCurrent,
-                    aspectRatio: aspectRatio
-                )
-                Text("\(index + 1)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
-            }
-            .contentShape(Rectangle())
+        // Cells are identified by page, not position: after an insert or a
+        // delete a cell must not keep the previous page's picture.
+        let pageID = session.manifest.pageOrder.indices.contains(index)
+            ? session.manifest.pageOrder[index]
+            : nil
+        return VStack(spacing: AppSpacing.xs) {
+            PageThumbnailCell(
+                session: session,
+                index: index,
+                isCurrent: isCurrent,
+                aspectRatio: pageAspect
+            )
+            Text("\(index + 1)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
         }
-        .buttonStyle(.plain)
-        .id(index)
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect(index) }
+        .id(pageID)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Page \(index + 1)")
-        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { onSelect(index) }
     }
 
     private var addPageTile: some View {
@@ -155,7 +166,7 @@ struct PagesSidePanel: View {
         } label: {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                .aspectRatio(aspectRatio, contentMode: .fit)
+                .aspectRatio(pageAspect, contentMode: .fit)
                 .overlay {
                     VStack(spacing: 4) {
                         Image(systemName: "plus")
@@ -169,6 +180,17 @@ struct PagesSidePanel: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Add Page")
         .help("Add Page")
+    }
+
+    /// Reads the page's shape once per page change, outside `body`, so the
+    /// per-stroke page update never reaches the panel.
+    private func refreshPageAspect() {
+        guard let page = session.page, page.height > 0 else {
+            pageAspect = Self.defaultAspect
+            return
+        }
+        let aspect = page.width / page.height
+        if pageAspect != aspect { pageAspect = aspect }
     }
 }
 
