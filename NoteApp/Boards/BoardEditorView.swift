@@ -72,6 +72,8 @@ struct BoardEditorView: View {
     @State private var snapGuides: [BoardSnapGuide] = []
     @State private var showsPhotoPicker = false
     @State private var photoSelection: PhotosPickerItem?
+    /// True while a picked photo is read and written to the assets folder.
+    @State private var isInsertingImage = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
     @AppStorage(AppSettings.Key.drawWithFinger) private var drawWithFinger = false
@@ -464,7 +466,7 @@ struct BoardEditorView: View {
         }
 
         ToolbarItem(placement: .primaryAction) {
-            if isSaving {
+            if isSaving || isInsertingImage {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -1171,7 +1173,11 @@ extension BoardEditorView {
     }
 
     private func insertImage(from pickerItem: PhotosPickerItem) async {
+        isInsertingImage = true
+        defer { isInsertingImage = false }
+
         guard let data = try? await pickerItem.loadTransferable(type: Data.self) else {
+            model.lastError = "Couldn't read the selected photo. Try again."
             return
         }
         let fileExtension = pickerItem.supportedContentTypes.first?.preferredFilenameExtension
