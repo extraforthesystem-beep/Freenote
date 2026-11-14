@@ -84,7 +84,7 @@ struct PagesSidePanel: View {
             ScrollView {
                 VStack(spacing: AppSpacing.s) {
                     if session.pageCount == 0 {
-                        Text("No pages yet. Use the + beside the page count to add one.")
+                        Text("No pages yet. Tap + Page to add one.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -95,6 +95,8 @@ struct PagesSidePanel: View {
                         ForEach(0..<session.pageCount, id: \.self) { index in
                             pageCell(index)
                         }
+                        // The one-tap Add Page now the page pill is gone.
+                        addPageTile
                     }
                     .padding(AppSpacing.s)
                 }
@@ -108,6 +110,29 @@ struct PagesSidePanel: View {
                 proxy.scrollTo(session.pageIndex, anchor: .center)
             }
         }
+    }
+
+    private var addPageTile: some View {
+        Button {
+            Task { await session.addPage() }
+        } label: {
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
+                .strokeBorder(.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4]))
+                .aspectRatio(pageAspect, contentMode: .fit)
+                .overlay {
+                    VStack(spacing: AppSpacing.xs) {
+                        Image(systemName: "plus")
+                            .font(.title3)
+                        Text("Page")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add Page")
+        .help("Add Page")
     }
 
     private func pageCell(_ index: Int) -> some View {
