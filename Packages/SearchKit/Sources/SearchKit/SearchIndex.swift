@@ -463,6 +463,9 @@ public actor SearchIndex {
             segments.append(PageTextSegment(source: .typedText, text: typed))
         }
         let pdfText = await pdfText(for: page, assetsDirectory: assetsDirectory)
+        // A pass cancelled mid-extraction must not store a page without its PDF
+        // text: the unchanged hash would keep the gap forever.
+        guard !Task.isCancelled else { return nil }
         if !pdfText.isEmpty {
             segments.append(PageTextSegment(source: .pdf, text: pdfText))
         }

@@ -106,6 +106,35 @@ private actor ExtractionGate {
     #expect(await index.search("scanned").count == 1)
 }
 
+@Test func cancelledPDFExtractionStoresNothing() async throws {
+    let root = try pdfTestRoot()
+    let gate = ExtractionGate()
+    let index = SearchIndex(root: root, pdfTextExtractor: { _, _ in await gate.run() })
+    let page = pdfTestPage(assetName: "sha256-asset.pdf")
+    let notebookID = UUID()
+
+    let update = Task {
+        try await index.update(
+            page: page,
+            in: notebookID,
+            using: NoTextRecognizer(),
+            assetsDirectory: root
+        )
+    }
+    let safety = Task {
+        try? await Task.sleep(for: .seconds(3))
+        await gate.release()
+    }
+
+    await gate.waitUntilStarted()
+    update.cancel()
+    await gate.release()
+    let stored = try await update.value
+    safety.cancel()
+    #expect(stored == nil)
+    #expect(await index.record(for: notebookID, pageID: page.id) == nil)
+}
+
 private actor ExtractionCounter {
     private(set) var calls = 0
 
