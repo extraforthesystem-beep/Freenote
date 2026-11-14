@@ -206,6 +206,8 @@ private struct PageThumbnailCell: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var image: InkImage?
     @State private var failed = false
+    /// Bumped by a retry so the load task runs again.
+    @State private var retryCount = 0
 
     private var pageID: UUID? {
         session.manifest.pageOrder.indices.contains(index)
@@ -230,8 +232,7 @@ private struct PageThumbnailCell: View {
                     .scaledToFill()
                     .clipShape(RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous))
             } else if failed {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.tertiary)
+                retryButton
             } else {
                 ProgressView()
                     .controlSize(.mini)
@@ -250,10 +251,36 @@ private struct PageThumbnailCell: View {
         }
     }
 
+    /// A thumbnail that did not load says so and can be tried again.
+    private var retryButton: some View {
+        Button(action: retry) {
+            VStack(spacing: AppSpacing.xxs) {
+                Image(systemName: "exclamationmark.triangle")
+                Text("Couldn’t load. Tap to retry.")
+                    .font(.caption2)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .foregroundStyle(.secondary)
+            .padding(AppSpacing.xs)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Couldn’t load Page \(index + 1). Retry.")
+    }
+
+    private func retry() {
+        guard failed else { return }
+        failed = false
+        // The load task is keyed on this, so it runs again straight away.
+        retryCount += 1
+    }
+
     private var taskKey: String {
         guard let pageID else { return "missing-\(index)" }
         // The current page re-renders after edits; others only when they load.
-        return "\(pageID)-\(isCurrent ? session.revision : 0)-\(usesDarkPaper)"
+        return "\(pageID)-\(isCurrent ? session.revision : 0)-\(usesDarkPaper)-\(retryCount)"
     }
 
     /// Small enough to be cheap, sharp enough for a panel-sized cell on Retina.
