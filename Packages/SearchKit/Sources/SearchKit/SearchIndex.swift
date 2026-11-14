@@ -182,21 +182,96 @@ public enum SearchIndexError: Error, Hashable, Sendable, CustomStringConvertible
 /// call runs off the index actor, so a slow scan never stalls a search.
 typealias PDFTextExtractor = @Sendable (_ url: URL, _ pageIndex: Int) async -> String
 
+/// Streams the fields a page's fingerprint is made of straight into SHA256,
+/// without encoding the strokes to JSON first. Every field the index cares
+/// about is fed with a fixed width, so any change changes the digest.
+private struct InkHasher {
+    private var hasher = SHA256()
+
+    mutating func add(_ value: UInt64) {
+        var bits = value.littleEndian
+        withUnsafeBytes(of: &bits) { hasher.update(bufferPointer: $0) }
+    }
+
+    mutating func add(_ value: Int) {
+        add(UInt64(bitPattern: Int64(value)))
+    }
+
+    mutating func add(_ value: Double) {
+        add(value.bitPattern)
+    }
+
+    mutating func add(_ value: Bool) {
+        add(UInt64(value ? 1 : 0))
+    }
+
+    mutating func add(_ value: UUID) {
+        withUnsafeBytes(of: value.uuid) { hasher.update(bufferPointer: $0) }
+    }
+
+    mutating func add(_ value: String) {
+        let data = Data(value.utf8)
+        add(UInt64(data.count))
+        hasher.update(data: data)
+    }
+
+    /// Points are the bulk of the data, so their fields go in one pass.
+    mutating func add(_ value: StrokePoint) {
+        withUnsafeBytes(of: value) { hasher.update(bufferPointer: $0) }
+    }
+
+    mutating func add(_ value: PathElement) {
+        switch value {
+        case let .move(x, y):
+            add(UInt64(0))
+            add(x)
+            add(y)
+        case let .line(x, y):
+            add(UInt64(1))
+            add(x)
+            add(y)
+        case let .quad(cx, cy, x, y):
+            add(UInt64(2))
+            add(cx)
+            add(cy)
+            add(x)
+            add(y)
+        case let .cubic(c1x, c1y, c2x, c2y, x, y):
+            add(UInt64(3))
+            add(c1x)
+            add(c1y)
+            add(c2x)
+            add(c2y)
+            add(x)
+            add(y)
+        case .close:
+            add(UInt64(4))
+        }
+    }
+
+    mutating func add(optional value: UUID?) {
+        add(value != nil)
+        if let value { add(value) }
+    }
+
+    mutating func add(optional value: StrokeRecord.GrainOffset?) {
+        add(value != nil)
+        if let value {
+            add(value.x)
+            add(value.y)
+        }
+    }
+
+    func digest() -> String {
+        hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 /// Page text plus the ink fingerprint it was recognised from, persisted as one JSON file.
 public actor SearchIndex {
     private struct PageKey: Hashable, Sendable {
         var notebookID: UUID
         var pageID: UUID
-    }
-
-    private struct InkSnapshot: Encodable {
-        var strokes: [StrokeRecord]
-        var deletedStrokeIDs: [String]
-        /// Typed text boxes are searchable too, and changing one must re-index.
-        var typedText: String
-        /// PDF page references are part of the fingerprint so pointing a page at
-        /// a different PDF asset re-indexes it.
-        var pdfRefs: [String]
     }
 
     private static let indexFileName = "search-index.json"
@@ -807,16 +882,39 @@ public actor SearchIndex {
     }
 
     static func contentHash(of page: Page) -> String {
-        let snapshot = InkSnapshot(
-            strokes: page.strokes,
-            deletedStrokeIDs: page.deletedStrokeIDs.map(\.uuidString).sorted(),
-            typedText: typedText(in: page),
-            pdfRefs: pdfRefs(in: page)
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        guard let data = try? encoder.encode(snapshot) else { return "" }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        var hash = InkHasher()
+        hash.add(page.strokes.count)
+        for stroke in page.strokes {
+            hash.add(stroke.id)
+            hash.add(stroke.layerID)
+            hash.add(stroke.tool.engine)
+            hash.add(stroke.tool.inkType)
+            hash.add(stroke.tool.color.r)
+            hash.add(stroke.tool.color.g)
+            hash.add(stroke.tool.color.b)
+            hash.add(stroke.tool.color.a)
+            hash.add(stroke.tool.width)
+            hash.add(stroke.tool.isHighlighter)
+            hash.add(stroke.createdAt.timeIntervalSince1970)
+            hash.add(stroke.transform.count)
+            for value in stroke.transform { hash.add(value) }
+            hash.add(UInt64(stroke.randomSeed))
+            hash.add(stroke.mask?.count ?? -1)
+            for element in stroke.mask ?? [] { hash.add(element) }
+            hash.add(optional: stroke.renderGroupID)
+            hash.add(optional: stroke.pathID)
+            hash.add(optional: stroke.grainOffset)
+            hash.add(stroke.points.count)
+            for point in stroke.points { hash.add(point) }
+        }
+        let deleted = page.deletedStrokeIDs.map(\.uuidString).sorted()
+        hash.add(deleted.count)
+        for identifier in deleted { hash.add(identifier) }
+        hash.add(typedText(in: page))
+        let refs = pdfRefs(in: page)
+        hash.add(refs.count)
+        for reference in refs { hash.add(reference) }
+        return hash.digest()
     }
 
     private func sortedRecords() -> [PageSearchRecord] {
