@@ -21,11 +21,11 @@ enum PDFImportError: LocalizedError {
         case .noPages: "No page could be imported."
         case .passwordRequired: "This PDF is protected. Enter its password to import it."
         case .wrongPassword: "That password did not work. Try again."
-        case .insertFailed: "The PDF pages could not be added to this notebook."
+        case .insertFailed: "The PDF pages could not be inserted into this notebook."
         case let .partialInsert(added, total):
             added >= total
-                ? "All \(total) pages were added, but the notebook could not be updated. Close this sheet instead of importing again."
-                : "\(added) of \(total) pages were added before the import stopped. Those pages are already in the notebook, so close this sheet instead of importing again."
+                ? "All \(total) pages were inserted, but the notebook could not be updated. Close this sheet instead of inserting again."
+                : "\(added) of \(total) pages were inserted before the insert stopped. Those pages are already in the notebook, so close this sheet instead of inserting again."
         }
     }
 }
@@ -170,6 +170,9 @@ enum PDFImporter {
             var pageIDs: [UUID] = []
             pageIDs.reserveCapacity(scan.pages.count)
             for (done, scanned) in scan.pages.enumerated() {
+                // A cancelled import leaves nothing behind: the catch below
+                // removes the half-created notebook.
+                try Task.checkCancellation()
                 let page = makePage(scanned, assetName: assetName, margin: margin)
                 try await store.savePage(page, in: manifest.id)
                 pageIDs.append(page.id)
@@ -219,7 +222,11 @@ enum PDFImporter {
             progress: scaledProgress(onProgress, to: 0.8)
         )
 
+        // Nothing is written until the scan is done, so a cancel here leaves the
+        // notebook exactly as it was.
+        try Task.checkCancellation()
         let assetName = try await store.addAsset(scan.data, fileExtension: "pdf", to: notebookID)
+        try Task.checkCancellation()
         let pages = scan.pages.map { makePage($0, assetName: assetName, margin: margin) }
         let index = atEnd ? session.pageCount : session.pageIndex + 1
 
@@ -273,7 +280,9 @@ enum PDFImporter {
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> ScanResult {
         let fallbackPageSize = CGSize(width: PageDefaults.width, height: PageDefaults.height)
-        return try await Task.detached(priority: .userInitiated) { () throws -> ScanResult in
+        // A detached task does not inherit the caller's cancellation, so it is
+        // forwarded: a cancelled import must not keep scanning a 1 000-page PDF.
+        return try await detached(priority: .userInitiated) { () throws -> ScanResult in
             let (document, originalData) = try open(url, password: password)
             let indices = selection.pdfIndices(pageCount: document.pageCount)
             guard !indices.isEmpty else { throw PDFImportError.noPages }
@@ -282,6 +291,7 @@ enum PDFImporter {
             pages.reserveCapacity(indices.count)
             var hasInk = false
             for (done, index) in indices.enumerated() {
+                try Task.checkCancellation()
                 guard let pdfPage = document.page(at: index) else { continue }
                 var bounds = pdfPage.bounds(for: .mediaBox)
                 if bounds.width <= 1 || bounds.height <= 1 {
@@ -315,7 +325,7 @@ enum PDFImporter {
             }
 
             return ScanResult(data: stored, pages: pages, outline: outline)
-        }.value
+        }
     }
 
     /// Opens the PDF, unlocking it when needed, and hands back the bytes it was
@@ -349,6 +359,21 @@ enum PDFImporter {
     ) -> (@Sendable (Double) -> Void)? {
         guard let progress else { return nil }
         return { fraction in progress(fraction * share) }
+    }
+
+    /// Runs `work` off the main task and forwards the caller's cancellation to
+    /// it. `Task.detached` does not inherit cancellation on its own, so without
+    /// this a cancelled import would keep scanning every page.
+    private nonisolated static func detached<T: Sendable>(
+        priority: TaskPriority = .userInitiated,
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        let task = Task.detached(priority: priority, operation: work)
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     // MARK: - Pages

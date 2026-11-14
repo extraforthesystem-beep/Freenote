@@ -4,7 +4,8 @@ import UIKit
 #endif
 
 struct RootView: View {
-    @State private var model = AppModel()
+    /// Owned by the app, so the Mac's Settings window edits the same library.
+    let model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     /// The appearance choice; `nil` follows the device.
     @AppStorage(AppSettings.Key.theme) private var theme: AppTheme = .system
@@ -80,5 +81,5 @@ struct RootView: View {
 }
 
 #Preview {
-    RootView()
+    RootView(model: AppModel())
 }
