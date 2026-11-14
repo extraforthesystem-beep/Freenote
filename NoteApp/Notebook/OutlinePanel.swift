@@ -31,9 +31,7 @@ struct OutlinePanel: View {
                     )
                 } else {
                     Section {
-                        ForEach(Array(pageIDs.enumerated()), id: \.element) { index, pageID in
-                            row(index: index, pageID: pageID)
-                        }
+                        rows
                     } footer: {
                         Text("Tap a page to open it. Use the bookmark button to pin pages you return to.")
                     }
@@ -64,11 +62,19 @@ struct OutlinePanel: View {
         }
     }
 
+    /// Every row of the outline, with the bookmark set built once for the
+    /// whole pass rather than once per row.
+    private var rows: some View {
+        let bookmarked = bookmarkedIDs
+        return ForEach(Array(pageIDs.enumerated()), id: \.element) { index, pageID in
+            row(index: index, pageID: pageID, isBookmarked: bookmarked.contains(pageID))
+        }
+    }
+
     @ViewBuilder
-    private func row(index: Int, pageID: UUID) -> some View {
+    private func row(index: Int, pageID: UUID, isBookmarked: Bool) -> some View {
         let title = outline.title(notebookID: session.notebookID, pageID: pageID) ?? "Page \(index + 1)"
         let isCurrent = index == session.pageIndex
-        let isBookmarked = bookmarkedIDs.contains(pageID)
 
         HStack(spacing: 12) {
             Text("\(index + 1)")
