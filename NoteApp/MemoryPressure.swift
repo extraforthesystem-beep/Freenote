@@ -5,6 +5,7 @@ import UIKit
 ///
 /// The page images, sharp paper backgrounds, thumbnails, template previews and
 /// library covers can hold over 400 MB between them at their cost limits.
+
 /// `NSCache` evicts under pressure on its own schedule, which is not
 /// documented to happen at a memory warning; on a 4 GB iPad the warning is the
 /// last chance before the app is terminated. Everything here is re-rendered on
@@ -31,6 +32,7 @@ enum MemoryPressure {
         PageBackgroundCache.removeAll()
         ThumbnailCache.removeAll()
         TemplateImageCache.removeAll()
+        CustomTemplateStore.removeAllPreviews()
         LibraryCovers.removeAllFromMemory()
     }
 }

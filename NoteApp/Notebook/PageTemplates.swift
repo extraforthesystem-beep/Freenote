@@ -34,9 +34,10 @@ struct PageTemplateItem: Identifiable, Hashable {
 }
 
 enum PageTemplateCatalog {
-    static let pageWidth: Double = 595
-    static let pageHeight: Double = 842
-    static let pageSize = CGSize(width: pageWidth, height: pageHeight)
+    // Read off the main actor too: previews are drawn in a detached task.
+    nonisolated static let pageWidth: Double = 595
+    nonisolated static let pageHeight: Double = 842
+    nonisolated static let pageSize = CGSize(width: pageWidth, height: pageHeight)
 
     static let lineColor = RGBAColor(r: 0.60, g: 0.67, b: 0.77)
     static let warmLineColor = RGBAColor(r: 0.68, g: 0.62, b: 0.54)
@@ -112,8 +113,21 @@ enum PageTemplateCatalog {
     }
 }
 
+/// The memory a bitmap takes, for the image caches' cost limits.
+nonisolated func bitmapCost(_ image: InkImage) -> Int {
+    #if os(iOS)
+    let pixels = image.size.width * image.size.height * image.scale * image.scale
+    #else
+    let pixels = image.size.width * image.size.height
+    #endif
+    return Int(pixels * 4)
+}
+
 @MainActor
 enum TemplateImageCache {
+    /// Preview bitmaps are drawn at this scale; a picker cell is small.
+    nonisolated static let previewScale: CGFloat = 0.8
+
     private static let cache: NSCache<NSString, InkImage> = {
         let cache = NSCache<NSString, InkImage>()
         cache.totalCostLimit = 64 * 1_024 * 1_024
@@ -124,25 +138,31 @@ enum TemplateImageCache {
         cache.removeAllObjects()
     }
 
-    static func image(
-        for template: PageTemplate,
-        pageSize: CGSize = PageTemplateCatalog.pageSize,
-        scale: CGFloat = 2
-    ) -> InkImage? {
-        let key = "\(template.kind)-\(template.spacing)-\(template.lineColor)-\(template.paperColor)-\(pageSize)-\(scale)" as NSString
-        if let cached = cache.object(forKey: key) {
-            return cached
-        }
-        guard let image = TemplateRenderer.image(template, pageSize: pageSize, scale: scale) else {
-            return nil
-        }
-        let cost = Int(pageSize.width * pageSize.height * scale * scale * 4)
-        cache.setObject(image, forKey: key, cost: cost)
-        return image
+    /// The preview if it is already drawn. Never draws: a view body must not.
+    static func cachedPreview(for template: PageTemplate) -> InkImage? {
+        cache.object(forKey: key(for: template))
     }
 
-    static func preview(for template: PageTemplate) -> InkImage? {
-        image(for: template, pageSize: PageTemplateCatalog.pageSize, scale: 0.8)
+    /// Keeps a preview drawn off the main actor.
+    static func storePreview(_ image: InkImage, for template: PageTemplate) {
+        cache.setObject(image, forKey: key(for: template), cost: bitmapCost(image))
+    }
+
+    /// Draws a preview off the main actor. The caller stores it and shows it,
+    /// so a cell's body never renders one.
+    nonisolated static func renderedPreview(for template: PageTemplate) async -> InkImage? {
+        await Task.detached(priority: .utility) {
+            TemplateRenderer.image(
+                template,
+                pageSize: PageTemplateCatalog.pageSize,
+                scale: previewScale
+            )
+        }.value
+    }
+
+    private static func key(for template: PageTemplate) -> NSString {
+        let pageSize = PageTemplateCatalog.pageSize
+        return "\(template.kind)-\(template.spacing)-\(template.lineColor)-\(template.paperColor)-\(pageSize)-\(previewScale)" as NSString
     }
 }
 
@@ -179,9 +199,16 @@ enum CustomTemplateError: LocalizedError {
 final class CustomTemplateStore {
     /// The imported templates, oldest first.
     private(set) var templates: [CustomPageTemplate] = []
+    /// The index file exists but could not be read. The list in memory is not
+    /// the truth then, so the picker offers a retry instead of showing an empty
+    /// Custom section, as though the templates had been deleted.
+    private(set) var indexUnreadable = false
 
     private let root: URL
-    @ObservationIgnored private let previews: NSCache<NSString, InkImage> = {
+    /// Preview bitmaps, keyed by the template's file: the file name is a
+    /// content hash, so two templates never share a key by accident. Static so
+    /// a memory warning can empty it.
+    @ObservationIgnored private static let previews: NSCache<NSString, InkImage> = {
         let cache = NSCache<NSString, InkImage>()
         cache.totalCostLimit = 32 * 1_024 * 1_024
         return cache
@@ -195,8 +222,18 @@ final class CustomTemplateStore {
         root.appendingPathComponent("index.json")
     }
 
+    /// Where an index that could not be read is kept when the list is written
+    /// again, so its bytes are never lost by a failed read.
+    private var unreadableIndexFile: URL {
+        root.appendingPathComponent("index-unreadable.json")
+    }
+
     private func fileURL(for template: CustomPageTemplate) -> URL {
         root.appendingPathComponent(template.assetName)
+    }
+
+    static func removeAllPreviews() {
+        previews.removeAllObjects()
     }
 
     // MARK: - Reading
@@ -204,26 +241,46 @@ final class CustomTemplateStore {
     /// Re-reads the index. Templates whose file has gone are left out, so a
     /// deleted or half-copied file cannot show as a blank thumbnail.
     func load() {
-        guard let data = try? Data(contentsOf: indexFile),
-              let stored = try? JSONDecoder().decode([CustomPageTemplate].self, from: data)
-        else {
-            templates = []
-            return
+        indexUnreadable = false
+        templates = []
+        guard FileManager.default.fileExists(atPath: indexFile.path) else { return }
+        do {
+            let data = try Data(contentsOf: indexFile)
+            let stored = try JSONDecoder().decode([CustomPageTemplate].self, from: data)
+            templates = stored.filter { FileManager.default.fileExists(atPath: fileURL(for: $0).path) }
+        } catch {
+            // A corrupt index is not an empty one: keep it and say so.
+            indexUnreadable = true
         }
-        templates = stored.filter { FileManager.default.fileExists(atPath: fileURL(for: $0).path) }
     }
 
-    func preview(for template: CustomPageTemplate) -> InkImage? {
-        let key = "\(template.assetName)-\(PageTemplateCatalog.pageWidth)x\(PageTemplateCatalog.pageHeight)" as NSString
-        if let cached = previews.object(forKey: key) { return cached }
-        guard let image = TemplateRenderer.image(
-            template.template,
-            pageSize: PageTemplateCatalog.pageSize,
-            scale: 0.8,
-            assetsDirectory: root
-        ) else { return nil }
-        previews.setObject(image, forKey: key)
-        return image
+    /// A drawn preview, if there is one. Never draws.
+    func cachedPreview(for template: CustomPageTemplate) -> InkImage? {
+        Self.previews.object(forKey: Self.previewKey(for: template))
+    }
+
+    /// Draws a template's preview off the main actor — it decodes the imported
+    /// picture and draws the whole sheet — and keeps it for the next cell.
+    func renderPreview(for template: CustomPageTemplate) async -> InkImage? {
+        let key = Self.previewKey(for: template)
+        if let cached = Self.previews.object(forKey: key) { return cached }
+        let root = root
+        let pageTemplate = template.template
+        let rendered = await Task.detached(priority: .utility) {
+            TemplateRenderer.image(
+                pageTemplate,
+                pageSize: PageTemplateCatalog.pageSize,
+                scale: TemplateImageCache.previewScale,
+                assetsDirectory: root
+            )
+        }.value
+        guard let rendered else { return nil }
+        Self.previews.setObject(rendered, forKey: key, cost: bitmapCost(rendered))
+        return rendered
+    }
+
+    private static func previewKey(for template: CustomPageTemplate) -> NSString {
+        "\(template.assetName)-\(PageTemplateCatalog.pageWidth)x\(PageTemplateCatalog.pageHeight)" as NSString
     }
 
     // MARK: - Importing
@@ -239,24 +296,15 @@ final class CustomTemplateStore {
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
         let isPDF = url.pathExtension.lowercased() == "pdf"
-        let bytes: Data?
-        if isPDF {
-            bytes = await Self.rasterisedFirstPage(at: url)
-        } else {
-            bytes = await Task.detached(priority: .userInitiated) {
-                try? Data(contentsOf: url)
-            }.value
-        }
-        guard let bytes, !bytes.isEmpty else { throw CustomTemplateError.unreadableFile }
+        // Reading (and checking) the file, then writing it under its content
+        // hash, is one off-main job: a multi-megabyte picture or a rasterised
+        // PDF page is not work for the actor that draws the UI.
+        let root = root
+        let assetName = try await Task.detached(priority: .userInitiated) {
+            try await Self.storeCopy(of: url, isPDF: isPDF, in: root)
+        }.value
 
-        let fileExtension = isPDF ? "png" : Self.imageExtension(for: bytes, url: url)
-        guard isPDF || Self.isReadableImage(bytes) else { throw CustomTemplateError.unreadableFile }
-
-        let template = CustomPageTemplate(
-            id: UUID(),
-            name: trimmed,
-            assetName: try writeTemplateFile(bytes, fileExtension: fileExtension)
-        )
+        let template = CustomPageTemplate(id: UUID(), name: trimmed, assetName: assetName)
         templates.append(template)
         save()
         return template
@@ -270,7 +318,7 @@ final class CustomTemplateStore {
             try? FileManager.default.removeItem(at: fileURL(for: template))
         }
         save()
-        previews.removeAllObjects()
+        Self.previews.removeAllObjects()
     }
 
     // MARK: - Using
@@ -293,6 +341,13 @@ final class CustomTemplateStore {
     private func save() {
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if indexUnreadable {
+                // The index on disk could not be read: keep its bytes beside
+                // the new one rather than writing over it.
+                try? FileManager.default.removeItem(at: unreadableIndexFile)
+                try? FileManager.default.moveItem(at: indexFile, to: unreadableIndexFile)
+                indexUnreadable = false
+            }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(templates).write(to: indexFile, options: .atomic)
@@ -302,7 +357,29 @@ final class CustomTemplateStore {
         }
     }
 
-    private func writeTemplateFile(_ data: Data, fileExtension: String) throws -> String {
+    /// Reads the chosen file, checks it, and keeps a copy under its content
+    /// hash. Synchronous and off the main actor, so the read, the check and the
+    /// write are one job; the caller runs it in a detached task.
+    private nonisolated static func storeCopy(of url: URL, isPDF: Bool, in root: URL) async throws -> String {
+        let bytes: Data?
+        if isPDF {
+            bytes = await Self.rasterisedFirstPage(at: url)
+        } else {
+            bytes = try? Data(contentsOf: url)
+        }
+        guard let bytes, !bytes.isEmpty else { throw CustomTemplateError.unreadableFile }
+
+        let fileExtension = isPDF ? "png" : Self.imageExtension(for: bytes, url: url)
+        guard isPDF || Self.isReadableImage(bytes) else { throw CustomTemplateError.unreadableFile }
+
+        return try writeTemplateFile(bytes, fileExtension: fileExtension, in: root)
+    }
+
+    private nonisolated static func writeTemplateFile(
+        _ data: Data,
+        fileExtension: String,
+        in root: URL
+    ) throws -> String {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let name = Self.hexString(Data(SHA256.hash(data: data))) + "." + fileExtension
         let file = root.appendingPathComponent(name)
@@ -312,13 +389,13 @@ final class CustomTemplateStore {
         return name
     }
 
-    private static func hexString(_ data: Data) -> String {
+    private nonisolated static func hexString(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
     /// The extension to store a picture under. Kept from the file, or PNG when
     /// it has none; only our own loaders read it.
-    private static func imageExtension(for data: Data, url: URL) -> String {
+    private nonisolated static func imageExtension(for data: Data, url: URL) -> String {
         let stored = url.pathExtension.lowercased()
         if !stored.isEmpty { return stored }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -327,7 +404,7 @@ final class CustomTemplateStore {
         return (type as String).split(separator: ".").last.map(String.init)?.lowercased() ?? "png"
     }
 
-    private static func isReadableImage(_ data: Data) -> Bool {
+    private nonisolated static func isReadableImage(_ data: Data) -> Bool {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
         return CGImageSourceGetCount(source) > 0 && CGImageSourceCreateImageAtIndex(source, 0, nil) != nil
     }
