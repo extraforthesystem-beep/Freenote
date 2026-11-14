@@ -416,6 +416,56 @@ extension Page {
     }
 }
 
+/// Which paper pre-renders are waiting, which one is drawing, and which have
+/// gone stale. Kept apart from the drawing so the rules — one at a time, one
+/// draw per key, a page that left is never drawn — can be tested without a
+/// renderer.
+struct PagePrewarmQueue {
+    private var waiting: [String] = []
+    private var known: Set<String> = []
+    /// The key being drawn, if any.
+    private(set) var running: String?
+
+    var isIdle: Bool { known.isEmpty }
+    /// The keys still waiting for their turn, in order.
+    var waitingKeys: [String] { waiting }
+
+    func contains(_ key: String) -> Bool { known.contains(key) }
+
+    /// Adds `key` unless it is already drawn, waiting or drawing. Returns
+    /// whether it was added, so a caller never draws one key twice.
+    @discardableResult
+    mutating func enqueue(_ key: String) -> Bool {
+        guard known.insert(key).inserted else { return false }
+        waiting.append(key)
+        return true
+    }
+
+    /// The next key to draw, or `nil` while one is still drawing.
+    mutating func start() -> String? {
+        guard running == nil, !waiting.isEmpty else { return nil }
+        let key = waiting.removeFirst()
+        running = key
+        return key
+    }
+
+    /// The draw for `key` is over, whatever it produced.
+    mutating func finish(_ key: String) {
+        known.remove(key)
+        if running == key { running = nil }
+    }
+
+    /// The page left the viewport before its turn: it never draws. A key that
+    /// is already drawing is not dropped (its draw cannot be stopped here).
+    @discardableResult
+    mutating func drop(_ key: String) -> Bool {
+        guard running != key, let index = waiting.firstIndex(of: key) else { return false }
+        waiting.remove(at: index)
+        known.remove(key)
+        return true
+    }
+}
+
 @MainActor
 enum PageBackgroundCache {
     static let baseScale: CGFloat = 2
@@ -448,6 +498,10 @@ enum PageBackgroundCache {
     /// ~77 ms on an M-class Mac, release, more on a base iPad) would otherwise
     /// show plain paper until its image arrived. Only such pages are
     /// pre-rendered; `page` is the page as drawn (`withoutTape`).
+    ///
+    /// The caller runs one of these at a time through `PagePrewarmQueue`, and
+    /// checks the cache before calling; this rechecks it around the draw so a
+    /// page that became active meanwhile is never drawn twice.
     static func prewarm(_ page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) async {
         let isCostly = page.visibleElements.contains { element in
             switch element.content {
@@ -455,7 +509,7 @@ enum PageBackgroundCache {
             default: false
             }
         }
-        guard isCostly else { return }
+        guard isCostly, !Task.isCancelled else { return }
         let key = baseKey(for: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
         guard cached(key: key, scale: baseScale) == nil else { return }
         let scale = baseScale
@@ -470,7 +524,7 @@ enum PageBackgroundCache {
                 usesDarkPaper: usesDarkPaper
             )
         }.value
-        guard let rendered, cached(key: key, scale: scale) == nil else { return }
+        guard !Task.isCancelled, let rendered, cached(key: key, scale: scale) == nil else { return }
         store(rendered, key: key, scale: scale, page: page)
     }
 

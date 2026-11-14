@@ -28,8 +28,8 @@ import UIKit.UIGestureRecognizerSubclass
 // show an image rendered off the main actor with `PageRenderer`, cached in
 // `PageImageCache` by notebook token + page id at a scale that follows the
 // settled zoom. A nearby page with a PDF page or photo also gets its live
-// paper pre-rendered (`PageBackgroundCache.prewarm`), so activating it does
-// not draw that paper on the main actor.
+// paper pre-rendered off the main actor, queued one at a time (`PagePrewarmQueue`),
+// so activating it does not draw that paper on the main actor.
 //
 // Slots are created lazily for the pages near the viewport (plus the active
 // page) and dropped as they scroll away, so a 300-page notebook only has a
@@ -275,6 +275,19 @@ class PagesView: UIView {
     private var renderOverrides: [UUID: Page] = [:]
     private var renderTask: Task<Void, Never>?
 
+    /// A paper pre-render waiting for its turn (see `schedulePrewarm`).
+    private struct PrewarmRequest {
+        let page: Page
+        let assetsDirectory: URL?
+        let usesDarkPaper: Bool
+    }
+
+    /// Paper pre-renders are queued, not started: one draws at a time and each
+    /// key draws once. A page image does not wait for them.
+    private var prewarmQueue = PagePrewarmQueue()
+    private var prewarmRequests: [String: PrewarmRequest] = [:]
+    private var prewarmTask: Task<Void, Never>?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
@@ -483,6 +496,7 @@ class PagesView: UIView {
     func dropSlot(_ pageID: UUID) {
         slots[pageID]?.removeFromSuperview()
         slots[pageID] = nil
+        dropPrewarm(for: pageID)
     }
 
     func configure(_ slot: PageSlotView) {
@@ -661,14 +675,55 @@ class PagesView: UIView {
         PageImageCache.store(image, scale: scale, key: key(for: pageID, source: source))
         if pageID != activePageID {
             slots[pageID]?.show(image, scale: scale)
-            // Not awaited: the next page image should not wait for it.
-            Task {
+            // Queued, never awaited: the next page image should not wait for it.
+            schedulePrewarm(page.withoutTape, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
+        }
+    }
+
+    // MARK: Paper pre-renders
+
+    /// Queues the 2× paper of a nearby page so activating it does not draw a
+    /// PDF page or photo on the main actor. One pre-render runs at a time, and
+    /// a key that is cached, waiting or drawing is not queued again.
+    private func schedulePrewarm(_ page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) {
+        let key = PageBackgroundCache.baseKey(
+            for: page,
+            assetsDirectory: assetsDirectory,
+            usesDarkPaper: usesDarkPaper
+        )
+        guard PageBackgroundCache.cached(key: key, scale: PageBackgroundCache.baseScale) == nil,
+              prewarmQueue.enqueue(key)
+        else { return }
+        prewarmRequests[key] = PrewarmRequest(
+            page: page,
+            assetsDirectory: assetsDirectory,
+            usesDarkPaper: usesDarkPaper
+        )
+        guard prewarmTask == nil else { return }
+        prewarmTask = Task { [weak self] in
+            while let self, !Task.isCancelled, let key = self.prewarmQueue.start() {
+                defer { self.prewarmQueue.finish(key) }
+                guard let request = self.prewarmRequests.removeValue(forKey: key) else { continue }
+                // The page scrolled away while it waited: nothing to pre-render.
+                guard self.slots[request.page.id] != nil, request.page.id != self.activePageID else {
+                    continue
+                }
                 await PageBackgroundCache.prewarm(
-                    page.withoutTape,
-                    assetsDirectory: assetsDirectory,
-                    usesDarkPaper: usesDarkPaper
+                    request.page,
+                    assetsDirectory: request.assetsDirectory,
+                    usesDarkPaper: request.usesDarkPaper
                 )
             }
+            self?.prewarmTask = nil
+        }
+    }
+
+    /// The page left the viewport before its pre-render began: drop it.
+    private func dropPrewarm(for pageID: UUID) {
+        guard !prewarmQueue.isIdle else { return }
+        for key in prewarmQueue.waitingKeys where prewarmRequests[key]?.page.id == pageID {
+            prewarmQueue.drop(key)
+            prewarmRequests[key] = nil
         }
     }
 
