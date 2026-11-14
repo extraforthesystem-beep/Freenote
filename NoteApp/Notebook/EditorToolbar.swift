@@ -60,14 +60,14 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        // No dividers between the edge groups and the centre: the centre takes
+        // the slack, so a divider there would sit in the middle of an empty gap
+        // in landscape. The gap itself separates the groups; the one divider
+        // left sits between two tools that always touch (see `editingGroups`).
+        HStack(spacing: AppSpacing.s) {
             leading
-            ToolbarDivider()
             centre
                 .frame(maxWidth: .infinity)
-            if !editor.isReadOnly {
-                ToolbarDivider()
-            }
             trailing
         }
         .padding(.horizontal, AppSpacing.s)
@@ -166,7 +166,7 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
     }
 
     private func titleLabel(_ title: String) -> some View {
-        HStack(spacing: AppSpacing.xxs) {
+        HStack(spacing: AppSpacing.xs) {
             Text(title)
                 .font(.headline)
                 .lineLimit(1)
@@ -778,47 +778,51 @@ private struct PenSettingsPopover: View {
 
     private let columns = [GridItem(.adaptive(minimum: 64), spacing: 8)]
 
+    /// Top to bottom: the pen types, one width section (presets and slider
+    /// together, so the value is only named once), the line style, the two
+    /// writing-feel switches, and the saved pens last. That fits a portrait
+    /// iPad popover without scrolling in the common case.
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.m) {
-                ToolbarWidthPresets(editor: editor)
-                Divider()
-                FavoritePensContent(editor: editor)
-                Divider()
                 Text("Pen")
                     .font(.headline)
-            LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(PenStyle.allCases, id: \.self) { style in
-                    let isSelected = editor.penStyle == style
-                    Button {
-                        editor.selectPenStyle(style)
-                    } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: style.symbolName)
-                                .font(.system(size: 20))
-                                .frame(height: 26)
-                            Text(style.displayName)
-                                .font(.caption2)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(PenStyle.allCases, id: \.self) { style in
+                        let isSelected = editor.penStyle == style
+                        Button {
+                            editor.selectPenStyle(style)
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: style.symbolName)
+                                    .font(.system(size: 20))
+                                    .frame(height: 26)
+                                Text(style.displayName)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .background(
+                                isSelected ? Color.accentColor : Color.secondary.opacity(0.1),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            )
+                            .contentShape(Rectangle())
                         }
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
-                        .background(
-                            isSelected ? Color.accentColor : Color.secondary.opacity(0.1),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        )
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
-            }
-                WidthSlider(editor: editor)
+                Divider()
+                ToolbarWidthPresets(editor: editor, showsSlider: true)
                 Divider()
                 LineStylePicker(editor: editor)
+                Divider()
                 SmoothingSlider(title: "Stabilisation", editor: editor)
                 ScratchOutToggle()
+                Divider()
+                FavoritePensContent(editor: editor)
             }
             .padding(AppSpacing.l)
         }
@@ -832,13 +836,13 @@ private struct WidthSettingsPopover: View {
     @Bindable var editor: EditorToolState
     @AppStorage(AppSettings.Key.highlighterStraightLines) private var straightLines = false
 
+    /// One width section, exactly as the pen popover has it: the value once,
+    /// the three presets, then the slider beneath them.
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text(title)
                 .font(.headline)
-            ToolbarWidthPresets(editor: editor)
-            Divider()
-            WidthSlider(editor: editor)
+            ToolbarWidthPresets(editor: editor, showsSlider: true)
             Divider()
             SmoothingSlider(title: "Stabilisation", editor: editor)
             VStack(alignment: .leading, spacing: 4) {
@@ -862,6 +866,9 @@ struct WidthSlider: View {
     var presetSlot: Int? = nil
     /// The row's heading; the preset editor names the slot it changes.
     var title = "Width"
+    /// False inside the width section, which names the value above the preset
+    /// dots already: the slider then draws on its own.
+    var showsHeader = true
     /// Shown while dragging; written to the editor (and so to disk, debounced)
     /// only when the drag ends.
     @State private var draft: Double?
@@ -884,13 +891,15 @@ struct WidthSlider: View {
             sliderRange.upperBound
         )
         VStack(alignment: .leading, spacing: AppSpacing.s) {
-            HStack {
-                Text(title)
-                    .font(.subheadline)
-                Spacer()
-                Text(PenWidth.label(shown))
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
+            if showsHeader {
+                HStack {
+                    Text(title)
+                        .font(.subheadline)
+                    Spacer()
+                    Text(PenWidth.label(shown))
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
             Slider(
                 value: Binding(
@@ -933,9 +942,7 @@ private struct LineStylePicker: View {
             }
             .pickerStyle(.segmented)
             .accessibilityLabel("Line style")
-            Text("Dashes are part of the stroke, so they keep their place in the page, the thumbnail and the export.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .accessibilityHint("Dashes are part of the stroke, so they keep their place in the page, the thumbnail and the export")
         }
     }
 }
@@ -965,9 +972,7 @@ private struct SmoothingSlider: View {
             )
             .accessibilityLabel(title)
             .accessibilityValue("\(editor.smoothing) of 100")
-            Text("Steadies the saved stroke. 0 keeps every wobble.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .accessibilityHint("Steadies the saved stroke. 0 keeps every wobble")
         }
     }
 }
@@ -981,10 +986,7 @@ private struct ScratchOutToggle: View {
         VStack(alignment: .leading, spacing: 4) {
             Toggle("Scratch to Erase", isOn: $scratchOut)
                 .font(.subheadline)
-                .accessibilityHint("Scribble over ink with the pen to delete it")
-            Text("Scribble over ink to delete the strokes it covers. Off keeps every scribble as ink.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .accessibilityHint("Scribble over ink with the pen to delete it. Off keeps every scribble as ink")
         }
     }
 }
