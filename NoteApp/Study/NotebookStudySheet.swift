@@ -21,8 +21,6 @@ struct NotebookStudySheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var showsReview = false
-    @State private var question = ""
-    @State private var answer = ""
     @State private var errorText: String?
 
     private var pageID: UUID? {
@@ -42,11 +40,15 @@ struct NotebookStudySheet: View {
     }
 
     var body: some View {
+        // One lookup of each per body run; the fields that used to share this
+        // body now live in `NewCardSection`, so typing does not repeat them.
+        let due = dueCount
+        let cards = self.cards
         NavigationStack {
             List {
-                dueSection
-                cardsSection
-                addSection
+                dueSection(due)
+                cardsSection(cards)
+                NewCardSection(study: study, session: session) { errorText = $0 }
             }
             #if os(iOS)
             .listStyle(.insetGrouped)
@@ -74,10 +76,10 @@ struct NotebookStudySheet: View {
         }
     }
 
-    private var dueSection: some View {
+    private func dueSection(_ dueCount: Int) -> some View {
         Section {
             if dueCount == 0 {
-                Label("Nothing due", systemImage: "checkmark.circle")
+                Label("Nothing due right now.", systemImage: "checkmark.circle")
                     .foregroundStyle(.secondary)
             } else {
                 Button {
@@ -99,7 +101,7 @@ struct NotebookStudySheet: View {
     }
 
     @ViewBuilder
-    private var cardsSection: some View {
+    private func cardsSection(_ cards: [StudyQueueItem]) -> some View {
         Section {
             if cards.isEmpty {
                 Text("No cards captured yet.")
@@ -144,32 +146,9 @@ struct NotebookStudySheet: View {
                 }
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, AppSpacing.xs)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .contentShape(Rectangle())
-    }
-
-    private var addSection: some View {
-        Section {
-            TextField("Question", text: $question, axis: .vertical)
-                .lineLimit(2...5)
-            TextField("Answer", text: $answer, axis: .vertical)
-                .lineLimit(2...6)
-            Button {
-                addCard()
-            } label: {
-                Label("Add Card from This Page", systemImage: "plus.circle.fill")
-                    .frame(minHeight: 32)
-            }
-            .disabled(
-                question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || session.currentPageID == nil
-            )
-        } header: {
-            Text("New Card")
-        } footer: {
-            Text("The card keeps a link back to page \(session.pageIndex + 1).")
-        }
     }
 
     @ViewBuilder
@@ -188,26 +167,6 @@ struct NotebookStudySheet: View {
                 passTitle: titleText,
                 onOpenSource: openFromReview
             )
-        }
-    }
-
-    private func addCard() {
-        guard let pageID = session.currentPageID else { return }
-        let prompt = question
-        let reply = answer
-        question = ""
-        answer = ""
-        Task {
-            let added = await study.addCard(
-                question: prompt,
-                answer: reply,
-                notebookID: session.notebookID,
-                pageID: pageID,
-                notebookTitle: session.manifest.title
-            )
-            if !added {
-                errorText = study.lastError ?? "The card could not be saved."
-            }
         }
     }
 
@@ -237,5 +196,59 @@ struct NotebookStudySheet: View {
         if days <= 0 { return "Due now" }
         if days < 1 { return "Due today" }
         return "Due in \(max(1, Int(days.rounded(.up)))) day\(days < 2 ? "" : "s")"
+    }
+}
+
+/// The "New Card" form owns its two fields, so a keystroke re-runs this section
+/// and not the due count or the card list above it.
+private struct NewCardSection: View {
+    let study: StudyModel
+    let session: NotebookSession
+    var onError: (String?) -> Void
+
+    @State private var question = ""
+    @State private var answer = ""
+
+    var body: some View {
+        Section {
+            TextField("Question", text: $question, axis: .vertical)
+                .lineLimit(2...5)
+            TextField("Answer", text: $answer, axis: .vertical)
+                .lineLimit(2...6)
+            Button {
+                addCard()
+            } label: {
+                Label("Add Card from This Page", systemImage: "plus.circle.fill")
+                    .frame(minHeight: 32)
+            }
+            .disabled(
+                question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || session.currentPageID == nil
+            )
+        } header: {
+            Text("New Card")
+        } footer: {
+            Text("The card keeps a link back to page \(session.pageIndex + 1).")
+        }
+    }
+
+    private func addCard() {
+        guard let pageID = session.currentPageID else { return }
+        let prompt = question
+        let reply = answer
+        question = ""
+        answer = ""
+        Task {
+            let added = await study.addCard(
+                question: prompt,
+                answer: reply,
+                notebookID: session.notebookID,
+                pageID: pageID,
+                notebookTitle: session.manifest.title
+            )
+            if !added {
+                onError(study.lastError ?? "The card could not be saved.")
+            }
+        }
     }
 }

@@ -114,13 +114,15 @@ struct StudyLibraryView: View {
         } else if study.sets.isEmpty {
             emptyState
         } else {
+            let dueCounts = study.dueCountsBySet
+            let totalDue = dueCounts.values.reduce(0, +)
             List {
-                if study.totalDueCount > 0 {
-                    dueNowSection
+                if totalDue > 0 {
+                    dueNowSection(totalDue)
                 }
                 Section {
                     ForEach(study.sets) { set in
-                        row(set)
+                        row(set, due: dueCounts[set.id] ?? 0)
                     }
                     .onDelete(perform: delete)
                 } footer: {
@@ -134,9 +136,8 @@ struct StudyLibraryView: View {
     }
 
     /// The one mixed pass across every set, above the per-set rows.
-    private var dueNowSection: some View {
-        let due = study.totalDueCount
-        return Section {
+    private func dueNowSection(_ due: Int) -> some View {
+        Section {
             Button {
                 reviewingAll = true
             } label: {
@@ -180,12 +181,11 @@ struct StudyLibraryView: View {
         }
     }
 
-    private func row(_ set: StudySet) -> some View {
-        let due = study.dueCount(for: set)
+    private func row(_ set: StudySet, due: Int) -> some View {
         return Button {
             selectedSet = set
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: AppSpacing.m) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(color(for: set.colorTag))
                     .frame(width: 42, height: 52)
@@ -195,7 +195,7 @@ struct StudyLibraryView: View {
                     }
                     .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
                     Text(set.title)
                         .font(.body.weight(.medium))
                         .foregroundStyle(.primary)
@@ -211,7 +211,7 @@ struct StudyLibraryView: View {
                     .foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, AppSpacing.xs)
             .frame(minHeight: 56)
             .contentShape(Rectangle())
         }
@@ -247,20 +247,20 @@ struct StudyLibraryView: View {
                 Task { await study.reload() }
             }
             .buttonStyle(.bordered)
-            .controlSize(.small)
             Button {
                 study.clearError()
             } label: {
                 Image(systemName: "xmark")
                     .font(.caption.weight(.semibold))
-                    .frame(width: 28, height: 28)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, AppSpacing.m)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial)
         .overlay(alignment: .bottom) {

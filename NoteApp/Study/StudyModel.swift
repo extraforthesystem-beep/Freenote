@@ -24,8 +24,13 @@ final class StudyModel {
 
     /// The latest queued write; each write waits for the one before it.
     private var stateWriteTask: Task<Bool, Never>?
-    /// Bumped whenever the review states change.
-    private var stateRevision = 0
+    /// Bumped whenever `sets` or `reviewStates` change. Readers of the memoised
+    /// values below observe it, so a cached count cannot outlive its inputs.
+    private(set) var stateRevision = 0
+    /// The last computed `allStates` map, valid for one revision.
+    private var memoisedAllStates: (revision: Int, value: [UUID: [UUID: ReviewState]])?
+    /// Per-set due counts computed in one pass, valid for one revision.
+    private var memoisedDueCounts: (revision: Int, value: [UUID: Int])?
     /// The newest revision known to be on disk. Equal to `stateRevision` when
     /// there is nothing to write.
     private var savedRevision = 0
@@ -45,6 +50,7 @@ final class StudyModel {
             let listing = try await store.listReportingIssues()
             sets = listing.sets
             sortSets()
+            stateRevision &+= 1
             lastError = Self.message(for: listing.issues)
         } catch {
             lastError = error.localizedDescription
@@ -69,6 +75,7 @@ final class StudyModel {
             try await store.save(set)
             sets.append(set)
             sortSets()
+            stateRevision &+= 1
             return set
         } catch {
             lastError = error.localizedDescription
@@ -89,6 +96,7 @@ final class StudyModel {
                 sets.append(updated)
             }
             sortSets()
+            stateRevision &+= 1
             return true
         } catch {
             lastError = error.localizedDescription
@@ -121,6 +129,7 @@ final class StudyModel {
             try await store.save(set)
             sets.append(set)
             sortSets()
+            stateRevision &+= 1
             return set
         } catch {
             lastError = error.localizedDescription
@@ -140,11 +149,19 @@ final class StudyModel {
     }
 
     /// Every set's states, for the schedulers that answer over several sets.
+    ///
+    /// Memoised for the current `stateRevision`; the read of `stateRevision`
+    /// keeps a view that uses it observing the underlying states.
     var allStates: [UUID: [UUID: ReviewState]] {
+        let revision = stateRevision
+        if let memoised = memoisedAllStates, memoised.revision == revision {
+            return memoised.value
+        }
         var result: [UUID: [UUID: ReviewState]] = [:]
         for set in sets {
             result[set.id] = states(for: set.id)
         }
+        memoisedAllStates = (revision, result)
         return result
     }
 
@@ -208,11 +225,27 @@ final class StudyModel {
 
     /// The library-wide count behind the "N due" badge.
     var totalDueCount: Int {
-        dueCount()
+        dueCountsBySet.values.reduce(0, +)
+    }
+
+    /// Due counts for every set, computed in one pass over the library and
+    /// memoised until the sets or their states change.
+    var dueCountsBySet: [UUID: Int] {
+        let revision = stateRevision
+        if let memoised = memoisedDueCounts, memoised.revision == revision {
+            return memoised.value
+        }
+        let value = StudyQueue.dueCounts(
+            in: sets,
+            states: allStates,
+            now: Date()
+        )
+        memoisedDueCounts = (revision, value)
+        return value
     }
 
     func dueCount(for set: StudySet) -> Int {
-        dueCount(setID: set.id)
+        dueCountsBySet[set.id] ?? 0
     }
 
     /// Adds a card captured from a notebook page. Cards from the same notebook
@@ -318,10 +351,46 @@ final class StudyModel {
         let data = await Task.detached(priority: .utility) { () -> Data? in
             try? Data(contentsOf: url)
         }.value
-        guard let data,
-              let decoded = try? JSONDecoder().decode(StateFile.self, from: data)
-        else { return }
-        reviewStates = decoded.sets
+        guard let data else { return }
+        do {
+            let decoded = try JSONDecoder().decode(StateFile.self, from: data)
+            reviewStates = decoded.sets
+            stateRevision &+= 1
+        } catch {
+            // The schedule is a rebuildable cache, so every card becomes new.
+            // Keep the unreadable file for inspection instead of overwriting it.
+            await setAsideUnreadableStates(at: url)
+            lastError = Self.corruptStateMessage
+        }
+    }
+
+    /// The message shown when `review-states.json` could not be decoded.
+    private static let corruptStateMessage =
+        "Review progress could not be read; cards were rescheduled as new."
+
+    /// Moves an unreadable states file into `quarantine/`, the same way the
+    /// library sets aside a file it cannot decode. A failed move leaves the
+    /// original in place; a later write may replace it, but nothing is lost
+    /// before then.
+    private func setAsideUnreadableStates(at url: URL) async {
+        let directory = url.deletingLastPathComponent()
+            .appendingPathComponent("quarantine", isDirectory: true)
+        let stamp = Int64((Date().timeIntervalSince1970 * 1_000).rounded())
+        let destination = directory.appendingPathComponent(
+            "\(stamp)-\(url.lastPathComponent)"
+        )
+        await Task.detached(priority: .utility) {
+            let manager = FileManager.default
+            do {
+                try manager.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+                try manager.moveItem(at: url, to: destination)
+            } catch {
+                // Leave the file where it is for the next attempt.
+            }
+        }.value
     }
 
     /// The message kept in `lastError` while grades cannot reach disk.
