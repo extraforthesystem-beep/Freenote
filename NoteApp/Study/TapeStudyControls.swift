@@ -10,73 +10,108 @@ struct TapeStudyControls: View {
     let session: NotebookSession
     let onClose: () -> Void
 
-    private var tapeIDs: [UUID] {
-        (session.page?.visibleElements ?? []).compactMap { element in
-            if case .tape = element.content { return element.id }
-            return nil
-        }
-    }
-
-    private var revealedCount: Int {
-        tapeIDs.filter { session.revealedTapeIDs.contains($0) }.count
-    }
-
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: AppSpacing.m) {
             Image(systemName: "bandage")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Tape Study")
-                    .font(.caption.weight(.semibold))
-                Text(countText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+            // Each child reads `session.page` itself. The bar's own layout no
+            // longer depends on the page, so writing a stroke does not rebuild
+            // it; only the status text and the actions re-evaluate.
+            TapeStudyStatus(session: session)
 
             Divider()
                 .frame(height: 24)
 
-            Button("Reveal All") { revealAll() }
-                .disabled(tapeIDs.isEmpty || revealedCount == tapeIDs.count)
-            Button("Hide All") { hideAll() }
-                .disabled(revealedCount == 0)
+            TapeStudyActions(session: session, onClose: onClose)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .padding(.horizontal, AppSpacing.m)
+        .padding(.vertical, AppSpacing.m)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+    }
+}
+
+/// The "N of M revealed" caption.
+private struct TapeStudyStatus: View {
+    let session: NotebookSession
+
+    var body: some View {
+        let ids = TapeStudy.tapeIDs(in: session.page)
+        let revealed = ids.filter { session.revealedTapeIDs.contains($0) }.count
+        VStack(alignment: .leading, spacing: AppSpacing.xxs) {
+            Text("Tape Study")
+                .font(.caption.weight(.semibold))
+            Text(
+                ids.isEmpty
+                    ? "No tape on this page"
+                    : "\(revealed) of \(ids.count) revealed"
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Reveal All, Hide All and the close button.
+private struct TapeStudyActions: View {
+    let session: NotebookSession
+    let onClose: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let ids = TapeStudy.tapeIDs(in: session.page)
+        let revealed = ids.filter { session.revealedTapeIDs.contains($0) }.count
+        HStack(spacing: AppSpacing.m) {
+            Button("Reveal All") {
+                revealAll(ids)
+            }
+            .disabled(ids.isEmpty || revealed == ids.count)
+            Button("Hide All") {
+                hideAll(ids)
+            }
+            .disabled(revealed == 0)
             Button {
                 onClose()
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .frame(width: 28, height: 28)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .accessibilityLabel("End tape study")
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
     }
 
-    private var countText: String {
-        if tapeIDs.isEmpty {
-            return "No tape on this page"
-        }
-        return "\(revealedCount) of \(tapeIDs.count) revealed"
-    }
-
-    private func revealAll() {
-        for id in tapeIDs where !session.revealedTapeIDs.contains(id) {
-            session.toggleTapeRevealed(id)
+    private func revealAll(_ ids: [UUID]) {
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+            for id in ids where !session.revealedTapeIDs.contains(id) {
+                session.toggleTapeRevealed(id)
+            }
         }
     }
 
-    private func hideAll() {
-        for id in tapeIDs where session.revealedTapeIDs.contains(id) {
-            session.toggleTapeRevealed(id)
+    private func hideAll(_ ids: [UUID]) {
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+            for id in ids where session.revealedTapeIDs.contains(id) {
+                session.toggleTapeRevealed(id)
+            }
+        }
+    }
+}
+
+private enum TapeStudy {
+    /// The tape pieces on `page`, in page order. Reading the page only here
+    /// keeps the bar itself independent of the page's per-stroke updates.
+    static func tapeIDs(in page: Page?) -> [UUID] {
+        (page?.visibleElements ?? []).compactMap { element in
+            if case .tape = element.content { return element.id }
+            return nil
         }
     }
 }
