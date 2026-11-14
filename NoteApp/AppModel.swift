@@ -607,15 +607,26 @@ final class AppModel {
         for (pageID, title) in result.titles {
             outline.setTitle(title, notebookID: result.manifest.id, pageID: pageID)
         }
-        // File it where the user is looking, as createNotebook does.
+        // File it where the user is looking, as createNotebook does. A failure
+        // here is reported instead of swallowed: the notebook still opens, in
+        // All Notebooks, and the user is told it was not filed.
+        var filingFailure: String?
         if case .folder(let folderID) = selectedLocation {
-            try? await store.setFolder(folderID, forNotebook: result.manifest.id)
+            do {
+                try await store.setFolder(folderID, forNotebook: result.manifest.id)
+            } catch {
+                let name = folderTree.folder(withID: folderID)?.name ?? "the selected folder"
+                filingFailure = "It could not be moved into \(name). \(error.localizedDescription)"
+            }
         }
         // Index in the background, so its printed text is searchable before
         // the tab closes without holding up opening it.
         let manifest = result.manifest
         Task { await search.index(notebook: manifest, store: store) }
         await reload()
+        if let filingFailure {
+            notice = Notice(title: "Imported, but not filed", message: filingFailure)
+        }
         if let notebook = notebooks.first(where: { $0.id == result.manifest.id }) {
             await open(notebook)
         }
