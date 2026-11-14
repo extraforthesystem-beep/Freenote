@@ -238,6 +238,7 @@ struct TextDocumentEditorView: View {
                 ForEach(blockList) { $block in
                     BlockRow(
                         block: $block,
+                        assetDirectory: model.documentsRoot,
                         focusedKey: focusedKey,
                         focusRequest: focusRequest?.key.blockID == block.id ? focusRequest : nil,
                         canMoveUp: document.blocks.first?.id != block.id,
@@ -674,6 +675,8 @@ enum BlockStyleChoice: String, CaseIterable, Identifiable, Hashable {
 private struct BlockRow: View {
     @Binding var block: TextBlock
 
+    /// Where image blocks look for their files.
+    let assetDirectory: URL
     let focusedKey: BlockKey?
     let focusRequest: FocusRequest?
     let canMoveUp: Bool
@@ -840,25 +843,7 @@ private struct BlockRow: View {
             checklistContent
 
         case let .image(assetName, width):
-            HStack(spacing: 12) {
-                Image(systemName: "photo")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(assetName.isEmpty ? "Untitled image" : assetName)
-                        .font(.body)
-                    Text("Image · \(Int(width.rounded())) pt wide")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(10)
-            .background(
-                Color.secondary.opacity(0.07),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
+            TextDocImageBlock(assetName: assetName, width: width, directory: assetDirectory)
 
         case .divider:
             HStack(spacing: 12) {
@@ -1065,6 +1050,7 @@ extension BlockRow: Equatable {
     /// thing.
     static func == (lhs: BlockRow, rhs: BlockRow) -> Bool {
         lhs.block == rhs.block
+            && lhs.assetDirectory == rhs.assetDirectory
             && lhs.focusedKey == rhs.focusedKey
             && lhs.focusRequest == rhs.focusRequest
             && lhs.canMoveUp == rhs.canMoveUp
