@@ -1465,11 +1465,12 @@ struct NotebookPane: View {
 
     /// The stroke time the audio playhead stands at, when Follow is on and this
     /// page has ink from the recording. Ink written after it is faded.
-    private func replayCutoff() -> Date? {
+    ///
+    /// Takes the page's visible ink, so a body pass reads it once.
+    private func replayCutoff(in strokes: [StrokeRecord]) -> Date? {
         guard session.audio.followsPlayhead, let clip = session.audio.activeClip else {
             return nil
         }
-        let strokes = session.visibleStrokes
         guard strokes.contains(where: { clip.contains($0.createdAt) }) else { return nil }
         if let active = strokes.first(where: { $0.id == session.audio.activeStrokeID }) {
             return active.createdAt
@@ -1480,9 +1481,9 @@ struct NotebookPane: View {
 
     /// Where the now-playing marker sits: the end of the stroke the recording
     /// has reached.
-    private func activeReplayPoint() -> CGPoint? {
+    private func activeReplayPoint(in strokes: [StrokeRecord]) -> CGPoint? {
         guard let strokeID = session.audio.activeStrokeID,
-              let stroke = session.visibleStrokes.first(where: { $0.id == strokeID })
+              let stroke = strokes.first(where: { $0.id == strokeID })
         else { return nil }
         return ZoomBand.endPoint(of: stroke)
     }
@@ -1520,12 +1521,16 @@ struct NotebookPane: View {
     }
 
     private func pageContent(_ page: Page) -> some View {
+        // One read of the visible ink for the whole pass: `visibleStrokes`
+        // builds a set of layers and filters every stroke, and this body used
+        // to ask for it for each of its consumers.
+        let strokes = session.visibleStrokes
         // While a recording plays with Follow on, ink it has not reached yet is
         // faded, and the canvas takes no ink so the two views cannot disagree.
-        let cutoff = replayCutoff()
+        let cutoff = replayCutoff(in: strokes)
         let shownStrokes = cutoff.map {
-            ReplayInk.fading(session.visibleStrokes, after: $0)
-        } ?? session.visibleStrokes
+            ReplayInk.fading(strokes, after: $0)
+        } ?? strokes
         return ZStack(alignment: .topLeading) {
             // Tape is drawn by `TapeOverlay` above the ink so it can hide and
             // reveal it; leaving it in the background would show through.
@@ -1599,7 +1604,7 @@ struct NotebookPane: View {
                 SearchHighlightOverlay(
                     highlight: highlight,
                     page: page,
-                    strokes: session.visibleStrokes,
+                    strokes: strokes,
                     assetsDirectory: session.assetsDirectory,
                     search: model.search
                 )
@@ -1613,7 +1618,7 @@ struct NotebookPane: View {
                 onTap: { session.toggleTapeRevealed($0) }
             )
 
-            if let point = activeReplayPoint() {
+            if let point = activeReplayPoint(in: strokes) {
                 NowPlayingMarker(point: point)
             }
 
