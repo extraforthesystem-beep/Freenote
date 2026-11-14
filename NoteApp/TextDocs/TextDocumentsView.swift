@@ -150,7 +150,7 @@ struct TextDocumentsView: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, AppSpacing.xs)
     }
 
     // MARK: - Actions

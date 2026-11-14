@@ -44,21 +44,21 @@ struct TextDocumentEditorView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: AppSpacing.l) {
                     titleField
                     metadata
                     Divider()
-                        .padding(.bottom, 6)
+                        .padding(.bottom, AppSpacing.s)
                     blocks
                     addBlockButton
                 }
-                .padding(.horizontal, 34)
-                .padding(.vertical, 30)
+                .padding(.horizontal, AppSpacing.xxxl)
+                .padding(.vertical, AppSpacing.xxxl)
                 .frame(maxWidth: Self.readingWidth, alignment: .leading)
                 .background(pageFill)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 20)
-                .padding(.vertical, 18)
+                .padding(.vertical, AppSpacing.l)
             }
             .scrollDismissesKeyboard(.interactively)
             .background(AppColor.groupedBackground)
@@ -208,7 +208,7 @@ struct TextDocumentEditorView: View {
     }
 
     private var metadata: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: AppSpacing.l) {
             Label("\(wordCount) word\(wordCount == 1 ? "" : "s")", systemImage: "text.word.spacing")
             Label(
                 updatedDate.formatted(date: .abbreviated, time: .shortened),
@@ -283,7 +283,7 @@ struct TextDocumentEditorView: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 28)
+        .padding(.vertical, AppSpacing.xxl)
     }
 
     private var addBlockButton: some View {
@@ -293,7 +293,7 @@ struct TextDocumentEditorView: View {
             Label("Add Block", systemImage: "plus.circle")
                 .font(.callout)
         }
-        .padding(.top, 10)
+        .padding(.top, AppSpacing.s)
     }
 
     @ViewBuilder
@@ -733,7 +733,7 @@ private struct BlockRow: View {
                     .frame(width: 30, height: 36)
                     .background(
                         Color.primary.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        in: RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                     )
                 }
                 .accessibilityLabel("\(choice.title) options")
@@ -741,7 +741,7 @@ private struct BlockRow: View {
             }
         }
         .frame(width: 33)
-        .padding(.top, 1)
+        .padding(.top, AppSpacing.xxs)
         .appAnimation(AppMotion.quick, value: isFocused)
     }
 
@@ -799,7 +799,7 @@ private struct BlockRow: View {
             )
 
         case .quote:
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: AppSpacing.m) {
                 Capsule()
                     .fill(Color.accentColor.opacity(0.4))
                     .frame(width: 3)
@@ -821,7 +821,7 @@ private struct BlockRow: View {
                     placeholder: "Code",
                     splitsOnReturn: false
                 )
-                .padding(10)
+                .padding(AppSpacing.s)
                 .background(
                     Color.primary.opacity(0.05),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -902,7 +902,7 @@ private struct BlockRow: View {
                         .font(.system(size: 16, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .frame(minWidth: 20, alignment: .trailing)
-                        .padding(.top, 3)
+                        .padding(.top, AppSpacing.xs)
                     editor(
                         key: index,
                         text: listItemText(item.id, bulleted: bulleted),
@@ -919,7 +919,7 @@ private struct BlockRow: View {
         let rows = items.isEmpty ? [ChecklistItem(id: block.id, text: "")] : items
         return VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: AppSpacing.xs) {
                     Button {
                         setChecked(item.id, !item.isChecked)
                     } label: {
