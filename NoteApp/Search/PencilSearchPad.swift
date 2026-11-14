@@ -74,7 +74,7 @@ struct PencilSearchPad: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             HStack {
                 Text("Write to Search")
                     .font(.headline)
@@ -100,7 +100,7 @@ struct PencilSearchPad: View {
                     }
                 }
 
-            HStack(spacing: 6) {
+            HStack(spacing: AppSpacing.s) {
                 Image(systemName: "text.magnifyingglass")
                     .foregroundStyle(.secondary)
                 Text(recognized.isEmpty ? "Recognised text appears here" : recognized)
@@ -208,11 +208,11 @@ struct SearchHighlightOverlay: View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(marks.enumerated()), id: \.offset) { _, mark in
                 let padded = mark.rect.insetBy(dx: -4, dy: -3)
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.yellow.opacity(0.32))
+                RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous)
+                    .fill(AppColor.searchHitFill)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .stroke(Color.orange.opacity(0.7), lineWidth: 1.5)
+                        RoundedRectangle(cornerRadius: AppRadius.xs, style: .continuous)
+                            .stroke(AppColor.searchHitStroke, lineWidth: 1.5)
                     )
                     .frame(width: padded.width, height: padded.height)
                     .rotationEffect(.degrees(mark.rotation))

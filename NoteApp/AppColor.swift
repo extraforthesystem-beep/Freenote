@@ -59,6 +59,22 @@ enum AppColor {
         usesDarkPaper ? Color.white.opacity(0.55) : Color.black.opacity(0.45)
     }
 
+    /// The wash behind a search hit. One pair with `searchHitStroke`, used by
+    /// the result list's marked text and by the marks on the page.
+    ///
+    /// It reads on white paper and on Dark Paper: the light variant is a warm
+    /// amber wash over the paper, the dark one is the same hue a little denser
+    /// so it still separates from the dark sheet.
+    static var searchHitFill: Color {
+        adaptive(light: (0.99, 0.78, 0.16, 0.30), dark: (1.00, 0.78, 0.20, 0.34))
+    }
+
+    /// The edge of a search hit, drawn on the page. Stronger than the fill, so
+    /// a hit reads even where the paper has ink under it.
+    static var searchHitStroke: Color {
+        adaptive(light: (0.90, 0.50, 0.00, 0.85), dark: (1.00, 0.64, 0.10, 0.95))
+    }
+
     /// The ring around an ink colour dot. It is light on dark chrome so a
     /// black swatch still has an edge, and dark on light chrome.
     static var swatchOutline: Color {
@@ -73,6 +89,25 @@ enum AppColor {
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
                 ? NSColor(white: 1, alpha: 0.32)
                 : NSColor(white: 0, alpha: 0.20)
+        })
+        #endif
+    }
+
+    /// A colour that follows the appearance. Each tuple is red, green, blue and
+    /// alpha in sRGB.
+    private static func adaptive(
+        light: (CGFloat, CGFloat, CGFloat, CGFloat),
+        dark: (CGFloat, CGFloat, CGFloat, CGFloat)
+    ) -> Color {
+        #if os(iOS)
+        Color(uiColor: UIColor { traits in
+            let value = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: value.0, green: value.1, blue: value.2, alpha: value.3)
+        })
+        #else
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let value = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: value.0, green: value.1, blue: value.2, alpha: value.3)
         })
         #endif
     }
