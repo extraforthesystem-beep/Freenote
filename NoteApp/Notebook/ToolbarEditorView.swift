@@ -33,7 +33,10 @@ struct ToolbarEditorView: View {
                 } header: {
                     Text("In Toolbar")
                 } footer: {
-                    Text("Drag to reorder, then swipe or use the delete control to remove an item. The pen is always first.")
+                    Text(
+                        "Drag to reorder, then swipe or use the delete control to remove an item. "
+                            + "The pen is always first; Undo and Redo sit at the leading edge of the bar."
+                    )
                 }
 
                 Section("More Items") {
@@ -58,7 +61,7 @@ struct ToolbarEditorView: View {
             #if os(iOS)
             .environment(\.editMode, .constant(.active))
             #endif
-            .navigationTitle("Customize Toolbar")
+            .navigationTitle("Customise Toolbar")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

@@ -146,7 +146,7 @@ struct ZoomWindowPanel<Canvas: View>: View {
     let onClose: () -> Void
     @ViewBuilder let canvas: (ZoomBand) -> Canvas
 
-    static var barHeight: CGFloat { 40 }
+    static var barHeight: CGFloat { 44 }
     @State private var dragStartHeight: CGFloat?
     /// The writing area last reported. Dragging the panel's edge lays the
     /// panel out every frame; writing the parent's state again for a size it
@@ -168,7 +168,7 @@ struct ZoomWindowPanel<Canvas: View>: View {
             barButton("Move Left", systemImage: "chevron.left", action: onBack)
             barButton("Move Right", systemImage: "chevron.right", action: onForward)
             barButton("New Line", systemImage: "arrow.turn.down.left", action: onNewLine)
-            Spacer(minLength: 0)
+            resizeGrab
             if let band {
                 Text(String(format: "%.1f×", band.pageSize.width / max(band.rect.width, 1)))
                     .font(.caption.monospacedDigit())
@@ -181,37 +181,45 @@ struct ZoomWindowPanel<Canvas: View>: View {
         .frame(height: Self.barHeight)
         .frame(maxWidth: .infinity)
         .background(.bar)
-        .overlay {
-            Capsule()
-                .fill(.secondary.opacity(0.5))
-                .frame(width: 36, height: 5)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
         .overlay(alignment: .top) { Divider() }
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 4, coordinateSpace: .global)
-                .onChanged { value in
-                    let start = dragStartHeight ?? height
-                    dragStartHeight = start
-                    onResize(start - value.translation.height, false)
-                }
-                .onEnded { value in
-                    let start = dragStartHeight ?? height
-                    dragStartHeight = nil
-                    onResize(start - value.translation.height, true)
-                }
-        )
         .accessibilityAction(named: "Make Taller") { onResize(height + 60, true) }
         .accessibilityAction(named: "Make Shorter") { onResize(height - 60, true) }
+    }
+
+    /// The whole bar used to resize the panel, so a tap that landed a little
+    /// low on a button dragged the panel instead. The grip is now the only
+    /// place the resize drag starts: a 44 pt tall strip with the visible
+    /// capsule in the middle of it.
+    private var resizeGrab: some View {
+        Capsule()
+            .fill(.secondary.opacity(0.5))
+            .frame(width: 36, height: 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(resizeDrag)
+            .accessibilityHidden(true)
+            .help("Drag to make the panel taller or shorter")
+    }
+
+    private var resizeDrag: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
+            .onChanged { value in
+                let start = dragStartHeight ?? height
+                dragStartHeight = start
+                onResize(start - value.translation.height, false)
+            }
+            .onEnded { value in
+                let start = dragStartHeight ?? height
+                dragStartHeight = nil
+                onResize(start - value.translation.height, true)
+            }
     }
 
     private func barButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
-                .frame(width: 44, height: 36)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -366,7 +374,8 @@ final class ZoomFrameView: UIView {
     }
 
     private func tabRect(scale: CGFloat) -> CGRect {
-        let size = CGSize(width: 64 / scale, height: 30 / scale)
+        // 44 pt tall, so grabbing the move tab does not need a precise touch.
+        let size = CGSize(width: 64 / scale, height: 44 / scale)
         return CGRect(x: band.midX - size.width / 2, y: band.minY - size.height / 2, width: size.width, height: size.height)
     }
 
@@ -553,7 +562,7 @@ struct ZoomViewOptions: View {
     @AppStorage(AppSettings.Key.zoomMagnification) private var magnification = ZoomBand.defaultMagnification
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             if onClose != nil {
                 Text("Zoom View")
                     .font(.headline)
@@ -573,7 +582,7 @@ struct ZoomViewSettingsRows: View {
 
     var body: some View {
         Toggle("Auto-Advance", isOn: $autoAdvance)
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             HStack {
                 Text("Magnification")
                 Spacer()

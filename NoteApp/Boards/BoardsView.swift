@@ -20,6 +20,8 @@ struct BoardsView: View {
     @State private var renamedBoard: Board?
     /// A freshly created board, opened once the naming sheet is gone.
     @State private var pendingBoard: Board?
+    /// The boards waiting for a delete confirmation; empty when none is.
+    @State private var pendingDeletion: [Board] = []
 
     /// False when the view is embedded in the library's detail column instead of a sheet.
     private let showsDoneButton: Bool
@@ -61,6 +63,18 @@ struct BoardsView: View {
                 } message: {
                     Text(model.lastError ?? "")
                 }
+                // Deleting a board takes its photos with it and there is no
+                // trash, so every delete path asks first.
+                .confirmationDialog(
+                    deletionTitle,
+                    isPresented: deletionPrompt,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete Board", role: .destructive) { deletePending() }
+                    Button("Cancel", role: .cancel) { pendingDeletion = [] }
+                } message: {
+                    Text("The board and everything on it are deleted for good. This can't be undone.")
+                }
                 // A board is its own workspace: a sheet leaves it as a small
                 // form window on iPad, so it takes the whole screen instead.
                 #if os(iOS)
@@ -99,12 +113,12 @@ struct BoardsView: View {
                 .contextMenu {
                     Button("Rename", systemImage: "pencil") { beginRenaming(board) }
                     Button("Delete", systemImage: "trash", role: .destructive) {
-                        Task { await model.delete(board) }
+                        pendingDeletion = [board]
                     }
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button("Delete", systemImage: "trash", role: .destructive) {
-                        Task { await model.delete(board) }
+                        pendingDeletion = [board]
                     }
                     Button("Rename", systemImage: "pencil") { beginRenaming(board) }
                         .tint(.indigo)
@@ -132,10 +146,10 @@ struct BoardsView: View {
     }
 
     private func boardRow(_ board: Board) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: AppSpacing.m) {
             BoardThumbnail(board: board, assetsDirectory: model.assetsDirectory)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text(board.title)
                     .font(.body.weight(.medium))
                     .lineLimit(1)
@@ -214,11 +228,37 @@ struct BoardsView: View {
             model.boards.indices.contains(index) ? model.boards[index] : nil
         }
         guard !targets.isEmpty else { return }
+        pendingDeletion = targets
+    }
+
+    private func deletePending() {
+        let boards = pendingDeletion
+        pendingDeletion = []
+        guard !boards.isEmpty else { return }
         Task {
-            for board in targets {
+            for board in boards {
                 await model.delete(board)
             }
         }
+    }
+
+    /// Names the board being deleted, so a swipe on the wrong row is caught
+    /// before the file and its photos are gone.
+    private var deletionTitle: String {
+        guard let board = pendingDeletion.first else { return "Delete Board?" }
+        guard pendingDeletion.count == 1 else {
+            return "Delete \(pendingDeletion.count) Boards?"
+        }
+        return "Delete “\(board.title)”?"
+    }
+
+    private var deletionPrompt: Binding<Bool> {
+        Binding(
+            get: { !pendingDeletion.isEmpty },
+            set: { isPresented in
+                if !isPresented { pendingDeletion = [] }
+            }
+        )
     }
 
     private var errorAlert: Binding<Bool> {

@@ -9,6 +9,7 @@ struct VersionHistoryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var snapshots: [VersionSnapshot] = []
     @State private var isLoading = true
+    @State private var historyError: String?
     @State private var restoringID: UUID?
     @State private var errorText: String?
     @State private var pendingRestore: VersionSnapshot?
@@ -18,6 +19,18 @@ struct VersionHistoryView: View {
             Group {
                 if isLoading {
                     ProgressView("Reading history…")
+                } else if let historyError {
+                    // An unreadable history is not an empty one: say why and
+                    // let the user try again.
+                    ContentUnavailableView {
+                        Label("History Unavailable", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(historyError)
+                    } actions: {
+                        Button("Retry") {
+                            Task { await load() }
+                        }
+                    }
                 } else if snapshots.isEmpty {
                     ContentUnavailableView {
                         Label("No History", systemImage: "clock.arrow.circlepath")
@@ -42,8 +55,7 @@ struct VersionHistoryView: View {
                 }
             }
             .task {
-                snapshots = await session.pageHistory()
-                isLoading = false
+                await load()
             }
             .confirmationDialog(
                 pendingRestore.map {
@@ -72,14 +84,26 @@ struct VersionHistoryView: View {
         }
     }
 
+    private func load() async {
+        isLoading = true
+        historyError = nil
+        do {
+            snapshots = try await session.pageHistory()
+        } catch {
+            snapshots = []
+            historyError = error.localizedDescription
+        }
+        isLoading = false
+    }
+
     private func row(_ snapshot: VersionSnapshot) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: AppSpacing.m) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text(snapshot.createdAt.formatted(date: .abbreviated, time: .standard))
                     .font(.body.weight(.medium))
                 Text("\(snapshot.reason) · \(ByteCountFormatter.string(fromByteCount: Int64(snapshot.byteCount), countStyle: .file))")
@@ -95,7 +119,7 @@ struct VersionHistoryView: View {
             .buttonStyle(.bordered)
             .disabled(restoringID != nil)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, AppSpacing.xs)
     }
 
     private func restore(_ snapshot: VersionSnapshot) {

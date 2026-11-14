@@ -3,29 +3,105 @@ import NoteCore
 import PencilKit
 import SwiftUI
 import UIKit
+import os
 
 /// Lets the app drive PencilKit's own undo stack from a toolbar or a menu.
 ///
-/// The canvas owns the stack; this object only forwards to it. `canUndo`
-/// and `canRedo` are read live, so re-read them when the canvas changes.
+/// The canvas owns the stack; this object forwards to it, and publishes
+/// whether a step is available so a toolbar button can disable itself. The
+/// published values are refreshed from the undo manager's own notifications,
+/// because nothing else notifies when its stack changes.
 @MainActor
 public final class PencilCanvasController: ObservableObject {
     public init() {}
 
     /// The canvas on screen; a new page gets a new canvas.
-    public internal(set) weak var canvas: InkCanvasView?
+    public internal(set) weak var canvas: InkCanvasView? {
+        didSet { observeUndoManager() }
+    }
     /// The canvas the Pencil touched last, when that is a second view of the
     /// page (Zoom View). It goes away with that view, and undo falls back to
     /// the page's canvas.
-    weak var lastUsedCanvas: InkCanvasView?
+    weak var lastUsedCanvas: InkCanvasView? {
+        didSet { observeUndoManager() }
+    }
 
     private var target: InkCanvasView? { lastUsedCanvas ?? canvas }
 
-    public var canUndo: Bool { target?.undoManager?.canUndo ?? false }
-    public var canRedo: Bool { target?.undoManager?.canRedo ?? false }
+    /// Whether `undo()` and `redo()` would change the target's drawing. Kept
+    /// current from the undo manager; assigned only when it changes.
+    @Published public private(set) var canUndo = false
+    @Published public private(set) var canRedo = false
 
-    public func undo() { target?.undoManager?.undo() }
-    public func redo() { target?.undoManager?.redo() }
+    /// Holds the undo manager observations and removes them with the
+    /// controller.
+    private final class UndoObservers {
+        var tokens: [NSObjectProtocol] = []
+
+        deinit {
+            for token in tokens {
+                NotificationCenter.default.removeObserver(token)
+            }
+        }
+    }
+
+    private let undoObservers = UndoObservers()
+    /// The undo manager the observations belong to, so a re-assignment of the
+    /// same canvas does no work.
+    private weak var observedUndoManager: UndoManager?
+
+    public func undo() {
+        target?.undoManager?.undo()
+        refreshUndoAvailability()
+    }
+
+    public func redo() {
+        target?.undoManager?.redo()
+        refreshUndoAvailability()
+    }
+
+    /// Watches the target's undo manager: every closed group, undo and redo
+    /// changes the stack, so each is a chance for the published value to move.
+    /// Re-installs only when the manager itself changed: the canvas is
+    /// re-assigned on every SwiftUI update, and that must not churn observers.
+    private func observeUndoManager() {
+        let undoManager = target?.undoManager
+        if let undoManager, undoManager === observedUndoManager { return }
+        observedUndoManager = undoManager
+        for token in undoObservers.tokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        undoObservers.tokens.removeAll()
+        if let undoManager {
+            let names: [Notification.Name] = [
+                .NSUndoManagerDidCloseUndoGroup,
+                .NSUndoManagerDidUndoChange,
+                .NSUndoManagerDidRedoChange,
+            ]
+            for name in names {
+                let token = NotificationCenter.default.addObserver(
+                    forName: name,
+                    object: undoManager,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refreshUndoAvailability() }
+                }
+                undoObservers.tokens.append(token)
+            }
+        }
+        // The canvas is assigned while SwiftUI lays the view out, so publish
+        // after that pass rather than in the middle of it.
+        Task { @MainActor [weak self] in
+            self?.refreshUndoAvailability()
+        }
+    }
+
+    private func refreshUndoAvailability() {
+        let undo = target?.undoManager?.canUndo ?? false
+        let redo = target?.undoManager?.canRedo ?? false
+        if canUndo != undo { canUndo = undo }
+        if canRedo != redo { canRedo = redo }
+    }
 
     /// Whether the canvas is on screen and the Pencil can draw on it now.
     public var acceptsInk: Bool {
@@ -70,6 +146,10 @@ public final class PencilCanvasController: ObservableObject {
                 setDrawing(previous, replacing: drawing, on: canvas)
             }
         }
+        // This is the app writing the drawing, not the pen appending, so the
+        // next report must use the full converter path even if PencilKit
+        // notifies after this call returns.
+        (canvas.delegate as? PencilCanvasView.Coordinator)?.forceFullPathOnNextChange = true
         canvas.drawing = drawing
     }
 }
@@ -695,6 +775,13 @@ public struct PencilCanvasView: UIViewRepresentable {
 
     @MainActor
     public final class Coordinator: NSObject, PKCanvasViewDelegate, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
+        /// One signposter for the stroke-end path; intervals show up in
+        /// Instruments' "Points of Interest" under local.noteapp.NoteApp/Ink.
+        private static let signposter = OSSignposter(
+            subsystem: "local.noteapp.NoteApp",
+            category: "Ink"
+        )
+
         var parent: PencilCanvasView
         weak var canvas: InkCanvasView?
         weak var host: InkCanvasHost?
@@ -993,24 +1080,55 @@ public struct PencilCanvasView: UIViewRepresentable {
 
         public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingInput, !isApplyingShape else { return }
+            let strokeEnd = Self.signposter.beginInterval("StrokeEnd")
+            defer { Self.signposter.endInterval("StrokeEnd", strokeEnd) }
             // An undo or redo is not an eraser pass: never put back a stroke
             // that undo itself just removed.
             let undo = canvasView.undoManager
             let isUndoOrRedo = undo?.isUndoing == true || undo?.isRedoing == true
+            // One read of the drawing per change. It bridges every stroke out
+            // of PencilKit (about 2 ms for 2,000 strokes), so every step below
+            // shares the array; a step that rewrites the drawing returns the
+            // array it set instead of reading it back.
+            var strokes: [PKStroke]?
             if effectiveEraserFilter != .all, !isUndoOrRedo {
-                keepStrokesOutsideFilter(in: canvasView)
+                strokes = keepStrokesOutsideFilter(
+                    in: canvasView,
+                    strokes: canvasView.drawing.strokes
+                )
             }
             if captureHeldStroke(in: canvasView) {
                 baselineStrokes = canvasView.drawing.strokes
                 return
             }
             if applyScratchOut(in: canvasView) {
-                baselineStrokes = canvasView.drawing.strokes
-                reportDrawingChange(canvasView)
+                let current = canvasView.drawing.strokes
+                baselineStrokes = current
+                reportDrawingChange(strokes: current, appendOnly: false)
                 return
             }
-            decorateNewStrokes(in: canvasView)
-            reportDrawingChange(canvasView)
+            let current = strokes ?? canvasView.drawing.strokes
+            let decorated = decorateNewStrokes(in: canvasView, strokes: current)
+            let forcedFullPath = takeForcedFullPath()
+            let appendOnly = isInkMode && !isUndoOrRedo && !forcedFullPath
+            reportDrawingChange(strokes: decorated, appendOnly: appendOnly)
+        }
+
+        /// Whether the pen is drawing ink, not erasing or lassoing.
+        private var isInkMode: Bool {
+            if case .ink = parent.mode { return true }
+            return false
+        }
+
+        /// Set when the app wrote the drawing outside `decorateNewStrokes`, so
+        /// the next report uses the full converter path. A late PencilKit
+        /// notification must not be mistaken for a pen append.
+        fileprivate var forceFullPathOnNextChange = false
+
+        private func takeForcedFullPath() -> Bool {
+            let forced = forceFullPathOnNextChange
+            forceFullPathOnNextChange = false
+            return forced
         }
 
         /// The filter the stroke eraser actually uses. `eraseHighlighterOnly`
@@ -1024,31 +1142,54 @@ public struct PencilCanvasView: UIViewRepresentable {
         ///
         /// The rewrite registers no undo of its own: PencilKit's "add stroke"
         /// step still removes the stroke by id, so one undo still removes it.
-        private func decorateNewStrokes(in canvas: PKCanvasView) {
-            guard case .ink = parent.mode else { return }
-            let current = canvas.drawing.strokes
-            let known = Set(baselineStrokes.map(\.id))
+        /// Returns the strokes now on the canvas: `strokes` itself when nothing
+        /// was decorated, or the array written back.
+        private func decorateNewStrokes(
+            in canvas: PKCanvasView,
+            strokes: [PKStroke]
+        ) -> [PKStroke] {
+            guard case .ink = parent.mode else { return strokes }
+            // PencilKit appends a new stroke at the end, so the baseline is a
+            // prefix of the drawing in the common case. Checking that costs
+            // plain id comparisons; building a set of every baseline id for
+            // every stroke allocates and hashes the whole page.
+            let appendedOnly = strokes.count >= baselineStrokes.count
+                && zip(baselineStrokes, strokes).allSatisfy { $0.id == $1.id }
             var changed = false
             var result: [PKStroke] = []
-            result.reserveCapacity(current.count)
-            for stroke in current {
-                guard !known.contains(stroke.id) else {
-                    result.append(stroke)
-                    continue
+            result.reserveCapacity(strokes.count)
+            if appendedOnly {
+                result.append(contentsOf: strokes.prefix(baselineStrokes.count))
+                for stroke in strokes.dropFirst(baselineStrokes.count) {
+                    if let replacement = decorated(stroke) {
+                        changed = true
+                        result.append(replacement)
+                    } else {
+                        result.append(stroke)
+                    }
                 }
-                if let replacement = decorated(stroke) {
-                    changed = true
-                    result.append(replacement)
-                } else {
-                    result.append(stroke)
+            } else {
+                let known = Set(baselineStrokes.map(\.id))
+                for stroke in strokes {
+                    guard !known.contains(stroke.id) else {
+                        result.append(stroke)
+                        continue
+                    }
+                    if let replacement = decorated(stroke) {
+                        changed = true
+                        result.append(replacement)
+                    } else {
+                        result.append(stroke)
+                    }
                 }
             }
-            guard changed else { return }
+            guard changed else { return strokes }
             canvas.undoManager?.disableUndoRegistration()
             isApplyingInput = true
             canvas.drawing = PKDrawing(strokes: result)
             isApplyingInput = false
             canvas.undoManager?.enableUndoRegistration()
+            return result
         }
 
         /// A new stroke as the editor's settings want it stored, or nil when
@@ -1065,9 +1206,13 @@ public struct PencilCanvasView: UIViewRepresentable {
             return result
         }
 
+        /// Reports a drawing change the app made itself (a shape swap), which
+        /// is never an append-only pen change.
         func reportDrawingChange(_ canvasView: PKCanvasView) {
-            // Read once: each read bridges every stroke out of PencilKit.
-            let strokes = canvasView.drawing.strokes
+            reportDrawingChange(strokes: canvasView.drawing.strokes, appendOnly: false)
+        }
+
+        func reportDrawingChange(strokes: [PKStroke], appendOnly: Bool) {
             baselineStrokes = strokes
             let activeLayerID = parent.activeLayerID
             // PencilKit can notify a moment *after* a programmatic change, so a
@@ -1079,14 +1224,23 @@ public struct PencilCanvasView: UIViewRepresentable {
                     if let layer = layerIDs[id] { return layer }
                     layerIDs[id] = activeLayerID
                     return activeLayerID
-                }
+                },
+                appendOnly: appendOnly
             ) else { return }
-            let liveIDs = Set(records.map(\.id))
-            layerIDs = layerIDs.filter { liveIDs.contains($0.key) }
-            syncedRecords = Dictionary(
-                records.map { ($0.id, RecordSignature($0)) },
-                uniquingKeysWith: { _, last in last }
-            )
+            if converter.lastChangeWasAppendOnly {
+                // Only strokes at the end were added; nothing was removed.
+                for record in records.suffix(converter.lastAppendedRecordCount) {
+                    layerIDs[record.id] = record.layerID
+                    syncedRecords[record.id] = RecordSignature(record)
+                }
+            } else {
+                let liveIDs = Set(records.map(\.id))
+                layerIDs = layerIDs.filter { liveIDs.contains($0.key) }
+                syncedRecords = Dictionary(
+                    records.map { ($0.id, RecordSignature($0)) },
+                    uniquingKeysWith: { _, last in last }
+                )
+            }
             parent.onStrokesChanged(records)
         }
 
@@ -1094,13 +1248,17 @@ public struct PencilCanvasView: UIViewRepresentable {
         /// names: every other stroke it took goes back at its old index. The
         /// restore is not registered with the canvas's undo manager, so one
         /// undo still restores the whole erase.
-        private func keepStrokesOutsideFilter(in canvas: PKCanvasView) {
-            guard case let .eraser(kind, _) = parent.mode, kind == .stroke else { return }
+        private func keepStrokesOutsideFilter(
+            in canvas: PKCanvasView,
+            strokes current: [PKStroke]
+        ) -> [PKStroke] {
+            guard case let .eraser(kind, _) = parent.mode, kind == .stroke else { return current }
             let filter = effectiveEraserFilter
-            let current = canvas.drawing.strokes
             let currentIDs = Set(current.map(\.id))
             let removed = baselineStrokes.filter { !currentIDs.contains($0.id) }
-            guard removed.contains(where: { !filter.allows(StrokeClassifier.kind(of: $0)) }) else { return }
+            guard removed.contains(where: { !filter.allows(StrokeClassifier.kind(of: $0)) }) else {
+                return current
+            }
 
             var live: [UUID: PKStroke] = [:]
             for stroke in current { live[stroke.id] = stroke }
@@ -1126,6 +1284,7 @@ public struct PencilCanvasView: UIViewRepresentable {
             canvas.drawing = PKDrawing(strokes: restored)
             isApplyingInput = false
             canvas.undoManager?.enableUndoRegistration()
+            return restored
         }
     }
 }

@@ -106,16 +106,16 @@ extension TextDocument {
     /// new block takes the rest.
     private mutating func splitList(
         blockIndex index: Int,
-        items: [String],
+        items: [ListItem],
         itemIndex: Int,
         offset: Int,
-        rebuild: ([String]) -> TextBlockKind
+        rebuild: ([ListItem]) -> TextBlockKind
     ) -> TextCaretPosition? {
         guard !items.isEmpty else { return endList(blockIndex: index, rebuild: rebuild) }
         let item = min(max(itemIndex, 0), items.count - 1)
 
         // Return on an empty item leaves the list.
-        guard !items[item].isEmpty else {
+        guard !items[item].text.isEmpty else {
             var remaining = items
             remaining.remove(at: item)
             if remaining.isEmpty {
@@ -126,9 +126,10 @@ extension TextDocument {
             return insertParagraph("", after: index)
         }
 
-        let parts = Self.split(items[item], at: offset)
-        let head = Array(items.prefix(item)) + [parts.head]
-        let tail = [parts.tail] + Array(items.dropFirst(item + 1))
+        let parts = Self.split(items[item].text, at: offset)
+        var head = Array(items.prefix(item))
+        head.append(ListItem(id: items[item].id, text: parts.head))
+        let tail = [ListItem(text: parts.tail)] + Array(items.dropFirst(item + 1))
 
         blocks[index].kind = rebuild(head)
         let block = TextBlock(kind: rebuild(tail), style: blocks[index].style)
@@ -172,7 +173,7 @@ extension TextDocument {
 
     private mutating func endList(
         blockIndex index: Int,
-        rebuild: ([String]) -> TextBlockKind
+        rebuild: ([ListItem]) -> TextBlockKind
     ) -> TextCaretPosition? {
         blocks[index].kind = .paragraph(text: "")
         return TextCaretPosition(blockID: blocks[index].id)
@@ -256,11 +257,11 @@ extension TextDocument {
             )
 
         case let .bulletList(items):
-            blocks[previousIndex].kind = .bulletList(items: items + [movedText])
+            blocks[previousIndex].kind = .bulletList(items: items + [ListItem(text: movedText)])
             return finishMerge(at: index, into: previousIndex, itemIndex: items.count)
 
         case let .numberedList(items):
-            blocks[previousIndex].kind = .numberedList(items: items + [movedText])
+            blocks[previousIndex].kind = .numberedList(items: items + [ListItem(text: movedText)])
             return finishMerge(at: index, into: previousIndex, itemIndex: items.count)
 
         case let .checklist(items):
@@ -274,16 +275,16 @@ extension TextDocument {
 
     private mutating func mergeItems(
         blockIndex index: Int,
-        items: [String],
+        items: [ListItem],
         itemIndex: Int,
-        rebuild: ([String]) -> TextBlockKind
+        rebuild: ([ListItem]) -> TextBlockKind
     ) -> TextCaretPosition? {
         let item = min(max(itemIndex, 1), items.count - 1)
         guard items.indices.contains(item - 1), items.indices.contains(item) else { return nil }
-        let caretOffset = items[item - 1].utf16.count
+        let caretOffset = items[item - 1].text.utf16.count
 
         var updated = items
-        updated[item - 1] += updated[item]
+        updated[item - 1].text += updated[item].text
         updated.remove(at: item)
         blocks[index].kind = rebuild(updated)
         return TextCaretPosition(blockID: blocks[index].id, itemIndex: item - 1, offset: caretOffset)
@@ -345,7 +346,7 @@ extension TextDocument {
         case .numberedList:
             blocks[index].kind = .numberedList(items: Self.items(from: text))
         case .checklist:
-            blocks[index].kind = .checklist(items: Self.items(from: text).map { ChecklistItem(text: $0) })
+            blocks[index].kind = .checklist(items: Self.items(from: text).map { ChecklistItem(text: $0.text) })
         case .image, .divider:
             return false
         }
@@ -353,8 +354,9 @@ extension TextDocument {
     }
 
     /// The lines of `text` as list items; empty text is one empty item.
-    private static func items(from text: String) -> [String] {
-        text.isEmpty ? [""] : text.components(separatedBy: "\n")
+    private static func items(from text: String) -> [ListItem] {
+        let lines = text.isEmpty ? [""] : text.components(separatedBy: "\n")
+        return lines.map { ListItem(text: $0) }
     }
 }
 

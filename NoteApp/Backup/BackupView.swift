@@ -1,5 +1,25 @@
 import NoteCore
+import Observation
 import SwiftUI
+
+/// Carries a running operation's progress and label from the archive's
+/// background task to the sheet. The view value itself cannot cross that
+/// boundary; this small main-actor object can.
+@MainActor
+@Observable
+final class BackupRunState {
+    /// The latest progress of the running operation, when it reports any.
+    var progress: BackupArchive.Progress?
+    /// What the overlay says before the first progress arrives.
+    var title = ""
+
+    /// The handler to hand to `BackupArchive`.
+    nonisolated var handler: BackupArchive.ProgressHandler {
+        { [weak self] progress in
+            Task { @MainActor in self?.progress = progress }
+        }
+    }
+}
 
 /// Manual backup and verified restore of the whole library.
 ///
@@ -11,12 +31,25 @@ struct BackupView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var backups: [BackupArchive.Summary] = []
+    /// True while the backup list is being read and measured off the main actor.
+    @State private var isLoadingList = true
     @State private var isWorking = false
+    @State private var run = BackupRunState()
     @State private var statusText: String?
     @State private var errorText: String?
-    @State private var pendingDelete: BackupArchive.Summary?
+    /// The alert's title, named after the operation that failed.
+    @State private var errorTitle = "Backup failed"
+    /// The backups a confirmation is about: a swipe or edit select can pick one
+    /// or several, and every one of them is deleted.
+    @State private var pendingDelete: [BackupArchive.Summary] = []
     @State private var exportURLs: [URL] = []
     @State private var showsRestorePicker = false
+    /// Verify and Verify All Pages can be stopped; a backup or a restore
+    /// half-way is not safe, so those two do not offer it.
+    @State private var canCancelWork = false
+
+    @State private var listTask: Task<Void, Never>?
+    @State private var verifyTask: Task<Void, Never>?
 
     private var directory: URL {
         model.store.root
@@ -50,29 +83,31 @@ struct BackupView: View {
             }
             .overlay {
                 if isWorking {
-                    ProgressView()
-                        .controlSize(.large)
-                        .padding(28)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    busyOverlay
                 }
             }
             .task { reloadList() }
+            .onDisappear {
+                // A list that is still being read is worthless once the sheet is
+                // gone. A backup or a restore is deliberately left running.
+                listTask?.cancel()
+                verifyTask?.cancel()
+            }
             .confirmationDialog(
-                "Delete this backup?",
+                deleteTitle,
                 isPresented: Binding(
-                    get: { pendingDelete != nil },
-                    set: { if !$0 { pendingDelete = nil } }
+                    get: { !pendingDelete.isEmpty },
+                    set: { if !$0 { pendingDelete = [] } }
                 ),
-                titleVisibility: .visible,
-                presenting: pendingDelete
-            ) { backup in
-                Button("Delete Backup", role: .destructive) { delete(backup) }
-                Button("Cancel", role: .cancel) { pendingDelete = nil }
-            } message: { backup in
-                Text("\(backup.url.lastPathComponent) is removed from this iPad. Copies you exported are not affected.")
+                titleVisibility: .visible
+            ) {
+                Button(deleteActionTitle, role: .destructive) { delete(pendingDelete) }
+                Button("Cancel", role: .cancel) { pendingDelete = [] }
+            } message: {
+                Text(deleteMessage)
             }
             .alert(
-                "Backup failed",
+                errorTitle,
                 isPresented: Binding(
                     get: { errorText != nil },
                     set: { if !$0 { errorText = nil } }
@@ -120,7 +155,13 @@ struct BackupView: View {
 
     private var backupsSection: some View {
         Section("Backups on this iPad") {
-            if backups.isEmpty {
+            if isLoadingList && backups.isEmpty {
+                HStack(spacing: AppSpacing.s) {
+                    ProgressView()
+                    Text("Reading backups…")
+                        .foregroundStyle(.secondary)
+                }
+            } else if backups.isEmpty {
                 Text("No backups yet.")
                     .foregroundStyle(.secondary)
             } else {
@@ -128,7 +169,10 @@ struct BackupView: View {
                     row(backup)
                 }
                 .onDelete { offsets in
-                    pendingDelete = offsets.compactMap { backups.indices.contains($0) ? backups[$0] : nil }.first
+                    // Every selected row is deleted, not just the first.
+                    pendingDelete = offsets.compactMap {
+                        backups.indices.contains($0) ? backups[$0] : nil
+                    }
                 }
             }
         }
@@ -154,7 +198,7 @@ struct BackupView: View {
     }
 
     private func row(_ backup: BackupArchive.Summary) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
             Text(backup.url.deletingPathExtension().lastPathComponent)
                 .font(.body.weight(.medium))
             Text("\(backup.manifest.notebookCount) notebooks · \(backup.manifest.pageCount) pages · \(Self.byteText(backup.byteCount))")
@@ -167,17 +211,21 @@ struct BackupView: View {
                 Spacer()
                 Button("Verify") { verifyBackup(backup) }
                     .buttonStyle(.bordered)
+                    .controlSize(.regular)
                     .font(.caption)
+                    .hitTarget()
                 #if os(iOS)
                 Button("Export…") { exportURLs = [backup.url] }
                     .buttonStyle(.bordered)
+                    .controlSize(.regular)
                     .font(.caption)
+                    .hitTarget()
                 #endif
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, AppSpacing.xxs)
         .swipeActions {
-            Button("Delete", role: .destructive) { pendingDelete = backup }
+            Button("Delete", role: .destructive) { pendingDelete = [backup] }
         }
     }
 
@@ -195,25 +243,90 @@ struct BackupView: View {
         }
     }
 
+    /// The modal block over the form: a determinate bar and a count when the
+    /// operation knows them, the operation's name either way, and Cancel for the
+    /// two checks that can stop safely.
+    private var busyOverlay: some View {
+        VStack(spacing: AppSpacing.m) {
+            if let progress = run.progress, progress.total > 0 {
+                ProgressView(value: progress.fraction)
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: 220)
+            } else {
+                ProgressView()
+            }
+            Text(overlayText)
+                .font(.callout)
+                .multilineTextAlignment(.center)
+            if canCancelWork {
+                Button("Cancel") { cancelWork() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(AppSpacing.xxl)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.xl))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(overlayText)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var overlayText: String {
+        guard let progress = run.progress else { return run.title }
+        switch progress.step {
+        case .copyingNotebooks:
+            return "Backing up notebook \(progress.done) of \(progress.total)…"
+        case .checkingFiles:
+            return "Checking file \(progress.done) of \(progress.total)…"
+        case .checkingPages:
+            return "Verifying page \(progress.done) of \(progress.total)…"
+        case .restoringNotebooks:
+            return "Restoring notebook \(progress.done) of \(progress.total)…"
+        }
+    }
+
     // MARK: - Actions
+
+    private func beginWork(title: String, cancellable: Bool) {
+        isWorking = true
+        run.title = title
+        run.progress = nil
+        canCancelWork = cancellable
+        statusText = nil
+    }
+
+    private func endWork() {
+        isWorking = false
+        canCancelWork = false
+        run.progress = nil
+        run.title = ""
+    }
+
+    private func cancelWork() {
+        verifyTask?.cancel()
+    }
 
     private func backUp() {
         guard !isWorking else { return }
-        isWorking = true
-        statusText = nil
+        beginWork(title: "Backing up…", cancellable: false)
         let url = directory.appendingPathComponent(
             "NoteApp \(Self.stampFormatter.string(from: Date())).\(BackupArchive.fileExtension)",
             isDirectory: true
         )
+        let run = run
         Task {
             do {
-                let summary = try await BackupArchive.create(from: model.store, at: url)
+                let summary = try await BackupArchive.create(
+                    from: model.store,
+                    at: url,
+                    progress: run.handler
+                )
                 statusText = "Backed up \(summary.manifest.notebookCount) notebooks and \(summary.manifest.pageCount) pages. All \(summary.fileCount) files verified."
                 reloadList()
             } catch {
+                errorTitle = "Backup failed"
                 errorText = error.localizedDescription
             }
-            isWorking = false
+            endWork()
         }
     }
 
@@ -221,23 +334,28 @@ struct BackupView: View {
     /// and its verification are done.
     private func restore(from url: URL) {
         let scoped = url.startAccessingSecurityScopedResource()
-        isWorking = true
-        statusText = nil
+        beginWork(title: "Restoring…", cancellable: false)
+        let run = run
         Task {
             defer {
                 if scoped { url.stopAccessingSecurityScopedResource() }
             }
             do {
-                let summary = try await BackupArchive.restore(archiveAt: url, into: model.store)
+                let summary = try await BackupArchive.restore(
+                    archiveAt: url,
+                    into: model.store,
+                    progress: run.handler
+                )
                 await model.reload()
                 for notebook in model.notebooks where summary.restoredNotebookIDs.contains(notebook.id) {
                     await model.search.index(notebook: notebook, store: model.store)
                 }
                 statusText = restoreText(summary)
             } catch {
+                errorTitle = "Restore failed"
                 errorText = error.localizedDescription
             }
-            isWorking = false
+            endWork()
         }
     }
 
@@ -254,16 +372,21 @@ struct BackupView: View {
 
     private func verifyBackup(_ backup: BackupArchive.Summary) {
         guard !isWorking else { return }
-        isWorking = true
-        statusText = nil
-        Task {
+        let name = backup.url.deletingPathExtension().lastPathComponent
+        beginWork(title: "Verifying \(name)…", cancellable: true)
+        let run = run
+        let url = backup.url
+        verifyTask = Task {
             do {
-                let verified = try await BackupArchive.verify(archiveAt: backup.url)
-                statusText = "\(backup.url.deletingPathExtension().lastPathComponent) is intact: all \(verified.fileCount) files verified."
+                let verified = try await BackupArchive.verify(archiveAt: url, progress: run.handler)
+                statusText = "\(name) is intact: all \(verified.fileCount) files verified."
+            } catch is CancellationError {
+                statusText = "Verification of \(name) stopped."
             } catch {
+                errorTitle = "Verification failed"
                 errorText = error.localizedDescription
             }
-            isWorking = false
+            endWork()
         }
     }
 
@@ -271,45 +394,118 @@ struct BackupView: View {
     /// longer match are counted, not changed.
     private func verifyPages() {
         guard !isWorking else { return }
-        isWorking = true
-        statusText = nil
-        Task {
+        beginWork(title: "Verifying pages…", cancellable: true)
+        let total = model.notebooks.reduce(0) { $0 + $1.pageOrder.count }
+        let run = run
+        verifyTask = Task {
+            var done = 0
             var checked = 0
             var failed = 0
-            for notebook in model.notebooks {
-                guard let snapshot = try? await model.store.loadNotebook(notebook.id) else {
-                    // An unreadable manifest is already reported by the library.
-                    continue
-                }
-                for pageID in snapshot.manifest.pageOrder {
-                    do {
-                        _ = try await model.store.verifyPageFile(pageID, in: notebook.id)
-                        checked += 1
-                    } catch {
-                        failed += 1
+            do {
+                for notebook in model.notebooks {
+                    guard let snapshot = try? await model.store.loadNotebook(notebook.id) else {
+                        // An unreadable manifest is already reported by the library.
+                        continue
+                    }
+                    for pageID in snapshot.manifest.pageOrder {
+                        try Task.checkCancellation()
+                        do {
+                            _ = try await model.store.verifyPageFile(pageID, in: notebook.id)
+                            checked += 1
+                        } catch {
+                            failed += 1
+                        }
+                        done += 1
+                        run.progress = BackupArchive.Progress(
+                            step: .checkingPages,
+                            done: done,
+                            total: total
+                        )
                     }
                 }
+                statusText = failed == 0
+                    ? "Every page is intact: \(checked) pages match their checksums."
+                    : "\(checked) pages are intact and \(failed) failed their checks. Open a notebook to set a damaged page aside."
+            } catch is CancellationError {
+                statusText = failed == 0
+                    ? "Verification stopped after \(done) of \(total) pages."
+                    : "Verification stopped after \(done) of \(total) pages: \(checked) intact, \(failed) failed their checks."
+            } catch {
+                errorTitle = "Verification failed"
+                errorText = error.localizedDescription
             }
-            statusText = failed == 0
-                ? "Every page is intact: \(checked) pages match their checksums."
-                : "\(checked) pages are intact and \(failed) failed their checks. Open a notebook to set a damaged page aside."
-            isWorking = false
+            endWork()
         }
     }
 
-    private func delete(_ backup: BackupArchive.Summary) {
-        guard !isWorking else { return }
-        pendingDelete = nil
-        do {
-            try FileManager.default.removeItem(at: backup.url)
+    private func delete(_ selected: [BackupArchive.Summary]) {
+        guard !isWorking, !selected.isEmpty else { return }
+        pendingDelete = []
+        beginWork(
+            title: selected.count == 1 ? "Deleting the backup…" : "Deleting \(selected.count) backups…",
+            cancellable: false
+        )
+        let urls = selected.map(\.url)
+        Task {
+            // A backup folder holds thousands of files: remove it off the main
+            // actor so the sheet keeps drawing.
+            let failure = await Task.detached(priority: .userInitiated) { () -> String? in
+                for url in urls {
+                    do {
+                        try FileManager.default.removeItem(at: url)
+                    } catch {
+                        return error.localizedDescription
+                    }
+                }
+                return nil
+            }.value
+            if let failure {
+                errorTitle = "Delete failed"
+                errorText = failure
+            }
+            endWork()
             reloadList()
-        } catch {
-            errorText = error.localizedDescription
         }
     }
 
+    /// Reads and measures every backup off the main actor. `BackupArchive`
+    /// stats every file of every archive, which is far too much for the sheet's
+    /// own thread.
     private func reloadList() {
-        backups = BackupArchive.summaries(in: directory)
+        listTask?.cancel()
+        isLoadingList = true
+        let directory = directory
+        listTask = Task {
+            let summaries = await Task.detached(priority: .userInitiated) {
+                BackupArchive.summaries(in: directory)
+            }.value
+            guard !Task.isCancelled else { return }
+            backups = summaries
+            isLoadingList = false
+        }
+    }
+
+    // MARK: - Delete confirmation copy
+
+    private var deleteTitle: String {
+        pendingDelete.count == 1
+            ? "Delete this backup?"
+            : "Delete \(pendingDelete.count) backups?"
+    }
+
+    private var deleteActionTitle: String {
+        pendingDelete.count == 1
+            ? "Delete Backup"
+            : "Delete \(pendingDelete.count) Backups"
+    }
+
+    private var deleteMessage: String {
+        let names = pendingDelete
+            .map { $0.url.deletingPathExtension().lastPathComponent }
+            .joined(separator: ", ")
+        return pendingDelete.count == 1
+            ? "\(names) is removed from this iPad. Copies you exported are not affected."
+            : "\(names) are removed from this iPad. Copies you exported are not affected."
     }
 
     private static func byteText(_ bytes: Int) -> String {

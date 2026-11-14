@@ -28,6 +28,13 @@ struct NoteAIPanel: View {
     @State private var cards: [AIFlashcard] = []
     @State private var question = ""
     @State private var isWorking = false
+    /// True only while an AI request itself runs, so Cancel is not offered for
+    /// a save that has nothing to cancel.
+    @State private var isRequesting = false
+    /// The request and the page-add run as tasks the panel owns and cancels.
+    @State private var requestTask: Task<Void, Never>?
+    @State private var addTask: Task<Void, Never>?
+    @State private var titleTask: Task<Void, Never>?
     @State private var errorText: String?
     @State private var savedCards = false
     @State private var addedBlock: String?
@@ -44,7 +51,7 @@ struct NoteAIPanel: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: AppSpacing.xxl) {
                     header
                     titleSuggestion
 
@@ -99,6 +106,11 @@ struct NoteAIPanel: View {
             .task {
                 await loadTextIfNeeded()
             }
+            .onDisappear {
+                requestTask?.cancel()
+                addTask?.cancel()
+                titleTask?.cancel()
+            }
         }
     }
 
@@ -116,7 +128,7 @@ struct NoteAIPanel: View {
                 .foregroundStyle(.secondary)
 
             if isLoadingText {
-                HStack(spacing: 10) {
+                HStack(spacing: AppSpacing.s) {
                     ProgressView()
                     Text("Reading this page…")
                         .foregroundStyle(.secondary)
@@ -135,12 +147,11 @@ struct NoteAIPanel: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                HStack(spacing: 10) {
+                HStack(spacing: AppSpacing.s) {
                     Button {
                         summarize()
                     } label: {
                         Label("Summarize Page", systemImage: "text.append")
-                            .frame(minHeight: 32)
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -148,20 +159,27 @@ struct NoteAIPanel: View {
                         makeFlashcards()
                     } label: {
                         Label("Flashcards", systemImage: "rectangle.stack.badge.plus")
-                            .frame(minHeight: 32)
                     }
                     .buttonStyle(.bordered)
                 }
+                .controlSize(.large)
                 .disabled(isWorking)
             }
         }
     }
 
     private var workingRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: AppSpacing.s) {
             ProgressView()
             Text("Thinking on device…")
                 .foregroundStyle(.secondary)
+            if isRequesting {
+                Button("Cancel") {
+                    requestTask?.cancel()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            }
         }
         .frame(minHeight: 44)
     }
@@ -186,8 +204,8 @@ struct NoteAIPanel: View {
                 .controlSize(.large)
                 .disabled(isApplyingTitle)
             }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(AppSpacing.l)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
         }
     }
 
@@ -211,41 +229,15 @@ struct NoteAIPanel: View {
                 .disabled(savedCards || cards.isEmpty || isWorking)
             }
 
-            ForEach(Array(cards.enumerated()), id: \.offset) { index, card in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(card.question)
-                        .font(.body.weight(.medium))
-                        .textSelection(.enabled)
-                    Text(card.answer)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(alignment: .topTrailing) {
-                    Button {
-                        addToPage(cardText(card), id: "card-\(index)")
-                    } label: {
-                        Image(systemName: addedBlock == "card-\(index)"
-                            ? "checkmark.circle.fill"
-                            : "plus.rectangle.on.rectangle")
-                            .font(.body)
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(addedBlock == "card-\(index)" ? Color.green : Color.accentColor)
-                    .accessibilityLabel(addedBlock == "card-\(index)" ? "Added to page" : "Add card to page")
-                }
+            ForEach(cards) { card in
+                flashcardRow(card)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: AppSpacing.s) {
                 Button {
                     copy(flashcardText)
                 } label: {
                     Label("Copy All", systemImage: "doc.on.doc")
-                        .frame(minHeight: 32)
                 }
                 .buttonStyle(.bordered)
 
@@ -256,12 +248,42 @@ struct NoteAIPanel: View {
                         addedBlock == "cards" ? "Added" : "Add All to Page",
                         systemImage: addedBlock == "cards" ? "checkmark" : "plus.rectangle.on.rectangle"
                     )
-                    .frame(minHeight: 32)
                 }
                 .buttonStyle(.bordered)
                 .disabled(addedBlock == "cards")
             }
             .controlSize(.large)
+        }
+    }
+
+    private func flashcardRow(_ card: AIFlashcard) -> some View {
+        let blockID = "card-\(card.id)"
+        let added = addedBlock == blockID
+        return VStack(alignment: .leading, spacing: AppSpacing.xs) {
+            Text(card.question)
+                .font(.body.weight(.medium))
+                .textSelection(.enabled)
+            Text(card.answer)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(AppSpacing.l)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Button {
+                addToPage(cardText(card), id: blockID)
+            } label: {
+                Image(systemName: added
+                    ? "checkmark.circle.fill"
+                    : "plus.rectangle.on.rectangle")
+                    .font(.body)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(added ? Color.green : Color.accentColor)
+            .accessibilityLabel(added ? "Added to page" : "Add card to page")
         }
     }
 
@@ -271,7 +293,7 @@ struct NoteAIPanel: View {
         blockID: String,
         citations: [AICitation] = []
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             Text(title)
                 .font(.headline)
             Text(text)
@@ -282,12 +304,11 @@ struct NoteAIPanel: View {
                 sourceMarks(citations)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: AppSpacing.s) {
                 Button {
                     copy(text)
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
-                        .frame(minHeight: 32)
                 }
                 .buttonStyle(.bordered)
 
@@ -298,21 +319,20 @@ struct NoteAIPanel: View {
                         addedBlock == blockID ? "Added" : "Add to Page",
                         systemImage: addedBlock == blockID ? "checkmark" : "plus.rectangle.on.rectangle"
                     )
-                    .frame(minHeight: 32)
                 }
                 .buttonStyle(.bordered)
                 .disabled(addedBlock == blockID)
             }
             .controlSize(.large)
         }
-        .padding(16)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(AppSpacing.l)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.l, style: .continuous))
     }
 
     /// The note sentences the answer was built from. Tapping one closes the
     /// panel and marks those words on the page.
     private func sourceMarks(_ citations: [AICitation]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.s) {
             Text("Sources on this page")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -375,7 +395,7 @@ struct NoteAIPanel: View {
     }
 
     private var askBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: AppSpacing.s) {
             TextField("Ask about this page…", text: $question, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...3)
@@ -394,8 +414,11 @@ struct NoteAIPanel: View {
                     || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
             .accessibilityLabel("Ask about this page")
+            // The vertical field keeps Return for a newline, so the keyboard
+            // send is ⌘Return.
+            .keyboardShortcut(.return, modifiers: .command)
         }
-        .padding(14)
+        .padding(AppSpacing.l)
         .background(.bar)
         .disabled(!hasPageText)
     }
@@ -432,18 +455,25 @@ struct NoteAIPanel: View {
     private func summarize() {
         guard !isWorking else { return }
         isWorking = true
-        Task {
-            defer { isWorking = false }
-            guard let text = await readyText() else { return }
+        isRequesting = true
+        requestTask = Task {
+            defer {
+                isRequesting = false
+                isWorking = false
+            }
             do {
+                try Task.checkCancellation()
+                guard let text = await readyText() else { return }
+                try Task.checkCancellation()
                 let response = try await ai.respond(
                     to: AIRequest(kind: .summarize(text: text, scope: .page))
                 )
+                try Task.checkCancellation()
                 summary = response.text
                 summaryCitations = response.citations
                 addedBlock = nil
             } catch {
-                errorText = error.localizedDescription
+                report(error)
             }
         }
     }
@@ -451,13 +481,20 @@ struct NoteAIPanel: View {
     private func makeFlashcards() {
         guard !isWorking else { return }
         isWorking = true
-        Task {
-            defer { isWorking = false }
-            guard let text = await readyText() else { return }
+        isRequesting = true
+        requestTask = Task {
+            defer {
+                isRequesting = false
+                isWorking = false
+            }
             do {
+                try Task.checkCancellation()
+                guard let text = await readyText() else { return }
+                try Task.checkCancellation()
                 let response = try await ai.respond(
                     to: AIRequest(kind: .flashcards(text: text, maxCards: 8))
                 )
+                try Task.checkCancellation()
                 cards = response.cards
                 savedCards = false
                 addedBlock = nil
@@ -465,7 +502,7 @@ struct NoteAIPanel: View {
                     errorText = "The assistant could not find card-worthy facts on this page."
                 }
             } catch {
-                errorText = error.localizedDescription
+                report(error)
             }
         }
     }
@@ -474,13 +511,20 @@ struct NoteAIPanel: View {
         let query = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, !isWorking else { return }
         isWorking = true
-        Task {
-            defer { isWorking = false }
-            guard let text = await readyText() else { return }
+        isRequesting = true
+        requestTask = Task {
+            defer {
+                isRequesting = false
+                isWorking = false
+            }
             do {
+                try Task.checkCancellation()
+                guard let text = await readyText() else { return }
+                try Task.checkCancellation()
                 let response = try await ai.respond(
                     to: AIRequest(kind: .ask(question: query, context: text))
                 )
+                try Task.checkCancellation()
                 answer = response.text
                 answerCitations = response.citations
                 addedBlock = nil
@@ -489,15 +533,23 @@ struct NoteAIPanel: View {
                     answer = "I could not find that on this page."
                 }
             } catch {
-                errorText = error.localizedDescription
+                report(error)
             }
         }
+    }
+
+    /// A cancelled request leaves the previous result alone and raises nothing.
+    private func report(_ error: Error) {
+        if Task.isCancelled { return }
+        if let aiError = error as? AIError, aiError == .cancelled { return }
+        if error is CancellationError { return }
+        errorText = error.localizedDescription
     }
 
     private func saveCards() {
         guard !cards.isEmpty, !isWorking else { return }
         isWorking = true
-        Task {
+        requestTask = Task {
             defer { isWorking = false }
             let title = "AI · \(session.manifest.title) · \(Date.now.formatted(date: .abbreviated, time: .shortened))"
             guard var set = await study.createSet(title: title) else {
@@ -521,7 +573,7 @@ struct NoteAIPanel: View {
     private func applyTitle(_ title: String) {
         guard !isApplyingTitle else { return }
         isApplyingTitle = true
-        Task {
+        titleTask = Task {
             defer { isApplyingTitle = false }
             do {
                 try await session.store.renameNotebook(session.notebookID, title: title)
@@ -544,8 +596,10 @@ struct NoteAIPanel: View {
 
     private func addToPage(_ text: String, id: String) {
         guard !text.isEmpty else { return }
-        Task {
+        addTask?.cancel()
+        addTask = Task {
             await session.addTextElement(text)
+            guard !Task.isCancelled else { return }
             addedBlock = id
         }
     }

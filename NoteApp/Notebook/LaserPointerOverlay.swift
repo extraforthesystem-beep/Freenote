@@ -9,6 +9,8 @@ import SwiftUI
 struct LaserPointerOverlay: View {
     var mode: LaserMode
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// Points of the mark being drawn, in page points.
     @State private var livePoints: [CGPoint] = []
     /// Marks whose pointer has lifted, fading out. Only the recent few are kept.
@@ -55,13 +57,16 @@ struct LaserPointerOverlay: View {
         guard !livePoints.isEmpty else { return }
         let mark = LaserMark(points: livePoints, isDot: mode == .dot)
         livePoints.removeAll(keepingCapacity: true)
+        // The long cool-down is the point of the trail, but with Reduce Motion
+        // on nothing moves: the mark is dropped at once instead.
+        guard !reduceMotion else { return }
         fadingMarks.append(mark)
         if fadingMarks.count > Self.maxFadingMarks {
             fadingMarks.removeFirst(fadingMarks.count - Self.maxFadingMarks)
         }
         // It is shown fully opaque first, so animating it to zero reads as the
         // trail cooling off after the pointer lifts.
-        withAnimation(.easeOut(duration: fadeDuration)) {
+        AppMotion.animate(.easeOut(duration: fadeDuration), reduceMotion: reduceMotion) {
             if let index = fadingMarks.firstIndex(where: { $0.id == mark.id }) {
                 fadingMarks[index].opacity = 0
             }

@@ -11,9 +11,10 @@ extension BackupArchive {
     /// notebook is never overwritten.
     public static func restore(
         archiveAt url: URL,
-        into store: LibraryStore
+        into store: LibraryStore,
+        progress: ProgressHandler? = nil
     ) async throws -> RestoreSummary {
-        let verified = try verifiedFiles(in: url)
+        let verified = try verifiedFiles(in: url, progress: progress)
         let expectedHashes = Dictionary(
             uniqueKeysWithValues: verified.hashes.map { ($0.path, $0.hash) }
         )
@@ -29,7 +30,14 @@ extension BackupArchive {
         var didChangeTree = false
 
         var summary = RestoreSummary()
-        for folder in try directories(in: archivedNotebooks) {
+        let archivedFolders = try directories(in: archivedNotebooks)
+        for (index, folder) in archivedFolders.enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            progress?(Progress(
+                step: .restoringNotebooks,
+                done: index + 1,
+                total: archivedFolders.count
+            ))
             let staging = layout.cacheDirectory.appendingPathComponent(
                 "restore-\(UUID().uuidString)",
                 isDirectory: true
@@ -94,6 +102,9 @@ extension BackupArchive {
             } catch {
                 throw BackupError.ioFailure("could not restore \(folder.lastPathComponent): \(error)")
             }
+            // The manifest was written here, not through the store, so any cache
+            // entry for the id has to go.
+            await store.forgetCachedManifest(destinationID)
 
             guard storedManifest != nil else {
                 summary.unreadableNotebookCount += 1

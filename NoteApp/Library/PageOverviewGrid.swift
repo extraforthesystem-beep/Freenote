@@ -60,7 +60,7 @@ struct PageOverviewGrid: View {
                 dismiss()
             }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.s) {
                 PagePreviewThumbnail(
                     notebookID: session.notebookID,
                     pageID: pageID,
@@ -69,8 +69,8 @@ struct PageOverviewGrid: View {
                 .overlay(alignment: .topLeading) {
                     Text("\(index + 1)")
                         .font(.caption2.weight(.semibold).monospacedDigit())
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
+                        .padding(.horizontal, AppSpacing.s)
+                        .padding(.vertical, AppSpacing.xs)
                         .background(.thinMaterial, in: Capsule())
                         .padding(8)
                 }

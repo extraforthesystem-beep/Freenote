@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// A one-line "Go to Page" row for a popover or a List. Typing a page number
-/// and pressing Return jumps there; the field shows the valid range next to it.
+/// and pressing Return jumps there; the iPad number pad has no Return key, so
+/// the keyboard also carries a Go button. The field shows the valid range.
 struct GoToPageField: View {
     let pageCount: Int
     let currentIndex: Int
@@ -14,11 +15,9 @@ struct GoToPageField: View {
         pageCount > 0 ? "(1 – \(pageCount))" : "(no pages)"
     }
 
+    /// The same page-number grammar as the find bar.
     private var parsedPage: Int? {
-        guard pageCount > 0,
-              let value = Int(text.trimmingCharacters(in: .whitespaces))
-        else { return nil }
-        return min(max(value, 1), pageCount)
+        PageNumberQuery.page(in: text, pageCount: pageCount)
     }
 
     var body: some View {
@@ -51,6 +50,16 @@ struct GoToPageField: View {
         .onAppear {
             text = "\(currentIndex + 1)"
         }
+        #if os(iOS)
+        // The number pad has no Return key, so the keyboard gets its own Go.
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Go", action: go)
+                    .disabled(parsedPage == nil)
+            }
+        }
+        #endif
     }
 
     private func go() {

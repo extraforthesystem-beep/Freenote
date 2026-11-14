@@ -31,7 +31,7 @@ enum EditorTool: String, CaseIterable, Hashable, Sendable {
         case .eraser: "Eraser"
         case .lasso: "Lasso"
         case .laser: "Laser Pointer"
-        case .elements: "Select Elements"
+        case .elements: "Select Objects"
         case .links: "Follow Links"
         }
     }
@@ -100,15 +100,15 @@ final class EditorToolState {
     private(set) var eraserKind: EraserMode
     private(set) var eraserWidth: Double
     private(set) var laserMode: LaserMode
-    /// The eight colours the pen shows in the toolbar.
+    /// The eight colours the pen offers in the colour popover.
     private(set) var penFavorites: ColorFavorites
-    /// The eight colours the highlighter shows in the toolbar.
+    /// The eight colours the highlighter offers in the colour popover.
     private(set) var highlighterFavorites: ColorFavorites
     /// The last eight colours used by either ink tool, newest first.
     private(set) var recentColors: ColorRecents
-    /// The three width slots the pen shows in the toolbar.
+    /// The three width slots the pen shows in its settings popover.
     private(set) var penWidthPresets: WidthPresets
-    /// The three width slots the highlighter shows in the toolbar.
+    /// The three width slots the highlighter shows in its settings popover.
     private(set) var highlighterWidthPresets: WidthPresets
     /// Stroke stabilisation, 0...100, for new pen strokes.
     private(set) var penSmoothing: Int
@@ -117,7 +117,7 @@ final class EditorToolState {
     /// Saved pens: style, colour and width. Owns its own persistence.
     let favoritePens: FavoritePens
     /// Bumped when the Apple Pencil asks for the colour palette. The toolbar
-    /// opens its pen popover and nothing else reads it.
+    /// opens its colour popover and nothing else reads it.
     private(set) var paletteRequestID = 0
     /// The ink tool colour and width changes go to when no ink tool is active.
     @ObservationIgnored private var lastInkTool: EditorTool = .pen
@@ -149,6 +149,9 @@ final class EditorToolState {
     }
 
     init(defaults: UserDefaults = .standard) {
+        // One-time: toolbars stored before Undo and Redo led the bar gain them
+        // here, before the toolbar's @AppStorage reads the layout.
+        ToolbarLayout.migrateUndoRedoIfNeeded(in: defaults)
         presets = PenPresets.load()
         favoritePens = FavoritePens(defaults: defaults)
         penStyle = defaults.string(forKey: Keys.penStyle).flatMap(PenStyle.init(rawValue:)) ?? .pen
@@ -283,7 +286,8 @@ final class EditorToolState {
 
     /// Three quick widths for whatever the width dots currently change. The
     /// eraser keeps its own fixed sizes; the ink tools have editable slots,
-    /// clamped into the current style's range.
+    /// clamped into the current style's range. The dots live in the pen and
+    /// highlighter settings popovers, not in the toolbar row.
     var widthPresets: [Double] {
         if tool == .eraser { return [8, 20, 44] }
         return activeWidthPresets.clamped(to: inkWidthRange)

@@ -162,31 +162,44 @@ final class AppModel {
         do {
             info = try await store.open()
             await reload()
-            templates.load()
-            await purgeExpiredTrash()
-            await sweepOrphanedHistory()
-            await study.load()
-            await textDocs.load()
-            await boards.load()
-            Task {
-                _ = try? await history.prune(keeping: .default)
-            }
-            Task.detached(priority: .utility) { [store] in
-                LibraryCovers.pruneStaleCovers(store: store)
-            }
-            Task {
-                await search.indexAll(notebooks: notebooks, store: store)
-                if let message = search.takeRecognitionNotice() {
-                    notice = Notice(title: "Handwriting re-read", message: message)
-                }
-                await search.search(searchText)
-            }
+            // The grid is what the user came for. It is shown as soon as the
+            // notebook list is in; the work below arrives on its own, so it can
+            // no longer hold up the first frame.
+            isLoading = false
+            await loadSupportingContent()
         } catch {
             // A failed open is recoverable: the library shows this message with a
             // retry button instead of an empty grid.
             loadError = error.localizedDescription
+            isLoading = false
         }
-        isLoading = false
+    }
+
+    /// Templates, the two library sweeps, study sets, text documents, boards,
+    /// the cover prune and the search index. None of them is needed to draw the
+    /// library, so they run after its first frame — but all of them still run on
+    /// every launch, and each keeps its own loading state where a screen shows
+    /// one.
+    private func loadSupportingContent() async {
+        templates.load()
+        await purgeExpiredTrash()
+        await sweepOrphanedHistory()
+        await study.load()
+        await textDocs.load()
+        await boards.load()
+        Task {
+            _ = try? await history.prune(keeping: .default)
+        }
+        Task.detached(priority: .utility) { [store] in
+            LibraryCovers.pruneStaleCovers(store: store)
+        }
+        Task {
+            await search.indexAll(notebooks: notebooks, store: store)
+            if let message = search.takeRecognitionNotice() {
+                notice = Notice(title: "Handwriting re-read", message: message)
+            }
+            await search.search(searchText)
+        }
     }
 
     /// Re-runs the whole load after a failure.
@@ -216,7 +229,7 @@ final class AppModel {
             notebooks = listing.manifests
             trashedNotebooks = trash.manifests
             pageRecents.prune(keepingNotebookIDs: Set((notebooks + trashedNotebooks).map(\.id)))
-            bookmarks.prepare(notebookIDs: notebooks.map(\.id))
+            await bookmarks.prepare(notebookIDs: notebooks.map(\.id))
             unreadableNotebookCount = listing.unreadableCount + trash.unreadableCount
             announceUnreadableIfNeeded()
         } catch {
@@ -509,6 +522,9 @@ final class AppModel {
                 ThumbnailCache.invalidate(notebookID: notebook.id, pageID: pageID)
             }
         }
+        // The disk covers are gone, but the memory cache and the cards' cover
+        // task ids still hold the old images; this clears and reloads both.
+        LibraryCovers.invalidateAll()
         await reload()
     }
 
@@ -530,7 +546,13 @@ final class AppModel {
 
     // MARK: - Notebooks
 
-    func createNotebook(title: String = "Untitled Notebook") async {
+    /// Creates a notebook and opens it. Without a title the notebook is named
+    /// after today, numbered when another notebook already has that name.
+    func createNotebook(title: String? = nil) async {
+        let title = title ?? NotebookNaming.defaultNotebookTitle(
+            for: Date(),
+            existing: Set(notebooks.map(\.title) + trashedNotebooks.map(\.title))
+        )
         var createdID: UUID?
         do {
             let manifest = try await store.createNotebook(title: title)
@@ -594,15 +616,26 @@ final class AppModel {
         for (pageID, title) in result.titles {
             outline.setTitle(title, notebookID: result.manifest.id, pageID: pageID)
         }
-        // File it where the user is looking, as createNotebook does.
+        // File it where the user is looking, as createNotebook does. A failure
+        // here is reported instead of swallowed: the notebook still opens, in
+        // All Notebooks, and the user is told it was not filed.
+        var filingFailure: String?
         if case .folder(let folderID) = selectedLocation {
-            try? await store.setFolder(folderID, forNotebook: result.manifest.id)
+            do {
+                try await store.setFolder(folderID, forNotebook: result.manifest.id)
+            } catch {
+                let name = folderTree.folder(withID: folderID)?.name ?? "the selected folder"
+                filingFailure = "It could not be moved into \(name). \(error.localizedDescription)"
+            }
         }
         // Index in the background, so its printed text is searchable before
         // the tab closes without holding up opening it.
         let manifest = result.manifest
         Task { await search.index(notebook: manifest, store: store) }
         await reload()
+        if let filingFailure {
+            notice = Notice(title: "Imported, but not filed", message: filingFailure)
+        }
         if let notebook = notebooks.first(where: { $0.id == result.manifest.id }) {
             await open(notebook)
         }
@@ -797,8 +830,70 @@ final class AppModel {
 
     // MARK: - Notebook session
 
+    /// The open still building each notebook's session. A notebook is recorded
+    /// here synchronously, before its first disk call, so a second tap on the
+    /// same card joins that open instead of starting another session over the
+    /// same pages: two sessions would both save the same page and the later
+    /// write would win.
+    private var openingTabs: [UUID: Task<Void, Never>] = [:]
+
     /// Opens `notebook`; with `highlighting`, the page marks that search's matches.
     func open(_ notebook: NotebookManifest, pageID: UUID? = nil, highlighting query: SearchHighlight? = nil) async {
+        if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
+            // Re-finding a notebook in the library counts as opening it again.
+            await show(existing, pageID: pageID, highlighting: query, markOpened: true)
+            return
+        }
+
+        // Registered on the main actor with no suspension point in between, so
+        // two taps in one frame cannot both get past this check.
+        if let opening = openingTabs[notebook.id] {
+            await opening.value
+            // The tap that started the load owns its page request; this one
+            // applies its own once the session exists. It was marked as opened
+            // by the load, milliseconds ago.
+            if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
+                await show(existing, pageID: pageID, highlighting: query, markOpened: false)
+            }
+            return
+        }
+
+        let opening = Task { await self.loadAndOpen(notebook, pageID: pageID, highlighting: query) }
+        openingTabs[notebook.id] = opening
+        await opening.value
+        openingTabs[notebook.id] = nil
+    }
+
+    /// Brings a loaded notebook to the front, on the requested page.
+    private func show(
+        _ existing: NotebookSession,
+        pageID: UUID?,
+        highlighting query: SearchHighlight?,
+        markOpened: Bool
+    ) async {
+        if markOpened {
+            let openedAt = Date()
+            try? await store.markOpened(existing.notebookID, at: openedAt)
+            if let index = notebooks.firstIndex(where: { $0.id == existing.notebookID }) {
+                notebooks[index].lastOpenedAt = openedAt
+            }
+        }
+        existing.searchHighlight = query
+        activeNotebookID = existing.notebookID
+        isShowingLibrary = false
+        // Page one is a valid target: a search hit there used to be ignored.
+        if let pageID, let index = existing.manifest.pageOrder.firstIndex(of: pageID) {
+            await existing.goToPage(index)
+        }
+    }
+
+    /// Builds the session for `notebook` and shows it. Runs as the only open of
+    /// its notebook; `open` joins this task rather than starting a second one.
+    private func loadAndOpen(
+        _ notebook: NotebookManifest,
+        pageID: UUID?,
+        highlighting query: SearchHighlight?
+    ) async {
         // Last Opened is kept apart from Date Modified: opening a notebook is
         // re-finding it, not editing it.
         let openedAt = Date()
@@ -807,14 +902,10 @@ final class AppModel {
             notebooks[index].lastOpenedAt = openedAt
         }
 
+        // Re-checked after every await: another path may have opened this
+        // notebook while this one waited for the disk.
         if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
-            existing.searchHighlight = query
-            activeNotebookID = existing.notebookID
-            isShowingLibrary = false
-            // Page one is a valid target: a search hit there used to be ignored.
-            if let pageID, let index = existing.manifest.pageOrder.firstIndex(of: pageID) {
-                await existing.goToPage(index)
-            }
+            await show(existing, pageID: pageID, highlighting: query, markOpened: false)
             return
         }
 
@@ -829,6 +920,12 @@ final class AppModel {
 
         do {
             let snapshot = try await store.loadNotebook(notebook.id)
+            // The pages took time to load; never append a second session for a
+            // notebook that is already in `tabs`.
+            if let existing = tabs.first(where: { $0.notebookID == notebook.id }) {
+                await show(existing, pageID: pageID, highlighting: query, markOpened: false)
+                return
+            }
             let newSession = NotebookSession(store: store, snapshot: snapshot, history: history)
             newSession.onPageDeleted = { [weak self] pageID in
                 guard let self else { return }

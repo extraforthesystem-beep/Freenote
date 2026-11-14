@@ -48,12 +48,12 @@ struct BoardThumbnail: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .fill(paperColor)
 
             if let crop {
                 BoardStaticItemLayer(
-                    items: board.normalizedZOrder(),
+                    items: board.frameBackedItems(in: crop),
                     content: crop,
                     scale: side / crop.width,
                     assetsDirectory: assetsDirectory
@@ -74,9 +74,9 @@ struct BoardThumbnail: View {
             }
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         }
         .task(id: board.updatedAt) {
@@ -99,9 +99,18 @@ struct BoardThumbnail: View {
             return
         }
         let pixels = side * 3
-        let rendered = await Task.detached(priority: .utility) {
-            BoardInkThumbnail.renderer(strokes: strokes, crop: crop, pixels: pixels)
-        }.value
+        // A detached task does not inherit this view's `.task` cancellation, so
+        // pass it on: a board scrolled out of the list is skipped instead of
+        // building a drawing from all its strokes and rasterising it.
+        let render = Task.detached(priority: .utility) { () -> CGImage? in
+            guard !Task.isCancelled else { return nil }
+            return BoardInkThumbnail.renderer(strokes: strokes, crop: crop, pixels: pixels)
+        }
+        let rendered = await withTaskCancellationHandler {
+            await render.value
+        } onCancel: {
+            render.cancel()
+        }
         guard !Task.isCancelled else { return }
         image = rendered
     }

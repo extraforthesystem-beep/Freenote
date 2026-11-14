@@ -168,6 +168,33 @@ private func pageEdited(at date: Date, text: String) -> Page {
     #expect(mark.rect.minY < 100 + 396 / 2)
 }
 
+@Test func pdfMarksStopWhenTheTaskIsCancelled() async throws {
+    let assets = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SearchQueryTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+    try makeTextPDF("Hello quarterly report", at: assets.appendingPathComponent("doc.pdf"))
+
+    var page = Page(id: UUID(), width: 612, height: 792, template: .blank)
+    page.elements = [
+        PageElement(
+            id: UUID(),
+            layerID: page.layers[0].id,
+            frame: ElementFrame(x: 100, y: 100, width: 306, height: 396),
+            zIndex: 0,
+            updatedAt: Date(),
+            content: .pdfPage(assetName: "doc.pdf", pageIndex: 0)
+        )
+    ]
+
+    // A page flip abandons the extraction: it must not read the PDF at all.
+    let task = Task { () -> [PageMatchMark] in
+        withUnsafeCurrentTask { $0?.cancel() }
+        return PageMatchLocator.pdfMarks(for: SearchQuery("quarterly"), in: page, assetsDirectory: assets)
+    }
+    let marks = await task.value
+    #expect(marks.isEmpty)
+}
+
 /// A one-page US Letter PDF with `text` near the top-left.
 private func makeTextPDF(_ text: String, at url: URL) throws {
     var box = CGRect(x: 0, y: 0, width: 612, height: 792)

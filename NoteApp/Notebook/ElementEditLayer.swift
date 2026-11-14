@@ -15,13 +15,28 @@ struct ElementEditLayer: View {
     @State private var previewFrames: [UUID: ElementFrame] = [:]
     @State private var dragOrigin: (id: UUID, frame: ElementFrame)?
     @State private var resizeOrigin: (id: UUID, frame: ElementFrame)?
+    /// The page's elements in drawing order, sorted once per element change: a
+    /// drag only moves the preview above them.
+    @State private var ordered: [PageElement]
 
     private static let pageSpace = "ElementEditLayer.page"
 
-    private var ordered: [PageElement] {
-        page.elements.sorted {
-            $0.zIndex == $1.zIndex ? $0.id.uuidString < $1.id.uuidString : $0.zIndex < $1.zIndex
-        }
+    init(
+        page: Page,
+        selectedID: Binding<UUID?>,
+        onFrame: @escaping (UUID, ElementFrame) -> Void,
+        onLock: @escaping (UUID, Bool) -> Void,
+        onDelete: @escaping (UUID) -> Void,
+        onMoveZ: @escaping (UUID, Int) -> Void
+    ) {
+        self.page = page
+        _selectedID = selectedID
+        self.onFrame = onFrame
+        self.onLock = onLock
+        self.onDelete = onDelete
+        self.onMoveZ = onMoveZ
+        // Sorted once here as well, so the layer's first frame has its elements.
+        _ordered = State(initialValue: page.elements.inPageOrder)
     }
 
     var body: some View {
@@ -36,6 +51,9 @@ struct ElementEditLayer: View {
         .contentShape(Rectangle())
         .onTapGesture {
             selectedID = nil
+        }
+        .onChange(of: page.elements, initial: true) { _, elements in
+            ordered = elements.inPageOrder
         }
     }
 
@@ -66,11 +84,19 @@ struct ElementEditLayer: View {
                     .padding(4)
                     .background(.thinMaterial, in: Circle())
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(6)
+                    .padding(AppSpacing.s)
             }
         }
         .frame(width: max(frame.width, 1), height: max(frame.height, 1))
         .contentShape(Rectangle())
+        // VoiceOver otherwise sees a stack of unlabelled rectangles.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel(for: element))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAction {
+            selectedID = element.id
+        }
         .onTapGesture {
             selectedID = element.id
         }
@@ -118,6 +144,21 @@ struct ElementEditLayer: View {
         }
         .rotationEffect(.radians(frame.rotation))
         .position(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+    }
+
+    /// What the element is, for VoiceOver: its content kind and that it is an
+    /// element on the page, not part of the paper.
+    private func accessibilityLabel(for element: PageElement) -> String {
+        let kind: String
+        switch element.content {
+        case .text: kind = "Text"
+        case .image: kind = "Image"
+        case .shape: kind = "Shape"
+        case .pdfPage: kind = "PDF page"
+        case .stickyNote: kind = "Sticky note"
+        case .tape: kind = "Tape"
+        }
+        return element.isLocked ? "\(kind) element, locked" : "\(kind) element"
     }
 
     /// Measured in page space, so a rotated element follows the finger rather

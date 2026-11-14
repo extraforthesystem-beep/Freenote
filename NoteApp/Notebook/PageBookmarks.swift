@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+/// The bookmark file version this build writes and reads. File scope, so the
+/// off-main reader can use it: a static member of the `@MainActor` type below
+/// would be main-actor isolated.
+private nonisolated let pageBookmarkFileVersion = 1
+
 /// App-side page bookmarks with an optional name.
 ///
 /// They are stored in `notebooks/<id>/bookmarks.json`, next to the notebook but
@@ -21,13 +26,13 @@ final class PageBookmarks {
         var id: String { "\(notebookID.uuidString)/\(pageID.uuidString)" }
     }
 
-    private struct Entry: Codable {
+    nonisolated struct Entry: Codable {
         var pageID: UUID
         var title: String?
         var createdAt: Date
     }
 
-    private struct FileContents: Codable {
+    nonisolated struct FileContents: Codable {
         /// Bumped only if the bookmark file's shape changes; a newer file is
         /// ignored rather than partly read.
         var version: Int
@@ -35,7 +40,6 @@ final class PageBookmarks {
     }
 
     private static let legacyDefaultsKey = "noteapp.pageBookmarks.v1"
-    private static let fileVersion = 1
 
     private let root: URL
     /// Page ids per notebook from the pre-file key. Kept as-is: it is a
@@ -54,9 +58,28 @@ final class PageBookmarks {
 
     /// Loads (and, where the old UserDefaults key has pages, migrates) every
     /// notebook's bookmarks once. View bodies then only read the cache.
-    func prepare(notebookIDs: [UUID]) {
-        for notebookID in notebookIDs where cache[notebookID] == nil {
-            _ = bookmarks(for: notebookID)
+    ///
+    /// The files are read and decoded off the main actor: there is one
+    /// `bookmarks.json` per notebook, and decoding all of them on the main actor
+    /// held up the first library frame. A notebook with no file is deliberately
+    /// left out of the cache, so `bookmarks(for:)` still migrates the old
+    /// UserDefaults list on first use and writes the file exactly as before.
+    func prepare(notebookIDs: [UUID]) async {
+        let missing = notebookIDs.filter { cache[$0] == nil }
+        if !missing.isEmpty {
+            let root = root
+            let loaded = await Task.detached(priority: .utility) { () -> [UUID: [Bookmark]] in
+                var result: [UUID: [Bookmark]] = [:]
+                for notebookID in missing {
+                    let url = Self.fileURL(root: root, notebookID: notebookID)
+                    guard let data = try? Data(contentsOf: url) else { continue }
+                    result[notebookID] = Self.decode(data, notebookID: notebookID)
+                }
+                return result
+            }.value
+            for (notebookID, bookmarks) in loaded where cache[notebookID] == nil {
+                cache[notebookID] = bookmarks
+            }
         }
         _ = allBookmarks
     }
@@ -102,6 +125,12 @@ final class PageBookmarks {
         )) ?? []
         for folder in folders {
             guard let notebookID = UUID(uuidString: folder.lastPathComponent) else { continue }
+            // Already loaded, by `prepare` or by an earlier read: do not touch
+            // the file again on the main actor.
+            if let cached = cache[notebookID] {
+                byNotebook[notebookID] = cached
+                continue
+            }
             let url = folder.appendingPathComponent("bookmarks.json")
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             byNotebook[notebookID] = readFile(at: url, notebookID: notebookID)
@@ -176,13 +205,29 @@ final class PageBookmarks {
     }
 
     private func fileURL(for notebookID: UUID) -> URL {
-        notebookDirectory(notebookID).appendingPathComponent("bookmarks.json")
+        Self.fileURL(root: root, notebookID: notebookID)
+    }
+
+    /// The same path, callable from the off-main reader.
+    nonisolated private static func fileURL(root: URL, notebookID: UUID) -> URL {
+        root.appendingPathComponent("notebooks", isDirectory: true)
+            .appendingPathComponent(notebookID.uuidString.lowercased(), isDirectory: true)
+            .appendingPathComponent("bookmarks.json")
     }
 
     private func readFile(at url: URL, notebookID: UUID) -> [Bookmark] {
-        guard let data = try? Data(contentsOf: url),
-              let file = try? Self.decoder.decode(FileContents.self, from: data),
-              file.version <= Self.fileVersion
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return Self.decode(data, notebookID: notebookID)
+    }
+
+    /// Decodes one bookmark file with the on-disk format and version rule
+    /// unchanged. Separate from the main actor so the launch pass can run it in
+    /// a detached task.
+    nonisolated private static func decode(_ data: Data, notebookID: UUID) -> [Bookmark] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let file = try? decoder.decode(FileContents.self, from: data),
+              file.version <= pageBookmarkFileVersion
         else { return [] }
         return file.bookmarks.map {
             Bookmark(notebookID: notebookID, pageID: $0.pageID, title: $0.title, createdAt: $0.createdAt)
@@ -204,7 +249,7 @@ final class PageBookmarks {
         cache[notebookID] = list
         allCache = nil
         let file = FileContents(
-            version: Self.fileVersion,
+            version: pageBookmarkFileVersion,
             bookmarks: list.map { Entry(pageID: $0.pageID, title: $0.title, createdAt: $0.createdAt) }
         )
         guard let data = try? Self.encoder.encode(file) else { return }

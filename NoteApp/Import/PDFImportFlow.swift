@@ -22,6 +22,8 @@ final class PDFImportFlow: Identifiable {
         case needsPassword(message: String?)
         case choosing(PDFDocumentInfo)
         case importing(fraction: Double)
+        /// The user stopped the import; nothing that was not written stays.
+        case cancelled
         case failed(String)
     }
 
@@ -33,6 +35,8 @@ final class PDFImportFlow: Identifiable {
     private(set) var pageCount = 0
     /// How many pages the running import is making.
     private(set) var importPageCount = 0
+    /// True once Cancel was pressed, so it is not pressed twice.
+    private(set) var isCancelling = false
 
     private let model: AppModel
     private let url: URL
@@ -40,6 +44,9 @@ final class PDFImportFlow: Identifiable {
     private var password: String?
     private var hasStarted = false
     private var isAccessingFile = false
+    /// The running import. Held so Cancel can stop it, and so the file's
+    /// security scope is only released once nothing is reading it.
+    private var importTask: Task<Void, Never>?
 
     init(model: AppModel, url: URL, destination: Destination) {
         self.model = model
@@ -56,17 +63,38 @@ final class PDFImportFlow: Identifiable {
         isInsert ? "Insert PDF Pages" : "Import PDF"
     }
 
+    /// "Import" for a new notebook, "Insert" for pages added to one: the sheet's
+    /// title, button, progress and messages all use the same verb.
+    var actionWord: String {
+        isInsert ? "Insert" : "Import"
+    }
+
+    var workingWord: String {
+        isInsert ? "Inserting" : "Importing"
+    }
+
     /// True while the import cannot be cancelled safely.
     var isWorking: Bool {
         switch phase {
         case .reading, .importing: true
-        case .needsPassword, .choosing, .failed: false
+        case .needsPassword, .choosing, .failed, .cancelled: false
         }
     }
 
-    var isFailed: Bool {
-        if case .failed = phase { return true }
+    /// True while the file is only being read, before there is anything to
+    /// choose: short enough that the sheet stays shut instead of offering
+    /// Cancel. An import can always be stopped.
+    var isReading: Bool {
+        if case .reading = phase { return true }
         return false
+    }
+
+    /// True when the only thing left to do is close the sheet.
+    var isFailed: Bool {
+        switch phase {
+        case .failed, .cancelled: true
+        case .reading, .needsPassword, .choosing, .importing: false
+        }
     }
 
     // MARK: - Steps
@@ -84,14 +112,29 @@ final class PDFImportFlow: Identifiable {
         await read()
     }
 
-    func confirm(
+    /// Starts the import and holds its task, so it can be stopped.
+    func startImport(
+        selection: PDFPageSelection,
+        insertAtEnd: Bool,
+        margin: PDFPageMargin
+    ) {
+        guard case .choosing = phase, importTask == nil else { return }
+        importPageCount = selection.pdfIndices(pageCount: pageCount).count
+        report(0)
+        importTask = Task { [weak self] in
+            await self?.performImport(
+                selection: selection,
+                insertAtEnd: insertAtEnd,
+                margin: margin
+            )
+        }
+    }
+
+    private func performImport(
         selection: PDFPageSelection,
         insertAtEnd: Bool,
         margin: PDFPageMargin
     ) async {
-        guard case .choosing = phase else { return }
-        importPageCount = selection.pdfIndices(pageCount: pageCount).count
-        report(0)
         do {
             switch destination {
             case .newNotebook:
@@ -119,13 +162,34 @@ final class PDFImportFlow: Identifiable {
                 }
             }
             isFinished = true
+        } catch is CancellationError {
+            // Stopped between pages: the pages not reached were never started,
+            // and the ones already written stay in the notebook.
+            phase = .cancelled
         } catch {
             phase = .failed(error.localizedDescription)
         }
+        importTask = nil
+        releaseFileIfIdle()
     }
 
-    /// Releases the file and forgets the password when the sheet closes.
+    /// Stops a running import at the next page boundary.
+    func cancel() {
+        guard importTask != nil else { return }
+        isCancelling = true
+        importTask?.cancel()
+    }
+
+    /// Releases the file and forgets the password once nothing is reading it.
     func close() {
+        importTask?.cancel()
+        releaseFileIfIdle()
+    }
+
+    private func releaseFileIfIdle() {
+        // A cancelled import may still be unwinding; the file has to stay
+        // readable until it has stopped.
+        guard importTask == nil else { return }
         if isAccessingFile {
             url.stopAccessingSecurityScopedResource()
             isAccessingFile = false
@@ -151,10 +215,11 @@ final class PDFImportFlow: Identifiable {
     }
 
     /// Progress arrives from a background task, so it is clamped and never
-    /// allowed to move backwards or overwrite a failure.
+    /// allowed to move backwards or overwrite a failure or a cancel.
     private func report(_ fraction: Double) {
         guard !isFinished else { return }
         if case .failed = phase { return }
+        if case .cancelled = phase { return }
         if case let .importing(current) = phase, fraction < current { return }
         phase = .importing(fraction: min(max(fraction, 0), 1))
     }
@@ -179,8 +244,13 @@ struct PDFImportSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(flow.isFailed ? "Close" : "Cancel") { dismiss() }
-                        .disabled(flow.isWorking)
+                    Button(flow.isFailed ? "Close" : "Cancel") {
+                        if !flow.isFailed {
+                            flow.cancel()
+                        }
+                        dismiss()
+                    }
+                    .disabled(flow.isReading || flow.isCancelling)
                 }
             }
             .interactiveDismissDisabled(flow.isWorking)
@@ -200,7 +270,7 @@ struct PDFImportSheet: View {
         switch flow.phase {
         case .reading:
             Section {
-                HStack(spacing: 10) {
+                HStack(spacing: AppSpacing.m) {
                     ProgressView()
                     Text("Reading the PDF…")
                 }
@@ -209,27 +279,35 @@ struct PDFImportSheet: View {
             passwordSection(message: message)
         case let .choosing(info):
             PDFPageChoiceForm(info: info, isInsert: flow.isInsert) { selection, insertAtEnd, margin in
-                Task {
-                    await flow.confirm(
-                        selection: selection,
-                        insertAtEnd: insertAtEnd,
-                        margin: margin
-                    )
-                }
+                flow.startImport(
+                    selection: selection,
+                    insertAtEnd: insertAtEnd,
+                    margin: margin
+                )
             }
         case let .importing(fraction):
             Section {
                 if flow.importPageCount > PDFImporter.progressPageThreshold {
                     ProgressView(value: fraction)
-                    Text("Importing \(flow.importPageCount) pages…")
+                    Text("\(flow.workingWord) \(flow.importPageCount) pages…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
-                    HStack(spacing: 10) {
+                    HStack(spacing: AppSpacing.m) {
                         ProgressView()
-                        Text("Importing…")
+                        Text("\(flow.workingWord)…")
                     }
                 }
+            }
+        case .cancelled:
+            Section {
+                Label(
+                    "\(flow.actionWord) cancelled",
+                    systemImage: "xmark.circle"
+                )
+                Text("The pages not reached were not started. Any pages already inserted are kept.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
         case let .failed(message):
             Section {
@@ -357,7 +435,8 @@ private struct PDFPageChoiceForm: View {
     }
 
     private var actionTitle: String {
-        chosenCount == 1 ? "Import Page" : "Import \(chosenCount) Pages"
+        let verb = isInsert ? "Insert" : "Import"
+        return chosenCount == 1 ? "\(verb) Page" : "\(verb) \(chosenCount) Pages"
     }
 
     private func pageField(_ value: Binding<Int>) -> some View {

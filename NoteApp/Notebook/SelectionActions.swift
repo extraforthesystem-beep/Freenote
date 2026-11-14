@@ -146,9 +146,11 @@ enum SelectionActions {
     }
 
     static func copyAsText(selection: InkSelection, session: NotebookSession) async {
-        guard let page = session.page,
-              let text = await recognizedText(for: selection, in: page)
-        else { return }
+        guard let page = session.page else { return }
+        guard let text = await recognizedText(for: selection, in: page) else {
+            reportNothingRecognised(in: session)
+            return
+        }
         UIPasteboard.general.string = text
     }
 
@@ -157,16 +159,21 @@ enum SelectionActions {
         session: NotebookSession,
         controller: PencilCanvasController
     ) async {
-        guard let page = session.page,
-              let text = await recognizedText(for: selection, in: page)
-        else { return }
+        guard let page = session.page else { return }
+        guard let text = await recognizedText(for: selection, in: page) else {
+            reportNothingRecognised(in: session)
+            return
+        }
         let layerID = session.activeLayerID ?? page.layers.first?.id ?? UUID()
         guard let updated = SelectionEdit.textBox(
             for: text,
             selection: selection,
             in: page,
             layerID: layerID
-        ) else { return }
+        ) else {
+            reportNothingRecognised(in: session)
+            return
+        }
         apply(
             before: page,
             after: updated,
@@ -177,8 +184,13 @@ enum SelectionActions {
         )
     }
 
-    private static func recognizedInk(_ selection: InkSelection, in page: Page) async -> String? {
-        let records = selection.strokes(in: page)
+    /// A text action that recognised nothing says so; otherwise the spinner
+    /// stops and the menu item looks broken.
+    private static func reportNothingRecognised(in session: NotebookSession) {
+        session.errorMessage = "No handwriting was recognised in the selection."
+    }
+
+    private static func recognizedInk(_ selection: InkSelection, in page: Page) async -> String? {        let records = selection.strokes(in: page)
         guard !records.isEmpty else { return nil }
         let drawing = PKDrawing(strokes: records.compactMap { try? StrokeCodec.stroke(from: $0) })
         guard !drawing.strokes.isEmpty else { return nil }

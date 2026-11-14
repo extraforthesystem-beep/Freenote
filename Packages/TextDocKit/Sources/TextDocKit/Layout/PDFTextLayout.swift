@@ -225,7 +225,7 @@ public enum PDFTextLayout: Sendable {
             measureText(block, text, contentWidth)
         case let .bulletList(items), let .numberedList(items):
             listHeight(
-                items: items,
+                items: items.texts,
                 block: block,
                 contentWidth: contentWidth,
                 options: options,

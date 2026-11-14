@@ -127,8 +127,8 @@ struct FavoritePensPopover: View {
 
     var body: some View {
         FavoritePensContent(editor: editor)
-            .padding(16)
-            .frame(width: 300)
+            .padding(AppSpacing.l)
+            .frame(width: 320)
     }
 }
 
@@ -138,32 +138,44 @@ struct FavoritePensPopover: View {
 struct FavoritePensContent: View {
     @Bindable var editor: EditorToolState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editMode: EditMode = .inactive
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             header
             if editor.favoritePens.pens.isEmpty {
-                emptyState
+                addButton
+                Text(footer)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             } else {
                 penList
+                Divider()
+                addButton
+                Text(footer)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Divider()
-            Button {
-                editor.saveCurrentPen()
-            } label: {
-                Label("Add Current Pen", systemImage: "plus")
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(editor.favoritePens.isFull || editor.isCurrentPenSaved)
-            .accessibilityHint("Saves the current pen style, colour and width")
-            Text(footer)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
+    }
+
+    /// The one row the empty list shows: no heading over an explanation, just
+    /// the offer to save the pen in hand and one line about what it stores.
+    private var addButton: some View {
+        Button {
+            editor.saveCurrentPen()
+        } label: {
+            Label("Add Current Pen", systemImage: "plus")
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(editor.favoritePens.isFull || editor.isCurrentPenSaved)
+        .accessibilityHint("Saves the current pen style, colour and width")
     }
 
     private var header: some View {
@@ -173,7 +185,7 @@ struct FavoritePensContent: View {
             Spacer(minLength: 0)
             if !editor.favoritePens.pens.isEmpty {
                 Button(editMode.isEditing ? "Done" : "Edit") {
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
                         editMode = editMode.isEditing ? .inactive : .active
                     }
                 }
@@ -187,18 +199,6 @@ struct FavoritePensContent: View {
                 )
             }
         }
-    }
-
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("No saved pens yet.")
-                .font(.subheadline)
-            Text("Pick a pen colour and width, then add it here for one-tap recall.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 8)
     }
 
     private var penList: some View {
@@ -238,7 +238,7 @@ struct FavoritePensContent: View {
 
     private func row(_ pen: FavoritePen) -> some View {
         let isCurrent = editor.currentPen.matches(pen)
-        return HStack(spacing: 10) {
+        return HStack(spacing: AppSpacing.s) {
             Image(systemName: pen.style.symbolName)
                 .font(.system(size: 16))
                 .frame(width: 22)
@@ -247,7 +247,7 @@ struct FavoritePensContent: View {
                 .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
                 .frame(width: dotSize(pen.width, style: pen.style), height: dotSize(pen.width, style: pen.style))
                 .frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: AppSpacing.xxs) {
                 Text(pen.style.displayName)
                     .font(.subheadline)
                 Text(PenWidth.label(pen.width))

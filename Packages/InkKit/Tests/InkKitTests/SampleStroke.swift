@@ -13,6 +13,22 @@ typealias SamplePath = NSBezierPath
 #else
 import UIKit
 typealias SamplePath = UIBezierPath
+
+// The AppKit spellings the samples are written in, so the suite also builds
+// for the iOS Simulator, where the iOS-only canvas tests run.
+extension UIBezierPath {
+    func line(to point: CGPoint) { addLine(to: point) }
+
+    func curve(to point: CGPoint, controlPoint1: CGPoint, controlPoint2: CGPoint) {
+        addCurve(to: point, controlPoint1: controlPoint1, controlPoint2: controlPoint2)
+    }
+}
+
+extension UIColor {
+    convenience init(srgbRed red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
+        self.init(red: red, green: green, blue: blue, alpha: alpha)
+    }
+}
 #endif
 
 enum SampleStroke {

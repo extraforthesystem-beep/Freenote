@@ -41,7 +41,7 @@ struct ContinueRail: View {
     var body: some View {
         let items = items
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: AppSpacing.m) {
                 HStack(spacing: 8) {
                     Text("Continue")
                         .font(.headline)
@@ -58,6 +58,11 @@ struct ContinueRail: View {
                                 tile(item)
                             }
                             .buttonStyle(.plain)
+                            .notebookContextActions(
+                                model: model,
+                                notebook: item.notebook,
+                                includesCover: false
+                            )
                             .accessibilityLabel(
                                 Text("Continue \(item.notebook.title), \(item.title)")
                             )
@@ -70,7 +75,7 @@ struct ContinueRail: View {
     }
 
     private func tile(_ item: Item) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
             PagePreviewThumbnail(
                 notebookID: item.notebook.id,
                 pageID: item.pageID,

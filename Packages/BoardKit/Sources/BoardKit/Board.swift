@@ -171,6 +171,24 @@ public struct Board: Codable, Identifiable, Hashable, Sendable {
         return visible.filter { included.contains($0.id) }
     }
 
+    /// Frame-backed items whose frame intersects `rect`, in draw order, plus
+    /// every item in `alwaysIncluding`.
+    ///
+    /// This is the viewport query for the item layer. It cannot use
+    /// ``items(in:)``: that computes the bounds of the ink item, which walks
+    /// every point of every stroke, and the item layer never draws ink anyway.
+    /// `alwaysIncluding` keeps a selected object's outline and handles alive
+    /// when the object is dragged past the edge of the screen.
+    public func frameBackedItems(
+        in rect: CGRect,
+        alwaysIncluding ids: Set<UUID> = []
+    ) -> [BoardItem] {
+        normalizedZOrder().filter { item in
+            guard let frame = item.frame else { return false }
+            return frame.intersects(rect) || ids.contains(item.id)
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, title, items, deletedItemIDs, createdAt, updatedAt, schemaVersion
     }

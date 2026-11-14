@@ -104,7 +104,7 @@ private struct Parser {
                     items.append(next)
                     index += 1
                 }
-                blocks.append(TextBlock(kind: .bulletList(items: items)))
+                blocks.append(TextBlock(kind: .bulletList(items: items.map { ListItem(text: $0) })))
                 continue
             }
 
@@ -117,7 +117,7 @@ private struct Parser {
                     items.append(next)
                     index += 1
                 }
-                blocks.append(TextBlock(kind: .numberedList(items: items)))
+                blocks.append(TextBlock(kind: .numberedList(items: items.map { ListItem(text: $0) })))
                 continue
             }
 

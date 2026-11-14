@@ -38,6 +38,8 @@ struct BoardEditorView: View {
 
     @State private var board: Board
     @State private var isSaving = false
+    /// True while a picked photo is read and written to the assets folder.
+    @State private var isInsertingImage = false
     @State private var hasUnsavedChanges = false
     @State private var saveGeneration = 0
     @State private var saveTask: Task<Bool, Never>?
@@ -45,6 +47,10 @@ struct BoardEditorView: View {
     /// would only bump the modified date.
     @State private var savedCamera: BoardCamera?
     @State private var didRestoreCamera = false
+    #if os(macOS)
+    /// The Mac preview's ink, rasterised off the main actor.
+    @State private var macInk: CGImage?
+    #endif
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -181,9 +187,10 @@ struct BoardEditorView: View {
         ZStack {
             BoardDotGrid(viewport: viewport, isVisible: showsDotGrid, origin: Self.worldOffset)
 
-            BoardItemLayer(
-                items: board.normalizedZOrder().filter { $0.frame != nil },
+            BoardVisibleItemLayer(
+                board: board,
                 viewport: viewport,
+                selectedItemID: selection,
                 assetsDirectory: assetsDirectory,
                 reduceMotion: reduceMotion,
                 editingItemID: editingItemID
@@ -333,14 +340,14 @@ struct BoardEditorView: View {
                     Color.white
 
                     BoardStaticItemLayer(
-                        items: board.normalizedZOrder(),
+                        items: board.frameBackedItems(in: content),
                         content: content,
                         scale: scale,
                         assetsDirectory: assetsDirectory
                     )
 
-                    if let ink = macInkImage(in: content) {
-                        Image(nsImage: ink)
+                    if let macInk {
+                        Image(decorative: macInk, scale: 1)
                             .resizable()
                             .interpolation(.high)
                             .frame(width: width, height: height)
@@ -350,6 +357,12 @@ struct BoardEditorView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
                 .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                // Rasterising the ink at up to 2,048 px used to run inside the
+                // body, so every layout pass — dragging the window edge — drew
+                // the whole board again. It runs once per content change now.
+                .task(id: MacInkKey(content: content, signature: macInkSignature)) {
+                    await renderMacInk(in: content)
+                }
             } else {
                 ContentUnavailableView {
                     Label("Empty Board", systemImage: "square.dashed")
@@ -362,20 +375,50 @@ struct BoardEditorView: View {
         .background(AppColor.groupedBackground)
     }
 
-    private func macInkImage(in content: CGRect) -> NSImage? {
-        guard !inkStrokes.isEmpty else { return nil }
+    /// What the Mac preview's ink image depends on: the content rectangle that
+    /// is drawn, and a cheap signature for the strokes in it.
+    private struct MacInkKey: Equatable {
+        let content: CGRect
+        let signature: MacInkSignature
+    }
+
+    private struct MacInkSignature: Equatable {
+        let strokeCount: Int
+        let lastStrokeID: UUID?
+    }
+
+    private var macInkSignature: MacInkSignature {
+        let strokes = inkStrokes
+        return MacInkSignature(strokeCount: strokes.count, lastStrokeID: strokes.last?.id)
+    }
+
+    /// Renders the ink off the main actor, keeping the last image up meanwhile.
+    private func renderMacInk(in content: CGRect) async {
         let strokes = Self.translatedStrokes(
             inkStrokes,
             by: CGPoint(x: -content.minX, y: -content.minY)
         )
+        guard !strokes.isEmpty else {
+            macInk = nil
+            return
+        }
+
         let size = CGSize(width: content.width, height: content.height)
         let scale = min(2, max(0.01, 2_048 / max(size.width, size.height)))
-        return PageRenderer.image(
-            strokes: strokes,
-            pageSize: size,
-            template: .blank,
-            scale: scale
-        )
+        let rendered = await Task.detached(priority: .utility) { () -> CGImage? in
+            guard !Task.isCancelled else { return nil }
+            guard let image = PageRenderer.image(
+                strokes: strokes,
+                pageSize: size,
+                template: .blank,
+                scale: scale
+            ) else {
+                return nil
+            }
+            return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        }.value
+        guard !Task.isCancelled else { return }
+        macInk = rendered
     }
     #endif
 
@@ -423,7 +466,7 @@ struct BoardEditorView: View {
         }
 
         ToolbarItem(placement: .primaryAction) {
-            if isSaving {
+            if isSaving || isInsertingImage {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -480,13 +523,20 @@ struct BoardEditorView: View {
     }
 
     /// Frames all content with a little room around it.
+    ///
+    /// `UIScrollView.zoom(to:animated:)` does not read Reduce Motion, and Zoom
+    /// to Fit is the largest move on the board, so the setting is applied here
+    /// rather than left to the scroll view.
     private func zoomToFit(animated: Bool) {
         guard let canvas = controller.canvas, canvas.bounds.width > 1 else { return }
         guard let content = board.bounds(), content.width > 0, content.height > 0 else {
             centerAt100Percent(animated: animated)
             return
         }
-        canvas.zoom(to: content.insetBy(dx: -Self.fitPadding, dy: -Self.fitPadding), animated: animated)
+        canvas.zoom(
+            to: content.insetBy(dx: -Self.fitPadding, dy: -Self.fitPadding),
+            animated: animated && !reduceMotion
+        )
     }
 
     /// Sets a zoom level around whatever the board is showing now.
@@ -504,7 +554,7 @@ struct BoardEditorView: View {
                 width: size.width,
                 height: size.height
             ),
-            animated: animated
+            animated: animated && !reduceMotion
         )
     }
 
@@ -518,7 +568,7 @@ struct BoardEditorView: View {
                 width: size.width,
                 height: size.height
             ),
-            animated: animated
+            animated: animated && !reduceMotion
         )
     }
 
@@ -607,17 +657,29 @@ struct BoardEditorView: View {
         Self.translated(board, by: CGPoint(x: -Self.worldOffset.x, y: -Self.worldOffset.y))
     }
 
-    /// Debounces an edit into one write. The write waits for any save already
-    /// in flight, so an older snapshot can never land after a newer one.
-    private func scheduleSave() {
+    /// Notes that the board changed and invalidates any older write, without
+    /// arming one. A drag calls this on every frame: the debounce is armed once
+    /// when the gesture ends, so no frame pays for a whole-board snapshot.
+    ///
+    /// The dirty flag is enough for the background and close paths, which read
+    /// the current board rather than a snapshot.
+    private func markDirty() {
         hasUnsavedChanges = true
         saveGeneration += 1
+    }
+
+    /// Debounces an edit into one write. The write waits for any save already
+    /// in flight, so an older snapshot can never land after a newer one.
+    ///
+    /// The snapshot is built when the debounce fires, not when it is armed: a
+    /// gesture that moves the same object for a second copies the board once,
+    /// not sixty times.
+    private func scheduleSave() {
+        markDirty()
         let generation = saveGeneration
-        let snapshot = savedBoard
-        let camera = currentCamera
         let previous = saveTask
         previous?.cancel()
-        isSaving = true
+        if !isSaving { isSaving = true }
 
         saveTask = Task {
             do {
@@ -625,9 +687,22 @@ struct BoardEditorView: View {
             } catch {
                 return false
             }
-            guard !Task.isCancelled else { return false }
-            return await write(snapshot, camera: camera, generation: generation, after: previous)
+            guard !Task.isCancelled, generation == saveGeneration else { return false }
+            return await writeCurrent(generation: generation, after: previous)
         }
+    }
+
+    /// Copies the board as it is now and writes it. Read on the main actor at
+    /// the moment the debounce fires, so the write always carries the latest
+    /// state; the generation is checked again around the copy.
+    private func writeCurrent(
+        generation: Int,
+        after previous: Task<Bool, Never>?
+    ) async -> Bool {
+        guard generation == saveGeneration else { return false }
+        let snapshot = savedBoard
+        let camera = currentCamera
+        return await write(snapshot, camera: camera, generation: generation, after: previous)
     }
 
     /// Done: wait for the write before dismissing, so a failure keeps the board
@@ -800,6 +875,9 @@ private struct BoardItemDrag {
     let frame: CGRect
     let corner: BoardResizeCorner?
     let keepsSquare: Bool
+    /// Edges of every other item, collected when the drag begins. Nothing else
+    /// can move mid-drag, so a per-frame rebuild would be wasted work.
+    var targets = BoardSnapTargets(xEdges: [], yEdges: [])
 }
 
 extension BoardEditorView {
@@ -836,7 +914,8 @@ extension BoardEditorView {
         if editingItemID != nil {
             commitEditing()
         }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        // The bar and outline appearing: a bar, so the standard token.
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
             selection = id
         }
         if id == nil {
@@ -948,7 +1027,10 @@ extension BoardEditorView {
     }
 
     private func beginDrag(at point: CGPoint) -> Bool {
-        guard let target = dragTarget(at: point) else { return false }
+        guard var target = dragTarget(at: point) else { return false }
+        // Snap targets are read from the board once, here: the other items
+        // cannot move while this one is being dragged.
+        target.targets = BoardSnapTargets(items: board.visibleItems, ignoring: target.itemID)
         drag = target
         dragMoved = false
         return true
@@ -967,22 +1049,26 @@ extension BoardEditorView {
                 keepsSquare: drag.keepsSquare
             )
             board.setFrame(drag.itemID, to: frame, at: now)
-            snapGuides = []
+            if !snapGuides.isEmpty {
+                snapGuides = []
+            }
         } else {
             var frame = drag.frame
             frame.origin.x += translation.x
             frame.origin.y += translation.y
-            let snapped = Self.snapped(
+            let snapped = drag.targets.snap(
                 frame,
-                items: board.visibleItems,
-                ignoring: drag.itemID,
                 tolerance: 6 / max(viewport.zoom, 0.001)
             )
             board.setFrame(drag.itemID, to: snapped.frame, at: now)
-            snapGuides = snapped.guides
+            // Assigning an equal array would invalidate the overlay for nothing.
+            if snapped.guides != snapGuides {
+                snapGuides = snapped.guides
+            }
         }
 
-        scheduleSave()
+        // The debounce is armed when the finger lifts, not per frame.
+        markDirty()
     }
 
     private func endDrag() {
@@ -1025,69 +1111,6 @@ extension BoardEditorView {
         )
     }
 
-    private struct SnapOutcome {
-        var frame: CGRect
-        var guides: [BoardSnapGuide]
-    }
-
-    /// Pulls a dragged frame onto another item's edges or centres when it is
-    /// within `tolerance` world points, and reports the guide lines to draw.
-    private static func snapped(
-        _ frame: CGRect,
-        items: [BoardItem],
-        ignoring itemID: UUID,
-        tolerance: CGFloat
-    ) -> SnapOutcome {
-        let frames = items.compactMap { item -> CGRect? in
-            guard item.id != itemID else { return nil }
-            return item.frame
-        }
-        guard !frames.isEmpty else {
-            return SnapOutcome(frame: frame, guides: [])
-        }
-
-        let xTargets = frames.flatMap { [$0.minX, $0.midX, $0.maxX] }
-        let yTargets = frames.flatMap { [$0.minY, $0.midY, $0.maxY] }
-        var result = frame
-        var guides: [BoardSnapGuide] = []
-
-        if let snap = nearestSnap(
-            edges: [frame.minX, frame.midX, frame.maxX],
-            targets: xTargets,
-            tolerance: tolerance
-        ) {
-            result.origin.x += snap.delta
-            guides.append(BoardSnapGuide(axis: .vertical, position: snap.line))
-        }
-        if let snap = nearestSnap(
-            edges: [frame.minY, frame.midY, frame.maxY],
-            targets: yTargets,
-            tolerance: tolerance
-        ) {
-            result.origin.y += snap.delta
-            guides.append(BoardSnapGuide(axis: .horizontal, position: snap.line))
-        }
-        return SnapOutcome(frame: result, guides: guides)
-    }
-
-    private static func nearestSnap(
-        edges: [CGFloat],
-        targets: [CGFloat],
-        tolerance: CGFloat
-    ) -> (delta: CGFloat, line: CGFloat)? {
-        var best: (delta: CGFloat, line: CGFloat)?
-        for edge in edges {
-            for target in targets {
-                let delta = target - edge
-                guard abs(delta) <= tolerance else { continue }
-                if abs(delta) < abs(best?.delta ?? .infinity) {
-                    best = (delta, target)
-                }
-            }
-        }
-        return best
-    }
-
     // MARK: - Insert
 
     /// The middle of what the board is showing, in world points.
@@ -1112,7 +1135,7 @@ extension BoardEditorView {
 
     /// Adds an object in the middle of the view, selects it, and springs it in.
     private func addNewItem(_ item: BoardItem) {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8)) {
+        AppMotion.animate(AppMotion.emphasized, reduceMotion: reduceMotion) {
             board.add(item)
             selection = item.id
         }
@@ -1158,7 +1181,11 @@ extension BoardEditorView {
     }
 
     private func insertImage(from pickerItem: PhotosPickerItem) async {
+        isInsertingImage = true
+        defer { isInsertingImage = false }
+
         guard let data = try? await pickerItem.loadTransferable(type: Data.self) else {
+            model.lastError = "Couldn't read the selected photo. Try again."
             return
         }
         let fileExtension = pickerItem.supportedContentTypes.first?.preferredFilenameExtension
@@ -1201,7 +1228,7 @@ extension BoardEditorView {
         copy.isLocked = false
         copy.content = Self.translated(item.content, by: CGPoint(x: 24, y: 24))
 
-        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8)) {
+        AppMotion.animate(AppMotion.emphasized, reduceMotion: reduceMotion) {
             board.add(copy)
             selection = copy.id
         }
@@ -1214,7 +1241,8 @@ extension BoardEditorView {
             editingItemID = nil
             editingText = ""
         }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        // A removal only fades, so the one animation Reduce Motion keeps.
+        AppMotion.animate(AppMotion.fade, reduceMotion: reduceMotion) {
             board.remove(id)
             selection = nil
         }
@@ -1226,7 +1254,7 @@ extension BoardEditorView {
         guard var item = selectedItem else { return }
         item.zIndex = nextZIndex
         item.updatedAt = Date()
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
             board.add(item)
         }
         scheduleSave()
@@ -1236,7 +1264,7 @@ extension BoardEditorView {
         guard var item = selectedItem else { return }
         item.zIndex = (board.visibleItems.map(\.zIndex).min() ?? 0) - 1
         item.updatedAt = Date()
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        AppMotion.animate(AppMotion.quick, reduceMotion: reduceMotion) {
             board.add(item)
         }
         scheduleSave()

@@ -1,5 +1,8 @@
 import SwiftUI
 import TextDocKit
+#if os(iOS)
+import UIKit
+#endif
 
 /// Edits one `TextDocument` as a stack of typed blocks.
 ///
@@ -14,12 +17,17 @@ struct TextDocumentEditorView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var document: TextDocument
     @State private var focusedKey: BlockKey?
     @State private var focusRequest: FocusRequest?
     @State private var scrollTarget: UUID?
     @State private var history = TextDocumentHistory()
+
+    /// The metadata row's word count. It trails the text by `wordCountDelay`
+    /// so a keystroke never re-joins the whole document.
+    @State private var wordCount: Int
 
     @State private var pendingSave: Task<Void, Never>?
     @State private var editGeneration = 0
@@ -30,32 +38,37 @@ struct TextDocumentEditorView: View {
     init(model: TextDocModel, document: TextDocument) {
         self.model = model
         _document = State(initialValue: document)
+        _wordCount = State(initialValue: Self.words(in: document))
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: AppSpacing.l) {
                     titleField
                     metadata
                     Divider()
-                        .padding(.bottom, 6)
+                        .padding(.bottom, AppSpacing.s)
                     blocks
                     addBlockButton
                 }
-                .padding(.horizontal, 34)
-                .padding(.vertical, 30)
+                .padding(.horizontal, AppSpacing.xxxl)
+                .padding(.vertical, AppSpacing.xxxl)
                 .frame(maxWidth: Self.readingWidth, alignment: .leading)
                 .background(pageFill)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 20)
-                .padding(.vertical, 18)
+                .padding(.vertical, AppSpacing.l)
             }
             .scrollDismissesKeyboard(.interactively)
             .background(AppColor.groupedBackground)
             .onChange(of: scrollTarget) { _, target in
                 guard let target else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
+                // Scroll first, then let the row take focus: in the lazy list a
+                // row that is off screen does not exist yet, and
+                // `BlockTextEditor` retries a pending focus request when the
+                // view moves into the window.
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
                     proxy.scrollTo(target, anchor: .center)
                 }
                 scrollTarget = nil
@@ -99,9 +112,13 @@ struct TextDocumentEditorView: View {
         }
         .onChange(of: document) { _, _ in scheduleSave() }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { flushIfNeeded() }
+            guard phase != .active else { return }
+            // `.inactive` keeps foreground time for a quick write;
+            // `.background` can be suspended at any moment, so it needs the
+            // background assertion to finish.
+            flush(holdingBackgroundTime: phase == .background)
         }
-        .onDisappear { flushIfNeeded() }
+        .onDisappear { flush(holdingBackgroundTime: true) }
         .task {
             // A new document opens ready to type in its first block.
             guard focusedKey == nil else { return }
@@ -110,6 +127,17 @@ struct TextDocumentEditorView: View {
             } else if document.blocks.count == 1, document.blocks[0].text.isEmpty {
                 requestFocus(BlockKey(blockID: document.blocks[0].id), caret: 0)
             }
+        }
+        // The word count is presentation only, so it waits for a pause in
+        // typing instead of re-joining every block on each keystroke. `.task`
+        // cancels the previous count, so a burst of keys costs one count.
+        .task(id: document.blocks) {
+            do {
+                try await Task.sleep(for: .milliseconds(Self.wordCountDelay))
+            } catch {
+                return
+            }
+            wordCount = Self.words(in: document)
         }
         .alert("Text Document Error", isPresented: errorBinding) {
             Button("OK", role: .cancel) { model.clearError() }
@@ -180,7 +208,7 @@ struct TextDocumentEditorView: View {
     }
 
     private var metadata: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: AppSpacing.l) {
             Label("\(wordCount) word\(wordCount == 1 ? "" : "s")", systemImage: "text.word.spacing")
             Label(
                 updatedDate.formatted(date: .abbreviated, time: .shortened),
@@ -201,13 +229,16 @@ struct TextDocumentEditorView: View {
     }
 
     private var blocks: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Lazy: a long page only builds the rows near the viewport, so a
+        // keystroke costs one row instead of the whole document.
+        LazyVStack(alignment: .leading, spacing: 0) {
             if document.blocks.isEmpty {
                 emptyBlocks
             } else {
                 ForEach(blockList) { $block in
                     BlockRow(
                         block: $block,
+                        assetDirectory: model.documentsRoot,
                         focusedKey: focusedKey,
                         focusRequest: focusRequest?.key.blockID == block.id ? focusRequest : nil,
                         canMoveUp: document.blocks.first?.id != block.id,
@@ -225,6 +256,10 @@ struct TextDocumentEditorView: View {
                             hasUnsavedChanges = true
                         }
                     )
+                    // The row's body is skipped when its block, focus and
+                    // menu state are unchanged, so only the edited row's
+                    // text view is updated.
+                    .equatable()
                     .id(block.id)
                     .dropDestination(for: String.self) { payloads, _ in
                         guard let raw = payloads.first,
@@ -248,7 +283,7 @@ struct TextDocumentEditorView: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 28)
+        .padding(.vertical, AppSpacing.xxl)
     }
 
     private var addBlockButton: some View {
@@ -258,7 +293,7 @@ struct TextDocumentEditorView: View {
             Label("Add Block", systemImage: "plus.circle")
                 .font(.callout)
         }
-        .padding(.top, 10)
+        .padding(.top, AppSpacing.s)
     }
 
     @ViewBuilder
@@ -278,7 +313,10 @@ struct TextDocumentEditorView: View {
 
     // MARK: - Editing
 
-    private var wordCount: Int {
+    /// How long typing has to pause before the word count catches up.
+    private static let wordCountDelay = 300
+
+    private static func words(in document: TextDocument) -> Int {
         document.plainText.split(whereSeparator: { $0.isWhitespace }).count
     }
 
@@ -481,13 +519,26 @@ struct TextDocumentEditorView: View {
     /// Saves the document as it is now: leaving the screen or the app going to
     /// the background must persist the latest edit, including an undo, redo or
     /// structural change. The snapshot is taken before the async write.
-    private func flushIfNeeded() {
+    ///
+    /// The write is awaited inside a background assertion, as the board and
+    /// `RootView` do: a bare `Task` gets no execution time once iOS suspends.
+    private func flush(holdingBackgroundTime: Bool) {
         pendingSave?.cancel()
         pendingSave = nil
         guard hasUnsavedChanges else { return }
         let snapshot = document
+        #if os(iOS)
+        let assertion = holdingBackgroundTime
+            ? UIApplication.shared.beginBackgroundTask(withName: "Save text document")
+            : .invalid
+        #endif
         Task {
             await model.save(snapshot)
+            #if os(iOS)
+            if assertion != .invalid {
+                UIApplication.shared.endBackgroundTask(assertion)
+            }
+            #endif
         }
     }
 
@@ -624,6 +675,8 @@ enum BlockStyleChoice: String, CaseIterable, Identifiable, Hashable {
 private struct BlockRow: View {
     @Binding var block: TextBlock
 
+    /// Where image blocks look for their files.
+    let assetDirectory: URL
     let focusedKey: BlockKey?
     let focusRequest: FocusRequest?
     let canMoveUp: Bool
@@ -663,7 +716,7 @@ private struct BlockRow: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .frame(width: 30, height: 16)
-                    .contentShape(Rectangle())
+                    .hitTarget()
                     .draggable(block.id.uuidString)
                     .accessibilityLabel("Drag to reorder")
 
@@ -680,15 +733,16 @@ private struct BlockRow: View {
                     .frame(width: 30, height: 36)
                     .background(
                         Color.primary.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        in: RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                     )
                 }
                 .accessibilityLabel("\(choice.title) options")
+                .hitTarget()
             }
         }
         .frame(width: 33)
-        .padding(.top, 1)
-        .animation(.easeOut(duration: 0.12), value: isFocused)
+        .padding(.top, AppSpacing.xxs)
+        .appAnimation(AppMotion.quick, value: isFocused)
     }
 
     private var typeGlyph: String {
@@ -745,7 +799,7 @@ private struct BlockRow: View {
             )
 
         case .quote:
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: AppSpacing.m) {
                 Capsule()
                     .fill(Color.accentColor.opacity(0.4))
                     .frame(width: 3)
@@ -767,7 +821,7 @@ private struct BlockRow: View {
                     placeholder: "Code",
                     splitsOnReturn: false
                 )
-                .padding(10)
+                .padding(AppSpacing.s)
                 .background(
                     Color.primary.opacity(0.05),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -790,25 +844,7 @@ private struct BlockRow: View {
             checklistContent
 
         case let .image(assetName, width):
-            HStack(spacing: 12) {
-                Image(systemName: "photo")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(assetName.isEmpty ? "Untitled image" : assetName)
-                        .font(.body)
-                    Text("Image · \(Int(width.rounded())) pt wide")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(10)
-            .background(
-                Color.secondary.opacity(0.07),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
+            TextDocImageBlock(assetName: assetName, width: width, directory: assetDirectory)
 
         case .divider:
             HStack(spacing: 12) {
@@ -817,6 +853,7 @@ private struct BlockRow: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .hitTarget()
                 .accessibilityLabel("Delete divider")
             }
             .padding(.vertical, 8)
@@ -855,18 +892,20 @@ private struct BlockRow: View {
 
     private func listContent(bulleted: Bool) -> some View {
         let items = listItems
-        let count = max(items.count, 1)
+        // A row per item identity, so splitting or merging above an item
+        // moves that row instead of pushing another item's text into it.
+        let rows = items.isEmpty ? [ListItem(id: block.id, text: "")] : items
         return VStack(alignment: .leading, spacing: 2) {
-            ForEach(0..<count, id: \.self) { index in
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
                 HStack(alignment: .top, spacing: 8) {
                     Text(bulleted ? "•" : "\(index + 1).")
                         .font(.system(size: 16, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .frame(minWidth: 20, alignment: .trailing)
-                        .padding(.top, 3)
+                        .padding(.top, AppSpacing.xs)
                     editor(
                         key: index,
-                        text: listItemText(index, bulleted: bulleted),
+                        text: listItemText(item.id, bulleted: bulleted),
                         font: BlockTypography.body,
                         placeholder: "List item"
                     )
@@ -877,31 +916,26 @@ private struct BlockRow: View {
 
     private var checklistContent: some View {
         let items = checklistItems
-        let count = max(items.count, 1)
+        let rows = items.isEmpty ? [ChecklistItem(id: block.id, text: "")] : items
         return VStack(alignment: .leading, spacing: 2) {
-            ForEach(0..<count, id: \.self) { index in
-                let checked = items.indices.contains(index) ? items[index].isChecked : false
-                HStack(alignment: .top, spacing: 6) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
+                HStack(alignment: .top, spacing: AppSpacing.xs) {
                     Button {
-                        setChecked(index, !checked)
+                        setChecked(item.id, !item.isChecked)
                     } label: {
-                        Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                        Image(systemName: item.isChecked ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 20))
-                            .foregroundStyle(checked ? Color.accentColor : Color.secondary)
-                            .frame(width: 30, height: 28)
+                            .foregroundStyle(item.isChecked ? Color.accentColor : Color.secondary)
+                            .hitTarget()
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        items.indices.contains(index) && !items[index].text.isEmpty
-                            ? items[index].text
-                            : "Checklist item"
-                    )
+                    .accessibilityLabel(item.text.isEmpty ? "Checklist item" : item.text)
 
                     editor(
                         key: index,
-                        text: checklistItemText(index),
+                        text: checklistItemText(item.id),
                         font: BlockTypography.body,
-                        color: checked ? .secondary : .primary,
+                        color: item.isChecked ? .secondary : .primary,
                         placeholder: "To-do"
                     )
                 }
@@ -956,22 +990,22 @@ private struct BlockRow: View {
         )
     }
 
-    private var listItems: [String] {
+    private var listItems: [ListItem] {
         switch block.kind {
         case let .bulletList(items), let .numberedList(items): items
         default: []
         }
     }
 
-    private func listItemText(_ index: Int, bulleted: Bool) -> Binding<String> {
+    private func listItemText(_ itemID: UUID, bulleted: Bool) -> Binding<String> {
         Binding(
-            get: { listItems.indices.contains(index) ? listItems[index] : "" },
+            get: { listItems.first { $0.id == itemID }?.text ?? "" },
             set: { newValue in
                 var items = listItems
-                if items.indices.contains(index) {
-                    items[index] = newValue
+                if let index = items.firstIndex(where: { $0.id == itemID }) {
+                    items[index].text = newValue
                 } else {
-                    items = [newValue]
+                    items = [ListItem(id: itemID, text: newValue)]
                 }
                 block.kind = bulleted ? .bulletList(items: items) : .numberedList(items: items)
             }
@@ -983,45 +1017,61 @@ private struct BlockRow: View {
         return []
     }
 
-    private func checklistItemText(_ index: Int) -> Binding<String> {
+    private func checklistItemText(_ itemID: UUID) -> Binding<String> {
         Binding(
-            get: { checklistItems.indices.contains(index) ? checklistItems[index].text : "" },
+            get: { checklistItems.first { $0.id == itemID }?.text ?? "" },
             set: { newValue in
                 var items = checklistItems
-                if items.indices.contains(index) {
+                if let index = items.firstIndex(where: { $0.id == itemID }) {
                     items[index].text = newValue
                 } else {
-                    items = [ChecklistItem(text: newValue)]
+                    items = [ChecklistItem(id: itemID, text: newValue)]
                 }
                 block.kind = .checklist(items: items)
             }
         )
     }
 
-    private func setChecked(_ index: Int, _ value: Bool) {
+    private func setChecked(_ itemID: UUID, _ value: Bool) {
         var items = checklistItems
-        if items.indices.contains(index) {
+        if let index = items.firstIndex(where: { $0.id == itemID }) {
             items[index].isChecked = value
         } else {
-            items = [ChecklistItem(text: "", isChecked: value)]
+            items = [ChecklistItem(id: itemID, text: "", isChecked: value)]
         }
         onChecklistChange()
         block.kind = .checklist(items: items)
     }
 }
 
+extension BlockRow: Equatable {
+    /// Equality on the values the row draws, so a parent update that changed
+    /// another block does not re-run this row's body. The action closures are
+    /// deliberately ignored: they close over the block's stable id and read the
+    /// editor's `@State` when called, so a stale closure still does the right
+    /// thing.
+    static func == (lhs: BlockRow, rhs: BlockRow) -> Bool {
+        lhs.block == rhs.block
+            && lhs.assetDirectory == rhs.assetDirectory
+            && lhs.focusedKey == rhs.focusedKey
+            && lhs.focusRequest == rhs.focusRequest
+            && lhs.canMoveUp == rhs.canMoveUp
+            && lhs.canMoveDown == rhs.canMoveDown
+    }
+}
+
 // MARK: - Typography
 
 private enum BlockTypography {
-    static let body = BlockFont(size: 17)
-    static let quote = BlockFont(size: 17, isItalic: true)
-    static let code = BlockFont(size: 15, isMonospaced: true)
+    static let body = BlockFont(size: 17, textStyle: .body)
+    static let quote = BlockFont(size: 17, textStyle: .body, isItalic: true)
+    static let code = BlockFont(size: 15, textStyle: .callout, isMonospaced: true)
 
     static func heading(_ level: Int) -> BlockFont {
         switch level {
-        case ...1: BlockFont(size: 30, weight: .bold)
-        case 2: BlockFont(size: 24, weight: .semibold)
-        default: BlockFont(size: 20, weight: .semibold)
+        case ...1: BlockFont(size: 30, textStyle: .title, weight: .bold)
+        case 2: BlockFont(size: 24, textStyle: .title2, weight: .semibold)
+        default: BlockFont(size: 20, textStyle: .title3, weight: .semibold)
         }
     }
 }

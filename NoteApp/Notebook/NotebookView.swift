@@ -39,7 +39,7 @@ struct NotebookView: View {
     private var tabBar: some View {
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: AppSpacing.s) {
                     ForEach(model.tabs) { tab in
                         tabChip(tab)
                     }
@@ -100,11 +100,18 @@ struct NotebookView: View {
 
     private func tabChip(_ tab: NotebookSession) -> some View {
         let isActive = tab.notebookID == model.activeNotebookID
-        return HStack(spacing: 2) {
+        return HStack(spacing: AppSpacing.xxs) {
+            // Selecting is the title's gesture, not the chip's, so the close
+            // button's 44 pt area cannot also switch tabs.
             Text(tab.manifest.title)
                 .font(.subheadline.weight(isActive ? .semibold : .regular))
                 .lineLimit(1)
                 .frame(maxWidth: 180, alignment: .leading)
+                .padding(.leading, AppSpacing.m)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.activateTab(tab.notebookID)
+                }
 
             Button {
                 model.closeTab(tab)
@@ -112,23 +119,18 @@ struct NotebookView: View {
                 Image(systemName: "xmark")
                     .font(.caption2.weight(.semibold))
                     .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .accessibilityLabel("Close \(tab.manifest.title)")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 3)
+        .padding(.trailing, AppSpacing.xs)
+        .padding(.vertical, AppSpacing.xs)
         .background(
             isActive ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08),
             in: Capsule()
         )
-        .contentShape(Capsule())
-        .onTapGesture {
-            model.activateTab(tab.notebookID)
-        }
     }
 }
 
@@ -136,7 +138,9 @@ struct NotebookPane: View {
     let session: NotebookSession
     @Bindable var model: AppModel
 
-    @AppStorage("noteapp.editor.showsThumbnails") private var showsThumbnails = true
+    /// The pages panel starts closed: the page is the point of the editor, and
+    /// the toolbar's Pages button brings the panel back.
+    @AppStorage("noteapp.editor.showsThumbnails") private var showsThumbnails = false
     @AppStorage(AppSettings.Key.pagesPanelOnLeft) private var pagesOnLeft = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showsDeletePageConfirmation = false
@@ -160,6 +164,7 @@ struct NotebookPane: View {
     @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
     @AppStorage(AppSettings.Key.darkPaper) private var darkPaperInDarkMode = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AppSettings.Key.pageScrollMode) private var defaultScrollMode: PageScrollMode = .vertical
     @State private var showsCoverPicker = false
     @State private var showsTextComposer = false
@@ -169,7 +174,7 @@ struct NotebookPane: View {
     @State private var pdfImport: PDFImportFlow?
     @State private var showsLayers = false
     @State private var showsOutline = false
-    @State private var showsSearch = false
+    @State private var searchFocusRequest = false
     @State private var showsAudio = false
     @State private var showsAI = false
     @State private var showsToolbarEditor = false
@@ -178,6 +183,10 @@ struct NotebookPane: View {
     @State private var showsHistory = false
     @State private var showsPageOverview = false
     @State private var showsLassoHint = false
+    /// Set once a page load has outlasted the flash-free threshold.
+    @State private var showsPageSpinner = false
+    /// Set while a picked image is being read off the main actor.
+    @State private var isPreparingImage = false
     @State private var studyScope: NotebookStudyScope?
     @State private var showsTapeStudy = false
     /// The lasso's selection and the elements the Select Elements tool picked.
@@ -224,6 +233,8 @@ struct NotebookPane: View {
                     isRulerActive: $isRulerActive,
                     onItemAction: { item in handleToolbarItem(item) },
                     onCustomizeToolbar: { showsToolbarEditor = true },
+                    notebookTitle: session.manifest.title,
+                    titleMenu: AnyView(titleMenuItems),
                     insertMenu: { insertMenuItems },
                     moreMenu: { moreMenuItems },
                     itemMenu: { item in toolbarItemMenu(for: item) }
@@ -271,22 +282,19 @@ struct NotebookPane: View {
                                         .padding(.horizontal, 12)
                                 }
                                 #endif
-                                // Reading Mode is one clean page: no page chrome.
-                                if !editor.isReadingMode {
-                                    PageCounterPill(session: session) { index in
-                                        Task { await session.goToPage(index) }
-                                    }
-                                    .padding(.bottom, 12)
-                                }
                             }
                         }
                         .overlay(alignment: .bottomLeading) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                PageHistoryControls(session: session)
-                                pdfLinkHistoryChip
+                            pdfLinkHistoryChip
+                                .padding(.leading, 12)
+                                .padding(.bottom, 12)
+                        }
+                        .overlay(alignment: .topLeading) {
+                            if !editor.isReadingMode {
+                                PageChangeIndicator(session: session)
+                                    .padding(.leading, 12)
+                                    .padding(.top, 12)
                             }
-                            .padding(.leading, 12)
-                            .padding(.bottom, 12)
                         }
                         .overlay(alignment: .topTrailing) { readingModeExit }
                     #if os(iOS)
@@ -309,15 +317,17 @@ struct NotebookPane: View {
         }
         .background(AppColor.groupedBackground)
         .background(alignment: .topLeading) { pageHistoryShortcuts }
+        .background(alignment: .topLeading) { menuShortcuts }
         #if os(iOS)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { editorHeight = $0 }
         #endif
-        .animation(.easeInOut(duration: 0.2), value: bannerState)
+        .appAnimation(AppMotion.standard, value: bannerState)
         .onAppear {
+            closePagesPanelOnceAfterUpdate()
             Task { await session.audio.load() }
             session.audio.replayPageChanged(session.visibleStrokes)
             // Opened from a search: show its results beside the marked pages.
-            if session.searchHighlight != nil { showsSearch = true }
+            if session.searchHighlight != nil { openSearch() }
         }
         .onChange(of: session.currentPageID) { _, _ in
             // Replay seeks wait on the ink of the page in view.
@@ -327,20 +337,25 @@ struct NotebookPane: View {
             session.audio.replayPageChanged(session.visibleStrokes)
         }
         .onChange(of: session.searchHighlight) { _, highlight in
-            if highlight != nil { showsSearch = true }
+            if highlight != nil { openSearch() }
         }
         .onDisappear {
             session.audio.stopPlayback()
             editor.saveNow()
+            // This pane's PDF is done with: drop the parsed document so PDFKit's
+            // page caches are freed instead of waiting for the idle timeout.
+            PDFLinkHandler.removeCachedDocument()
             Task {
                 await session.flushPendingSave()
                 await session.audio.stopRecording()
             }
         }
         .onChange(of: editor.tool) { _, newTool in
-            if newTool != .elements { selection.elementIDs = [] }
+            animateSelectionChange {
+                if newTool != .elements { selection.elementIDs = [] }
+                if newTool != .lasso { selection.strokeIDs = [] }
+            }
             if newTool != .lasso {
-                selection.strokeIDs = []
                 #if os(iOS)
                 controller.clearSelection()
                 #endif
@@ -350,7 +365,7 @@ struct NotebookPane: View {
         .onChange(of: editor.isReadOnly) { _, isReadOnly in
             if isReadOnly {
                 showsLassoHint = false
-                selection.clear()
+                animateSelectionChange { selection.clear() }
                 #if os(iOS)
                 controller.clearSelection()
                 #endif
@@ -360,12 +375,22 @@ struct NotebookPane: View {
         }
         .onChange(of: session.currentPageID) {
             // A selection belongs to the page it was made on.
-            selection.clear()
+            animateSelectionChange { selection.clear() }
         }
         .task(id: showsLassoHint) {
             guard showsLassoHint else { return }
             try? await Task.sleep(for: .seconds(4))
             if !Task.isCancelled { showsLassoHint = false }
+        }
+        .task(id: session.isLoadingPage) {
+            // A page turn is usually instant; the spinner would only flash.
+            guard session.isLoadingPage else {
+                showsPageSpinner = false
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            showsPageSpinner = true
         }
         .sheet(isPresented: $showsDeleteItems) {
             DeleteSpecificItemsView(counts: session.itemCounts()) { kinds in
@@ -503,34 +528,17 @@ struct NotebookPane: View {
                 bookmarks: model.bookmarks
             )
         }
-        .inspector(isPresented: $showsSearch) {
-            NotebookSearchPanel(
-                notebookID: session.notebookID,
-                search: model.search,
-                activeHighlight: session.searchHighlight,
-                initialPageID: session.currentPageID,
-                onHighlight: { session.searchHighlight = $0 }
-            ) { pageID in
-                guard let index = session.manifest.pageOrder.firstIndex(of: pageID) else { return }
-                Task { await session.goToPage(index) }
-            }
-            // A new panel per notebook, so one notebook's results never list in another.
-            .id(session.notebookID)
-            .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
-        }
-        // Search takes the right edge, so a right-side panel cannot stay open.
-        .onChange(of: showsSearch) { _, isShowing in
-            guard isShowing, showsPagesPanelInline, !pagesOnLeft else { return }
-            withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
-        }
         #if os(iOS)
         // Too narrow for a column: the same panel arrives as a sheet.
         .sheet(isPresented: compactPagesSheetBinding) {
             PagesSidePanel(
                 session: session,
                 isOnLeft: pagesOnLeft,
-                onSelect: { index in Task { await session.goToPage(index) } },
-                onClose: { pagesPanelBinding.wrappedValue = false }
+                search: model.search,
+                searchFocusRequest: $searchFocusRequest,
+                onDone: { pagesPanelBinding.wrappedValue = false },
+                onHighlight: { session.searchHighlight = $0 },
+                onSelect: { index in Task { await session.goToPage(index) } }
             )
             .presentationDetents([.medium, .large])
         }
@@ -596,17 +604,11 @@ struct NotebookPane: View {
             allowedContentTypes: [.image],
             allowsMultipleSelection: false
         ) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else {
-                session.errorMessage = "The image could not be read."
-                return
-            }
-            let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
-            Task {
-                await session.addImageElement(data: data, fileExtension: ext)
-                editor.tool = .elements
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { insertImage(from: url) }
+            case .failure(let error):
+                session.errorMessage = error.localizedDescription
             }
         }
     }
@@ -626,12 +628,24 @@ struct NotebookPane: View {
         showsThumbnails && pagesPanelIsInline
     }
 
-    /// Opening the panel closes Search when the panel would share its edge.
+    /// Set once the reader has opened a notebook with the panel hidden by
+    /// default, so the migration below never overrides a choice made after it.
+    private static let panelHiddenOnceKey = "noteapp.editor.panelHiddenOnce.v1"
+
+    /// The panel used to start open. The first notebook opened after it started
+    /// closed closes it once; from then on the Pages button is the reader's.
+    private func closePagesPanelOnceAfterUpdate() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.panelHiddenOnceKey) else { return }
+        defaults.set(true, forKey: Self.panelHiddenOnceKey)
+        showsThumbnails = false
+    }
+
+    /// Regular width toggles the inline panel; compact shows the sheet.
     private var pagesPanelBinding: Binding<Bool> {
         Binding(
             get: { pagesPanelIsInline ? showsThumbnails : showsCompactPages },
             set: { isShown in
-                if isShown && !pagesOnLeft { showsSearch = false }
                 if pagesPanelIsInline {
                     showsThumbnails = isShown
                 } else {
@@ -656,11 +670,11 @@ struct NotebookPane: View {
         PagesSidePanel(
             session: session,
             isOnLeft: pagesOnLeft,
+            search: model.search,
+            searchFocusRequest: $searchFocusRequest,
+            onHighlight: { session.searchHighlight = $0 },
             onSelect: { index in
                 Task { await session.goToPage(index) }
-            },
-            onClose: {
-                withAnimation(.easeInOut(duration: 0.2)) { showsThumbnails = false }
             }
         )
         .frame(width: 220)
@@ -689,6 +703,59 @@ struct NotebookPane: View {
         .accessibilityHidden(true)
     }
 
+    /// The keyboard equivalents of the More menu's items. They live here
+    /// because SwiftUI builds a `Menu`'s content only when it opens, so a
+    /// shortcut inside it does nothing until then.
+    private var menuShortcuts: some View {
+        Group {
+            Button("Search in Notebook") { openSearch() }
+                .keyboardShortcut("f", modifiers: .command)
+            #if os(iOS)
+            Button("Zoom In") { zoomController.zoomIn() }
+                .keyboardShortcut("+", modifiers: .command)
+            Button("Zoom Out") { zoomController.zoomOut() }
+                .keyboardShortcut("-", modifiers: .command)
+            Button("Zoom to Fit") { zoomController.fit() }
+                .keyboardShortcut("0", modifiers: .command)
+            #endif
+            Button("Add Page") { Task { await session.addPage() } }
+                .keyboardShortcut(.return, modifiers: .command)
+            Button("Export PDF") { showsExportOptions = true }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(session.pageCount == 0 || isExporting)
+            Button("Page Overview") { showsPageOverview = true }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(session.pageCount == 0)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: - Search
+
+    /// True while the pages panel is showing. The panel's field is always there,
+    /// so a visible panel is a visible search.
+    private var isSearchVisible: Bool {
+        pagesPanelIsInline ? showsThumbnails : showsCompactPages
+    }
+
+    /// Opens the side panel and asks its field for the keyboard; the page keeps
+    /// its size.
+    private func openSearch() {
+        searchFocusRequest = true
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+            showsThumbnails = true
+            if !pagesPanelIsInline { showsCompactPages = true }
+        }
+    }
+
+    /// The selection bar's move-and-fade transition only runs when the change
+    /// that inserts or removes it is animated.
+    private func animateSelectionChange(_ change: () -> Void) {
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion, change)
+    }
+
     // MARK: - Banners
 
     /// Which banners are showing, so their appearance animates.
@@ -699,6 +766,7 @@ struct NotebookPane: View {
         if hasLayerBlock { state.append("layer") }
         if showsLassoHint { state.append("lasso") }
         if isExporting || isExportingPNG { state.append("export") }
+        if isPreparingImage { state.append("image") }
         return state
     }
 
@@ -724,6 +792,11 @@ struct NotebookPane: View {
 
     private var banners: some View {
         VStack(spacing: 8) {
+            #if os(iOS)
+            if showsUndoGestureTip {
+                UndoGestureTipView()
+            }
+            #endif
             if let message = session.errorMessage {
                 EditorBanner(
                     systemImage: "exclamationmark.triangle.fill",
@@ -774,7 +847,7 @@ struct NotebookPane: View {
                 .overlay(alignment: .bottom) {
                     if let exportProgress {
                         ProgressView(value: exportProgress.fraction)
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, AppSpacing.m)
                             .padding(.bottom, 4)
                     }
                 }
@@ -787,9 +860,24 @@ struct NotebookPane: View {
                     onDismiss: { showsLassoHint = false }
                 )
             }
+            if isPreparingImage {
+                EditorBanner(
+                    systemImage: "photo",
+                    message: "Adding the image…",
+                    tint: .accentColor
+                )
+            }
         }
-        .padding(.top, 10)
+        .padding(.top, AppSpacing.s)
     }
+
+    #if os(iOS)
+    /// The one-time hint about the canvas's two-finger double-tap undo. Reading
+    /// Mode is one clean page, so the hint stays out of it.
+    private var showsUndoGestureTip: Bool {
+        twoFingerDoubleTapUndo && !editor.isReadingMode
+    }
+    #endif
 
     /// What the export banner says: page progress for a PDF export, or which
     /// file is being prepared before the first page reports.
@@ -836,7 +924,7 @@ struct NotebookPane: View {
         }
         .disabled(session.currentPageID == nil)
         Divider()
-        Button("Page Elements…", systemImage: "square.on.square.dashed") {
+        Button("Objects on This Page…", systemImage: "square.on.square.dashed") {
             showsElements = true
         }
         .disabled(session.currentPageID == nil)
@@ -873,7 +961,7 @@ struct NotebookPane: View {
         case .addPage:
             Task { await session.addPage() }
         case .search:
-            showsSearch = true
+            openSearch()
         default:
             break
         }
@@ -896,11 +984,75 @@ struct NotebookPane: View {
         }
     }
 
+    /// The notebook-level actions behind the editor's title.
+    ///
+    /// The integrator passes `AnyView(titleMenuItems)` and
+    /// `session.manifest.title` to `EditorToolbar`'s `titleMenu` and
+    /// `notebookTitle` parameters, so the editor always shows which notebook is
+    /// open and keeps these actions one tap away.
+    @ViewBuilder
+    private var titleMenuItems: some View {
+        Button("Rename…", systemImage: "pencil") {
+            renameText = session.manifest.title
+            isRenaming = true
+        }
+        Button("Notebook Cover…", systemImage: "book.closed") {
+            showsCoverPicker = true
+        }
+        moveToFolderMenu
+        Divider()
+        Button("Export PDF…", systemImage: "square.and.arrow.up") {
+            showsExportOptions = true
+        }
+        .disabled(session.pageCount == 0 || isExporting)
+        Button("Version History…", systemImage: "clock.arrow.circlepath") {
+            showsHistory = true
+        }
+        .disabled(session.currentPageID == nil)
+    }
+
+    /// The library's own move menu, so a notebook can be filed without going
+    /// back to the library first.
+    @ViewBuilder
+    private var moveToFolderMenu: some View {
+        let currentFolderID = model.folderID(of: session.manifest)
+        Menu("Move to Folder", systemImage: "folder") {
+            Button {
+                Task { await model.move(session.manifest, to: nil) }
+            } label: {
+                if currentFolderID == nil {
+                    Label("Root", systemImage: "checkmark")
+                } else {
+                    Text("Root")
+                }
+            }
+            ForEach(model.folderPaths) { path in
+                Button {
+                    Task { await model.move(session.manifest, to: path.id) }
+                } label: {
+                    if currentFolderID == path.id {
+                        Label(Self.indented(path), systemImage: "checkmark")
+                    } else {
+                        Text(Self.indented(path))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Full path with one indent step per level, so two folders with the same
+    /// name can be told apart in the move menu.
+    private static func indented(_ path: AppModel.FolderPath) -> String {
+        String(repeating: "    ", count: path.depth) + path.path
+    }
+
+    /// Everything that is not the notebook itself: how the page is shown, where
+    /// to go, what to change on the page, and study, audio and page AI. The
+    /// notebook's own actions live in ``titleMenuItems``.
     @ViewBuilder
     private var moreMenuItems: some View {
-        #if os(iOS)
         Section {
-            Toggle("Read Only", systemImage: "lock.doc", isOn: Binding(
+            Toggle("Read Only", systemImage: "lock", isOn: Binding(
                 get: { editor.isReadOnly },
                 set: { editor.isReadOnly = $0 }
             ))
@@ -908,25 +1060,30 @@ struct NotebookPane: View {
                 startReadingMode()
             }
             .disabled(session.currentPageID == nil)
-            Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
-                showsToolbarEditor = true
+            #if os(iOS)
+            Menu("Scrolling", systemImage: "arrow.up.and.down") {
+                scrollModeButton("Scroll Vertically", mode: .vertical)
+                scrollModeButton("Scroll Horizontally", mode: .horizontal)
             }
-        }
-        #endif
-        Section(session.manifest.title) {
-            Button("Rename…", systemImage: "pencil") {
-                renameText = session.manifest.title
-                isRenaming = true
+            Menu("Zoom", systemImage: "plus.magnifyingglass") {
+                Button("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    zoomController.fit()
+                }
+                Button("Zoom In", systemImage: "plus.magnifyingglass") {
+                    zoomController.zoomIn()
+                }
+                Button("Zoom Out", systemImage: "minus.magnifyingglass") {
+                    zoomController.zoomOut()
+                }
             }
-            Button("Notebook Cover…", systemImage: "book.closed") {
-                showsCoverPicker = true
-            }
+            #endif
+            Toggle("Ruler", systemImage: "ruler", isOn: $isRulerActive)
+                .disabled(session.currentPageID == nil)
         }
         Section {
-            Button("Layers…", systemImage: "square.3.layers.3d") {
-                showsLayers = true
+            Button("Search in Notebook…", systemImage: "magnifyingglass") {
+                openSearch()
             }
-            .disabled(session.currentPageID == nil)
             Button("Outline…", systemImage: "list.bullet.indent") {
                 showsOutline = true
             }
@@ -934,78 +1091,74 @@ struct NotebookPane: View {
                 showsPageOverview = true
             }
             .disabled(session.pageCount == 0)
-            Button("Search in Notebook…", systemImage: "magnifyingglass") {
-                showsSearch = true
-            }
-            .keyboardShortcut("f", modifiers: .command)
             bookmarksMenu
+        }
+        Section {
+            pageActionsMenu
+        }
+        Section {
+            Menu("Study & Audio", systemImage: "graduationcap") {
+                Button("Review This Notebook…", systemImage: "rectangle.stack") {
+                    studyScope = .notebook
+                }
+                Button("Review This Page…", systemImage: "rectangle.on.rectangle") {
+                    studyScope = .page
+                }
+                .disabled(session.currentPageID == nil)
+                #if os(iOS)
+                Button(
+                    showsTapeStudy ? "Hide Quiz with Tape" : "Quiz with Tape",
+                    systemImage: "bandage"
+                ) {
+                    showsTapeStudy.toggle()
+                }
+                .disabled(session.currentPageID == nil)
+                #endif
+                Divider()
+                Button(
+                    session.audio.isRecording ? "Stop Recording" : "Record Audio",
+                    systemImage: session.audio.isRecording ? "stop.circle" : "record.circle"
+                ) {
+                    Task {
+                        if session.audio.isRecording {
+                            await session.audio.stopRecording()
+                        } else {
+                            await session.audio.startRecording()
+                        }
+                    }
+                }
+                Button("Audio Recordings…", systemImage: "waveform") {
+                    showsAudio = true
+                }
+                Button("Page AI…", systemImage: "sparkles") {
+                    showsAI = true
+                }
+            }
+        }
+        #if os(iOS)
+        Section {
+            Button("Customise Toolbar…", systemImage: "slider.horizontal.3") {
+                showsToolbarEditor = true
+            }
+        }
+        #endif
+    }
+
+    /// Everything that happens to the current page, template and layers first:
+    /// the More menu has to fit a portrait iPad without scrolling, so the page
+    /// edits sit one level down rather than in the top-level list.
+    @ViewBuilder
+    private var pageActionsMenu: some View {
+        Menu("Page", systemImage: "doc") {
             Button("Page Template…", systemImage: "square.grid.3x3") {
                 showsTemplatePicker = true
             }
             .disabled(session.currentPageID == nil)
-        }
-        Section("Study") {
-            Button("Review This Notebook…", systemImage: "rectangle.stack") {
-                studyScope = .notebook
-            }
-            Button("Review This Page…", systemImage: "rectangle.on.rectangle") {
-                studyScope = .page
+            Button("Layers…", systemImage: "square.3.layers.3d") {
+                showsLayers = true
             }
             .disabled(session.currentPageID == nil)
-            #if os(iOS)
-            Button(
-                showsTapeStudy ? "Hide Tape Study Bar" : "Tape Study",
-                systemImage: "bandage"
-            ) {
-                showsTapeStudy.toggle()
-            }
-            .disabled(session.currentPageID == nil)
-            #endif
-        }
-        Section {
-            Button(
-                session.audio.isRecording ? "Stop Recording" : "Record Audio",
-                systemImage: session.audio.isRecording ? "stop.circle" : "record.circle"
-            ) {
-                Task {
-                    if session.audio.isRecording {
-                        await session.audio.stopRecording()
-                    } else {
-                        await session.audio.startRecording()
-                    }
-                }
-            }
-            Button("Audio Recordings…", systemImage: "waveform") {
-                showsAudio = true
-            }
-            Button("Page AI…", systemImage: "sparkles") {
-                showsAI = true
-            }
-            Button("Version History…", systemImage: "clock.arrow.circlepath") {
-                showsHistory = true
-            }
-            .disabled(session.currentPageID == nil)
-        }
-        #if os(iOS)
-        Section("Scrolling") {
-            scrollModeButton("Scroll Vertically", mode: .vertical)
-            scrollModeButton("Scroll Horizontally", mode: .horizontal)
-        }
-        Section {
-            Toggle("Ruler", systemImage: "ruler", isOn: $isRulerActive)
-                .disabled(session.currentPageID == nil)
-            Button("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") {
-                zoomController.fit()
-            }
-            Button("Zoom In", systemImage: "plus.magnifyingglass") {
-                zoomController.zoomIn()
-            }
-            Button("Zoom Out", systemImage: "minus.magnifyingglass") {
-                zoomController.zoomOut()
-            }
-        }
-        #endif
-        Section("Page") {
+            Divider()
             Button("Add Page After", systemImage: "plus") {
                 Task { await session.addPage() }
             }
@@ -1033,12 +1186,7 @@ struct NotebookPane: View {
                 }
             }
             .disabled(session.currentPageID == nil)
-            Button("Go to Page…", systemImage: "arrow.right.to.line") {
-                showsGoToPage = true
-            }
-            .disabled(session.pageCount < 2)
-        }
-        Section("Clear or Trash Page") {
+            Divider()
             Button("Delete Specific Items…", systemImage: "square.grid.2x2") {
                 showsDeleteItems = true
             }
@@ -1051,12 +1199,7 @@ struct NotebookPane: View {
                 showsDeletePageConfirmation = true
             }
             .disabled(session.currentPageID == nil)
-        }
-        Section {
-            Button("Export PDF…", systemImage: "square.and.arrow.up") {
-                showsExportOptions = true
-            }
-            .disabled(session.pageCount == 0 || isExporting)
+            Divider()
             Button("Export Page as PNG…", systemImage: "photo") {
                 exportPNG()
             }
@@ -1131,6 +1274,35 @@ struct NotebookPane: View {
         }
     }
 
+    /// Insert → Image: read the picked file off the main actor, then add it.
+    ///
+    /// A photo is several megabytes, so reading it on the main actor freezes
+    /// the editor from the picker's dismissal until the read finishes.
+    private func insertImage(from url: URL) {
+        let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        Task {
+            isPreparingImage = true
+            defer { isPreparingImage = false }
+            do {
+                let data = try await Self.readFile(at: url)
+                await session.addImageElement(data: data, fileExtension: ext)
+                editor.tool = .elements
+            } catch {
+                session.errorMessage = "The image could not be read: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// The security-scoped access has to hold for the read itself, so it is
+    /// opened and released inside the detached read, never around it.
+    nonisolated private static func readFile(at url: URL) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            return try Data(contentsOf: url)
+        }.value
+    }
+
     private func exportPNG() {
         guard let page = session.page else {
             exportError = "The page could not be rendered."
@@ -1163,9 +1335,23 @@ struct NotebookPane: View {
             } label: {
                 Label("Library", systemImage: "chevron.backward")
             }
-            Text(session.manifest.title)
-                .font(.headline)
-                .lineLimit(1)
+            Menu {
+                titleMenuItems
+            } label: {
+                HStack(spacing: AppSpacing.xs) {
+                    Text(session.manifest.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(maxWidth: 280, alignment: .leading)
+            .accessibilityLabel("Notebook: \(session.manifest.title)")
+            .help("Rename, cover, move, export and history for this notebook")
             Spacer()
             Button {
                 editor.isReadOnly.toggle()
@@ -1178,7 +1364,9 @@ struct NotebookPane: View {
             .help(editor.isReadOnly ? "Read Only: tap to edit again" : "Hide the tools and stop editing")
             .accessibilityAddTraits(editor.isReadOnly ? .isSelected : [])
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { pagesPanelBinding.wrappedValue.toggle() }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+                    pagesPanelBinding.wrappedValue.toggle()
+                }
             } label: {
                 Label("Pages", systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing")
             }
@@ -1195,7 +1383,7 @@ struct NotebookPane: View {
             }
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, AppSpacing.m)
         .padding(.vertical, 8)
         .background(.bar)
     }
@@ -1244,9 +1432,8 @@ struct NotebookPane: View {
     /// Read Only with the chrome gone: one page, a tap on either edge turns it,
     /// and PDF links still work. Leaving it brings the tools back.
     private func startReadingMode() {
-        withAnimation(.easeInOut(duration: 0.2)) {
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
             pagesPanelBinding.wrappedValue = false
-            showsSearch = false
             editor.isReadingMode = true
             editor.isReadOnly = true
         }
@@ -1257,18 +1444,18 @@ struct NotebookPane: View {
     private var readingModeExit: some View {
         if editor.isReadingMode {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
                     editor.isReadingMode = false
                     editor.isReadOnly = false
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: AppSpacing.xs) {
                     Image(systemName: "book")
                         .font(.caption.weight(.semibold))
                     Text("Done")
                         .font(.subheadline.weight(.semibold))
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, AppSpacing.m)
                 .frame(minHeight: 36)
                 .background(.regularMaterial, in: Capsule())
                 .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
@@ -1360,7 +1547,8 @@ struct NotebookPane: View {
                     panTouches: panTouches,
                     usesDarkPaper: usesDarkPaper,
                     inkCapture: inkCapture,
-                    onActivate: { index in await session.goToPage(index) }
+                    onActivate: { index in await session.goToPage(index) },
+                    onAddPageAtEnd: { await session.addPage(after: false) }
                 ) {
                     pageContent(page)
                 }
@@ -1458,11 +1646,12 @@ struct NotebookPane: View {
 
     /// The stroke time the audio playhead stands at, when Follow is on and this
     /// page has ink from the recording. Ink written after it is faded.
-    private func replayCutoff() -> Date? {
+    ///
+    /// Takes the page's visible ink, so a body pass reads it once.
+    private func replayCutoff(in strokes: [StrokeRecord]) -> Date? {
         guard session.audio.followsPlayhead, let clip = session.audio.activeClip else {
             return nil
         }
-        let strokes = session.visibleStrokes
         guard strokes.contains(where: { clip.contains($0.createdAt) }) else { return nil }
         if let active = strokes.first(where: { $0.id == session.audio.activeStrokeID }) {
             return active.createdAt
@@ -1473,9 +1662,9 @@ struct NotebookPane: View {
 
     /// Where the now-playing marker sits: the end of the stroke the recording
     /// has reached.
-    private func activeReplayPoint() -> CGPoint? {
+    private func activeReplayPoint(in strokes: [StrokeRecord]) -> CGPoint? {
         guard let strokeID = session.audio.activeStrokeID,
-              let stroke = session.visibleStrokes.first(where: { $0.id == strokeID })
+              let stroke = strokes.first(where: { $0.id == strokeID })
         else { return nil }
         return ZoomBand.endPoint(of: stroke)
     }
@@ -1513,12 +1702,16 @@ struct NotebookPane: View {
     }
 
     private func pageContent(_ page: Page) -> some View {
+        // One read of the visible ink for the whole pass: `visibleStrokes`
+        // builds a set of layers and filters every stroke, and this body used
+        // to ask for it for each of its consumers.
+        let strokes = session.visibleStrokes
         // While a recording plays with Follow on, ink it has not reached yet is
         // faded, and the canvas takes no ink so the two views cannot disagree.
-        let cutoff = replayCutoff()
+        let cutoff = replayCutoff(in: strokes)
         let shownStrokes = cutoff.map {
-            ReplayInk.fading(session.visibleStrokes, after: $0)
-        } ?? session.visibleStrokes
+            ReplayInk.fading(strokes, after: $0)
+        } ?? strokes
         return ZStack(alignment: .topLeading) {
             // Tape is drawn by `TapeOverlay` above the ink so it can hide and
             // reveal it; leaving it in the background would show through.
@@ -1533,7 +1726,7 @@ struct NotebookPane: View {
                 Text("\(session.currentPageNumber)")
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                     .foregroundStyle(AppColor.pageAnnotation(usesDarkPaper: usesDarkPaper))
-                    .padding([.bottom, .trailing], 14)
+                    .padding([.bottom, .trailing], AppSpacing.m)
                     // Bottom-trailing, clear of the page counter pill at the bottom centre.
                     .frame(width: page.width, height: page.height, alignment: .bottomTrailing)
                     .allowsHitTesting(false)
@@ -1559,7 +1752,7 @@ struct NotebookPane: View {
                 onToolGestureEnded: {
                     editor.didEndToolGesture()
                     // Writing on the page ends the search marks; they would go stale.
-                    if !showsSearch { session.searchHighlight = nil }
+                    if !isSearchVisible { session.searchHighlight = nil }
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 onPencilDoubleTap: { editor.handlePencilDoubleTap($0) },
@@ -1576,7 +1769,7 @@ struct NotebookPane: View {
                     // strokes still exist, so the bar is cleared explicitly on a
                     // tool or page change instead.
                     guard editor.tool == .lasso, !ids.isEmpty else { return }
-                    selection.strokeIDs = Set(ids)
+                    animateSelectionChange { selection.strokeIDs = Set(ids) }
                 },
                 onStrokesChanged: { records in
                     // Follow mode hands the canvas faded copies of the page's
@@ -1592,7 +1785,7 @@ struct NotebookPane: View {
                 SearchHighlightOverlay(
                     highlight: highlight,
                     page: page,
-                    strokes: session.visibleStrokes,
+                    strokes: strokes,
                     assetsDirectory: session.assetsDirectory,
                     search: model.search
                 )
@@ -1606,7 +1799,7 @@ struct NotebookPane: View {
                 onTap: { session.toggleTapeRevealed($0) }
             )
 
-            if let point = activeReplayPoint() {
+            if let point = activeReplayPoint(in: strokes) {
                 NowPlayingMarker(point: point)
             }
 
@@ -1734,7 +1927,9 @@ struct NotebookPane: View {
             onForward: { stepZoomBand(page) { $0.step() } },
             onNewLine: { stepZoomBand(page) { $0.wrap() } },
             onClose: {
-                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+                    editor.isZoomViewShown = false
+                }
             }
         ) { band in
             PencilCanvasView(
@@ -1752,7 +1947,7 @@ struct NotebookPane: View {
                 onToolGestureEnded: {
                     editor.didEndToolGesture()
                     // Writing on the page ends the search marks; they would go stale.
-                    if !showsSearch { session.searchHighlight = nil }
+                    if !isSearchVisible { session.searchHighlight = nil }
                 },
                 holdToDrawShapes: holdToDrawShapes,
                 // The page's canvas answers the Pencil's double-tap; two
@@ -1814,9 +2009,14 @@ struct NotebookPane: View {
     @ViewBuilder
     private var pagePlaceholder: some View {
         if session.isLoadingPage {
-            ProgressView()
+            // A page turn is usually instant; the spinner waits so it cannot
+            // flash and vanish.
+            if showsPageSpinner {
+                ProgressView()
+                    .accessibilityLabel("Loading page")
+            }
         } else if session.pageCount == 0 {
-            VStack(spacing: 14) {
+            VStack(spacing: AppSpacing.m) {
                 Image(systemName: "doc.badge.plus")
                     .font(.system(size: 40))
                     .foregroundStyle(.secondary)

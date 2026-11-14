@@ -120,9 +120,9 @@ struct MarkdownRoundTripTests {
             case let (.paragraph(expectedText), .paragraph(actualText)):
                 #expect(actualText == expectedText)
             case let (.bulletList(expectedItems), .bulletList(actualItems)):
-                #expect(actualItems == expectedItems)
+                #expect(actualItems.texts == expectedItems.texts)
             case let (.numberedList(expectedItems), .numberedList(actualItems)):
-                #expect(actualItems == expectedItems)
+                #expect(actualItems.texts == expectedItems.texts)
             case let (.quote(expectedText), .quote(actualText)):
                 #expect(actualText == expectedText)
             case let (.code(expectedText, expectedLanguage), .code(actualText, actualLanguage)):

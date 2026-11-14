@@ -96,6 +96,37 @@ public enum BackupArchive {
         }
     }
 
+    /// How far an operation has got, reported once per item so the sheet can
+    /// show a determinate bar and a count.
+    public struct Progress: Sendable, Equatable {
+        /// The step the count belongs to. The sheet names it.
+        public enum Step: String, Sendable, Hashable {
+            case copyingNotebooks
+            case checkingFiles
+            case checkingPages
+            case restoringNotebooks
+        }
+
+        public var step: Step
+        /// Items finished in this step, and how many there are.
+        public var done: Int
+        public var total: Int
+
+        public init(step: Step, done: Int, total: Int) {
+            self.step = step
+            self.done = done
+            self.total = total
+        }
+
+        /// 0...1, for a determinate `ProgressView`.
+        public var fraction: Double {
+            total > 0 ? Double(done) / Double(total) : 0
+        }
+    }
+
+    /// Reports progress, and checks for cancellation, between items.
+    public typealias ProgressHandler = @Sendable (Progress) -> Void
+
     /// What a restore put back into the library.
     public struct RestoreSummary: Sendable, Hashable {
         /// Notebooks that were restored, in archive order.
@@ -131,7 +162,8 @@ public enum BackupArchive {
     public static func create(
         from store: LibraryStore,
         at url: URL,
-        now: Date = Date()
+        now: Date = Date(),
+        progress: ProgressHandler? = nil
     ) async throws -> Summary {
         let fileManager = FileManager.default
         let layout = LibraryLayout(root: store.root)
@@ -162,7 +194,8 @@ public enum BackupArchive {
             // Every notebook folder is copied, including one whose manifest does
             // not decode: a backup must not drop the very file that needs repair.
             let notebookFolders = try directories(in: layout.notebooksDirectory)
-            for folder in notebookFolders {
+            for (index, folder) in notebookFolders.enumerated() {
+                if Task.isCancelled { throw CancellationError() }
                 do {
                     try fileManager.copyItem(
                         at: folder,
@@ -176,6 +209,11 @@ public enum BackupArchive {
                         "could not copy \(folder.lastPathComponent): \(error)"
                     )
                 }
+                progress?(Progress(
+                    step: .copyingNotebooks,
+                    done: index + 1,
+                    total: notebookFolders.count
+                ))
             }
 
             let deviceInfo = try? LibraryInfoCodec.decode(
@@ -193,7 +231,7 @@ public enum BackupArchive {
             )
             try write(manifest, to: staging.appendingPathComponent("manifest.json"))
 
-            let hashes = try hashAllFiles(in: staging)
+            let hashes = try hashAllFiles(in: staging, progress: progress)
             try writeHashManifest(hashes, to: staging.appendingPathComponent("manifest.sha256"))
 
             // Prove the archive before it is given its final name.
@@ -218,8 +256,11 @@ public enum BackupArchive {
     /// Recomputes every hash in an archive. Throws if a file is missing, changed
     /// or not listed.
     @discardableResult
-    public static func verify(archiveAt url: URL) async throws -> Summary {
-        let verified = try verifiedFiles(in: url)
+    public static func verify(
+        archiveAt url: URL,
+        progress: ProgressHandler? = nil
+    ) async throws -> Summary {
+        let verified = try verifiedFiles(in: url, progress: progress)
         return Summary(
             url: url,
             manifest: verified.manifest,
@@ -259,7 +300,7 @@ public enum BackupArchive {
         var hashes: [(path: String, hash: String, byteCount: Int)]
     }
 
-    static func verifiedFiles(in url: URL) throws -> VerifiedFiles {
+    static func verifiedFiles(in url: URL, progress: ProgressHandler? = nil) throws -> VerifiedFiles {
         let manifest = try readManifest(at: url)
         let hashFile = url.appendingPathComponent("manifest.sha256")
         guard let text = try? String(contentsOf: hashFile, encoding: .utf8) else {
@@ -288,22 +329,33 @@ public enum BackupArchive {
             expected.append((path: path, hash: hash, byteCount: size))
         }
 
-        try verifyFiles(in: url, expected: Dictionary(
-            uniqueKeysWithValues: expected.map { ($0.path, $0.hash) }
-        ))
+        try verifyFiles(
+            in: url,
+            expected: Dictionary(uniqueKeysWithValues: expected.map { ($0.path, $0.hash) }),
+            progress: progress
+        )
         return VerifiedFiles(manifest: manifest, hashes: expected)
     }
 
-    static func verifyFiles(in root: URL, expected: [String: String]) throws {
+    /// Recomputes every listed file's hash. Reports progress and stops between
+    /// files when the caller cancels.
+    static func verifyFiles(
+        in root: URL,
+        expected: [String: String],
+        progress: ProgressHandler? = nil
+    ) throws {
         let listed = Set(expected.keys)
-        for (path, expectedHash) in expected.sorted(by: { $0.key < $1.key }) {
-            let file = root.appendingPathComponent(path)
+        let total = expected.count
+        for (index, entry) in expected.sorted(by: { $0.key < $1.key }).enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            let file = root.appendingPathComponent(entry.key)
             guard let data = try? Data(contentsOf: file) else {
-                throw BackupError.verificationFailed(path: path)
+                throw BackupError.verificationFailed(path: entry.key)
             }
-            guard sha256Hex(data) == expectedHash else {
-                throw BackupError.verificationFailed(path: path)
+            guard sha256Hex(data) == entry.value else {
+                throw BackupError.verificationFailed(path: entry.key)
             }
+            progress?(Progress(step: .checkingFiles, done: index + 1, total: total))
         }
         for file in try regularFiles(in: root) {
             let path = relativePath(of: file, in: root)
@@ -369,11 +421,16 @@ public enum BackupArchive {
     }
 
     /// The hash and size of every regular file under `root`, path-sorted.
-    static func hashAllFiles(in root: URL) throws -> [(path: String, hash: String, byteCount: Int)] {
-        try regularFiles(in: root).map { file in
+    static func hashAllFiles(
+        in root: URL,
+        progress: ProgressHandler? = nil
+    ) throws -> [(path: String, hash: String, byteCount: Int)] {
+        let files = try regularFiles(in: root)
+        return try files.enumerated().map { index, file in
             guard let data = try? Data(contentsOf: file) else {
                 throw BackupError.verificationFailed(path: relativePath(of: file, in: root))
             }
+            progress?(Progress(step: .checkingFiles, done: index + 1, total: files.count))
             return (
                 path: relativePath(of: file, in: root),
                 hash: sha256Hex(data),

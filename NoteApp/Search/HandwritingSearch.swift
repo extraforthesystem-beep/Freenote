@@ -20,6 +20,9 @@ final class HandwritingSearch {
     /// A one-line message about pages re-read because the recogniser changed;
     /// the library takes it once and shows it.
     private var pendingRecognitionNotice: String?
+    /// The newest PDF text extraction for page marks; a new page or query
+    /// replaces it instead of stacking another one.
+    @ObservationIgnored private var pdfMarksTask: (key: PDFMarksKey, task: Task<[PageMatchMark], Never>)?
 
     private(set) var hits: [SearchHit] = []
     private(set) var isIndexing = false
@@ -269,12 +272,41 @@ final class HandwritingSearch {
             marks += PageMatchLocator.typedTextMarks(for: query, in: page)
         }
         if highlight.sources.contains(.pdf) {
-            // PDF text extraction is slow on big pages; keep it off the main actor.
-            marks += await Task.detached(priority: .userInitiated) {
-                PageMatchLocator.pdfMarks(for: query, in: page, assetsDirectory: assetsDirectory)
-            }.value
+            marks += await pdfMarks(for: query, page: page, assetsDirectory: assetsDirectory)
         }
         return marks
+    }
+
+    /// PDF text extraction for a page's marks, one at a time: the newest page and
+    /// query cancels the extraction still running, so flipping pages with a
+    /// search open never stacks full extractions.
+    private func pdfMarks(
+        for query: SearchQuery,
+        page: Page,
+        assetsDirectory: URL?
+    ) async -> [PageMatchMark] {
+        let key = PDFMarksKey(pageID: page.id, query: query)
+        if let pending = pdfMarksTask, pending.key == key {
+            return await pending.task.value
+        }
+        pdfMarksTask?.task.cancel()
+        // PDF text extraction is slow on big pages; keep it off the main actor.
+        let task = Task.detached(priority: .userInitiated) {
+            PageMatchLocator.pdfMarks(for: query, in: page, assetsDirectory: assetsDirectory)
+        }
+        pdfMarksTask = (key, task)
+        let marks = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if pdfMarksTask?.key == key { pdfMarksTask = nil }
+        return marks
+    }
+
+    private struct PDFMarksKey: Hashable {
+        var pageID: UUID
+        var query: SearchQuery
     }
 
     /// The words written with Apple Pencil in the search pad.
@@ -308,10 +340,17 @@ final class HandwritingSearch {
         }
         parts.append(contentsOf: typed)
 
-        if !page.strokes.isEmpty,
-           let recognised = await recognizer.recognizedText(for: page.strokes) {
-            let trimmed = recognised.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { parts.append(trimmed) }
+        if !page.strokes.isEmpty {
+            // The stroke-to-PencilKit bridge is the expensive part, so it runs
+            // off the main actor: the AI sheet is animating in while this starts.
+            let strokes = page.strokes
+            let recognised = await Task.detached(priority: .userInitiated) { [recognizer] in
+                await recognizer.recognizedText(for: strokes)
+            }.value
+            if let recognised {
+                let trimmed = recognised.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { parts.append(trimmed) }
+            }
         }
         return parts.joined(separator: "\n")
     }

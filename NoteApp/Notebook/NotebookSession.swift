@@ -4,6 +4,7 @@ import HistoryKit
 import InkKit
 import NoteCore
 import Observation
+import os
 
 enum PageDefaults {
     nonisolated static let width: Double = 595  // A4 at 72 dpi
@@ -72,6 +73,13 @@ struct PendingPageQueue {
 final class NotebookSession: Identifiable {
     var id: UUID { manifest.id }
 
+    /// One signposter for the ink path; intervals show up in Instruments'
+    /// "Points of Interest" under local.noteapp.NoteApp/Ink.
+    private static let inkSignposter = OSSignposter(
+        subsystem: "local.noteapp.NoteApp",
+        category: "Ink"
+    )
+
     let store: LibraryStore
     let assetsDirectory: URL?
     let audio: NotebookAudio
@@ -94,6 +102,10 @@ final class NotebookSession: Identifiable {
     /// rebuilt while writing.
     private(set) var currentPageID: UUID?
     private(set) var activeLayer: Page.Layer?
+    /// The ids of the tape pieces on the page, in page order. Like
+    /// `currentPageID`, it changes only when the page's tape does, so the tape
+    /// study chrome is not rebuilt on every stroke.
+    private(set) var tapeIDs: [UUID] = []
     private(set) var isLoadingPage = false
     private(set) var isSaving = false
     private(set) var isApplyingTemplate = false
@@ -208,6 +220,11 @@ final class NotebookSession: Identifiable {
             layer = page.layers.first { $0.id == activeLayerID }
         }
         if activeLayer != layer { activeLayer = layer }
+        let tapes = page?.visibleElements.compactMap { element -> UUID? in
+            if case .tape = element.content { return element.id }
+            return nil
+        } ?? []
+        if tapeIDs != tapes { tapeIDs = tapes }
     }
 
     /// Ink the canvas may show and edit: every stroke on a visible layer, in
@@ -536,34 +553,57 @@ final class NotebookSession: Identifiable {
     /// the manifest is rewritten. Pages are written one file at a time and then
     /// placed in the order, so a crash in between leaves orphan page files the
     /// next open recovers rather than a manifest entry with no page.
+    ///
+    /// A cancelled insert throws `CancellationError` at a page boundary: every
+    /// page already written is on disk and in the manifest, no page is
+    /// half-written, and the caller can tell a stop from a failure.
     @discardableResult
     func insertPages(
         _ pages: [Page],
         at index: Int,
         onProgress: ((_ written: Int, _ total: Int) -> Void)? = nil
-    ) async -> Int {
+    ) async throws -> Int {
         guard !pages.isEmpty else { return 0 }
         guard await commitSucceeded() else {
             errorMessage = "The pages could not be added because this page is not saved yet."
             return 0
         }
-        do {
-            for (written, page) in pages.enumerated() {
-                try await store.savePage(page, in: manifest.id)
-                onProgress?(written + 1, pages.count)
-            }
+        var writtenCount = 0
+        // Moves the pages written so far to `index`; a new page file is listed
+        // at the end of the notebook until then.
+        func placeWrittenPages() async throws -> Int {
             await reloadManifest()
-
             var order = manifest.pageOrder
-            let insertedIDs = pages.map(\.id)
+            let insertedIDs = pages.prefix(writtenCount).map(\.id)
             let insertedSet = Set(insertedIDs)
             order.removeAll { insertedSet.contains($0) }
             let position = min(max(0, index), order.count)
             order.insert(contentsOf: insertedIDs, at: position)
             try await store.reorderPages(in: manifest.id, order: order)
             await reloadManifest()
+            return position
+        }
+        do {
+            for page in pages {
+                // Checked before each page, so a cancel between pages leaves
+                // only whole pages behind.
+                try Task.checkCancellation()
+                try await store.savePage(page, in: manifest.id)
+                writtenCount += 1
+                onProgress?(writtenCount, pages.count)
+            }
+            let position = try await placeWrittenPages()
             await loadPage(at: position)
             return pages.count
+        } catch is CancellationError {
+            // The pages written so far stay, at the insert position; a stop is
+            // not a failure, so no error banner.
+            if writtenCount > 0 {
+                _ = try? await placeWrittenPages()
+            } else {
+                await reloadManifest()
+            }
+            throw CancellationError()
         } catch {
             // The page files that were written are on disk already and the
             // manifest lists them, so show what is really there.
@@ -1013,6 +1053,13 @@ final class NotebookSession: Identifiable {
         }
     }
 
+    /// Replaces the revealed tape set in one state change, so Reveal All and
+    /// Hide All animate once instead of once per piece of tape.
+    func setRevealedTape(_ ids: Set<UUID>) {
+        guard revealedTapeIDs != ids else { return }
+        revealedTapeIDs = ids
+    }
+
     /// A default-sized element kept on the page, centred on it.
     private static func centredFrame(size: CGSize, in page: Page) -> ElementFrame {
         let width = min(size.width, page.width)
@@ -1036,6 +1083,8 @@ final class NotebookSession: Identifiable {
     /// - Parameter pageID: the page the canvas was showing. A report that lands
     ///   after a page change is dropped, or it would overwrite the new page.
     func strokesChanged(_ strokes: [StrokeRecord], onPage pageID: UUID? = nil) {
+        let strokesChanged = Self.inkSignposter.beginInterval("StrokesChanged")
+        defer { Self.inkSignposter.endInterval("StrokesChanged", strokesChanged) }
         guard var updated = page else { return }
         if let pageID, pageID != updated.id { return }
         let shown = Set(updated.layers.filter(\.isVisible).map(\.id))
@@ -1177,7 +1226,9 @@ final class NotebookSession: Identifiable {
 
             writesInFlight += 1
             isSaving = true
+            let pageSave = Self.inkSignposter.beginInterval("PageSave")
             let error = await write.value
+            Self.inkSignposter.endInterval("PageSave", pageSave)
             writesInFlight -= 1
             isSaving = writesInFlight > 0
 
@@ -1266,10 +1317,12 @@ final class NotebookSession: Identifiable {
 
     /// Newest first. Notebook-level snapshots (`pageID == nil`) are included
     /// with the current page so a future whole-notebook history can use them.
-    func pageHistory() async -> [VersionSnapshot] {
+    /// Throws when the history could not be read, so a caller can tell a
+    /// failed read from an empty history.
+    func pageHistory() async throws -> [VersionSnapshot] {
         guard let page else { return [] }
         await snapshotChain?.value
-        let snapshots = (try? await history.list(notebookID: manifest.id)) ?? []
+        let snapshots = try await history.list(notebookID: manifest.id)
         return snapshots
             .filter { $0.pageID == page.id || $0.pageID == nil }
             .sorted { $0.createdAt > $1.createdAt }
