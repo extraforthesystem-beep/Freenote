@@ -349,9 +349,11 @@ struct NotebookPane: View {
             }
         }
         .onChange(of: editor.tool) { _, newTool in
-            if newTool != .elements { selection.elementIDs = [] }
+            animateSelectionChange {
+                if newTool != .elements { selection.elementIDs = [] }
+                if newTool != .lasso { selection.strokeIDs = [] }
+            }
             if newTool != .lasso {
-                selection.strokeIDs = []
                 #if os(iOS)
                 controller.clearSelection()
                 #endif
@@ -361,7 +363,7 @@ struct NotebookPane: View {
         .onChange(of: editor.isReadOnly) { _, isReadOnly in
             if isReadOnly {
                 showsLassoHint = false
-                selection.clear()
+                animateSelectionChange { selection.clear() }
                 #if os(iOS)
                 controller.clearSelection()
                 #endif
@@ -1663,7 +1665,7 @@ struct NotebookPane: View {
                     // strokes still exist, so the bar is cleared explicitly on a
                     // tool or page change instead.
                     guard editor.tool == .lasso, !ids.isEmpty else { return }
-                    selection.strokeIDs = Set(ids)
+                    animateSelectionChange { selection.strokeIDs = Set(ids) }
                 },
                 onStrokesChanged: { records in
                     // Follow mode hands the canvas faded copies of the page's
