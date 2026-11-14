@@ -59,6 +59,11 @@ final class TextDocImageCache {
             cost: image.bytesPerRow * image.height
         )
     }
+
+    /// Empties the cache; called on a memory warning.
+    func removeAll() {
+        cache.removeAllObjects()
+    }
 }
 
 /// Reads and decodes an image block's file off the main actor.
