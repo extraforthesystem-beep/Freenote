@@ -340,10 +340,17 @@ final class HandwritingSearch {
         }
         parts.append(contentsOf: typed)
 
-        if !page.strokes.isEmpty,
-           let recognised = await recognizer.recognizedText(for: page.strokes) {
-            let trimmed = recognised.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { parts.append(trimmed) }
+        if !page.strokes.isEmpty {
+            // The stroke-to-PencilKit bridge is the expensive part, so it runs
+            // off the main actor: the AI sheet is animating in while this starts.
+            let strokes = page.strokes
+            let recognised = await Task.detached(priority: .userInitiated) { [recognizer] in
+                await recognizer.recognizedText(for: strokes)
+            }.value
+            if let recognised {
+                let trimmed = recognised.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { parts.append(trimmed) }
+            }
         }
         return parts.joined(separator: "\n")
     }
