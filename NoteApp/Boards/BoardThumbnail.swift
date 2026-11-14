@@ -48,7 +48,7 @@ struct BoardThumbnail: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .fill(paperColor)
 
             if let crop {
@@ -74,9 +74,9 @@ struct BoardThumbnail: View {
             }
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         }
         .task(id: board.updatedAt) {

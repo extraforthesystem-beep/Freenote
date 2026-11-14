@@ -247,7 +247,7 @@ struct BoardAssetImage: View {
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
             .fill(Color.secondary.opacity(0.10))
             .overlay {
                 Image(systemName: "photo")

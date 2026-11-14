@@ -146,10 +146,10 @@ struct BoardsView: View {
     }
 
     private func boardRow(_ board: Board) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: AppSpacing.m) {
             BoardThumbnail(board: board, assetsDirectory: model.assetsDirectory)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text(board.title)
                     .font(.body.weight(.medium))
                     .lineLimit(1)
