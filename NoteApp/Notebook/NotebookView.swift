@@ -973,7 +973,7 @@ struct NotebookPane: View {
                 startReadingMode()
             }
             .disabled(session.currentPageID == nil)
-            Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
+            Button("Customise Toolbar…", systemImage: "slider.horizontal.3") {
                 showsToolbarEditor = true
             }
         }

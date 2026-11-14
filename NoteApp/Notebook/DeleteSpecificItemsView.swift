@@ -62,7 +62,7 @@ struct DeleteSpecificItemsView: View {
                 Button(role: .destructive) {
                     isConfirming = true
                 } label: {
-                    Label("Delete Page Items", systemImage: "trash")
+                    Label("Delete Selected Items", systemImage: "trash")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -79,7 +79,7 @@ struct DeleteSpecificItemsView: View {
                 isPresented: $isConfirming,
                 titleVisibility: .visible
             ) {
-                Button("Delete Items", role: .destructive) {
+                Button("Delete Selected Items", role: .destructive) {
                     deleteSelected()
                 }
                 Button("Cancel", role: .cancel) {}
