@@ -6,6 +6,9 @@ import Foundation
 ///
 /// Every method reads what it needs from the files and writes results back to them;
 /// the store keeps no state that could not be rebuilt by scanning the library again.
+/// The one exception is a cache of decoded manifests, and it holds only what the
+/// file on disk currently contains: an entry is used while the file's size and
+/// modification date still match, and dropped otherwise.
 /// Each write goes to a temporary file in the target directory and is then moved
 /// into place, so a crash leaves either the old file or the new one.
 public actor LibraryStore {
@@ -53,6 +56,11 @@ public actor LibraryStore {
     private let fileManager = FileManager.default
     /// Files set aside because they did not decode, drained by `takeRecoveryNotices`.
     private var recoveryNotices: [RecoveryNotice] = []
+    /// Manifests this store has read or written, keyed by notebook id.
+    ///
+    /// Only a notebook that was loaded or saved gets an entry, so the cache
+    /// holds the few notebooks in use rather than the whole library.
+    private var manifestCache: [UUID: CachedManifest] = [:]
 
     public init(root: URL) {
         self.root = root
@@ -70,6 +78,9 @@ public actor LibraryStore {
     /// throws.
     @discardableResult
     public func open() throws -> LibraryInfo {
+        // Opening a library is when the app asks for the state on disk, so no
+        // manifest cached by an earlier session may survive it.
+        manifestCache.removeAll()
         try createDirectory(layout.root)
         try createDirectory(layout.notebooksDirectory)
         try createDirectory(layout.trashDirectory)
@@ -126,7 +137,7 @@ public actor LibraryStore {
             try createDirectory(directory)
             try createDirectory(layout.pagesDirectory(manifest.id))
             try createDirectory(layout.assetsDirectory(manifest.id))
-            try writeDocument(manifest, to: layout.manifestFile(manifest.id))
+            try writeManifest(manifest, for: manifest.id)
             return manifest
         } catch {
             // A half-created folder would list as an unreadable notebook, so remove it.
@@ -151,7 +162,7 @@ public actor LibraryStore {
 
     public func loadManifest(_ notebookID: UUID) throws -> NotebookManifest {
         let file = layout.manifestFile(notebookID)
-        return try ManifestCodec.decode(try readData(file), path: file.path)
+        return try readManifest(notebookID, at: file)
     }
 
     /// Loads the manifest and reconciles its `pageOrder` with the page files on disk.
@@ -178,7 +189,7 @@ public actor LibraryStore {
     public func renameNotebook(_ notebookID: UUID, title: String) throws {
         var manifest = try loadManifest(notebookID)
         manifest.title = title
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
     }
 
     /// Sets the cover style name, or clears it to show the first page instead.
@@ -186,7 +197,7 @@ public actor LibraryStore {
     public func setCover(_ coverName: String?, for notebookID: UUID) throws {
         var manifest = try loadManifest(notebookID)
         manifest.coverName = coverName
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
     }
 
     /// Sets the notebook's scroll direction, or clears it to follow the app
@@ -194,7 +205,7 @@ public actor LibraryStore {
     public func setPageScrollMode(_ mode: PageScrollMode?, for notebookID: UUID) throws {
         var manifest = try loadManifest(notebookID)
         manifest.pageScrollMode = mode
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
     }
 
     /// Records that the notebook was opened. Kept apart from `updatedAt`, so
@@ -202,7 +213,7 @@ public actor LibraryStore {
     public func markOpened(_ notebookID: UUID, at date: Date = Date()) throws {
         var manifest = try loadManifest(notebookID)
         manifest.lastOpenedAt = date
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
     }
 
     /// Moves the notebook's folder, unchanged, to `trash/`, stamping the manifest
@@ -224,6 +235,7 @@ public actor LibraryStore {
         } catch {
             throw NoteCoreError.ioFailure("move notebook to trash: \(error)")
         }
+        forgetManifest(notebookID)
         markDeleted(notebookID, at: Date())
     }
 
@@ -232,11 +244,12 @@ public actor LibraryStore {
     private func markDeleted(_ notebookID: UUID, at date: Date) {
         let file = layout.trashedNotebookDirectory(notebookID)
             .appendingPathComponent("notebook.json")
-        guard var manifest = try? ManifestCodec.decode(try readData(file), path: file.path) else {
+        guard var manifest = try? readManifest(notebookID, at: file) else {
+            forgetManifest(notebookID)
             return
         }
         manifest.deletedAt = date
-        try? writeDocument(manifest, to: file)
+        try? writeManifest(manifest, to: file, for: notebookID)
     }
 
     /// Moves a trashed notebook's folder back, unchanged, clearing the deletion date.
@@ -255,16 +268,17 @@ public actor LibraryStore {
         } catch {
             throw NoteCoreError.ioFailure("restore notebook from trash: \(error)")
         }
+        forgetManifest(notebookID)
         clearDeleted(notebookID)
     }
 
     private func clearDeleted(_ notebookID: UUID) {
         let file = layout.manifestFile(notebookID)
-        guard var manifest = try? ManifestCodec.decode(try readData(file), path: file.path),
+        guard var manifest = try? readManifest(notebookID, at: file),
               manifest.deletedAt != nil
         else { return }
         manifest.deletedAt = nil
-        try? writeDocument(manifest, to: file)
+        try? writeManifest(manifest, to: file, for: notebookID)
     }
 
     public func listTrash() throws -> [NotebookManifest] {
@@ -290,6 +304,7 @@ public actor LibraryStore {
             guard now.timeIntervalSince(date) > age else { continue }
             do {
                 try fileManager.removeItem(at: url)
+                forgetManifest(id)
                 purged.append(id)
             } catch {
                 throw NoteCoreError.ioFailure("purge expired notebook: \(error)")
@@ -305,6 +320,7 @@ public actor LibraryStore {
         for url in try contents(of: layout.trashDirectory) where isDirectory(url) {
             do {
                 try fileManager.removeItem(at: url)
+                if let id = UUID(uuidString: url.lastPathComponent) { forgetManifest(id) }
                 removed += 1
             } catch {
                 throw NoteCoreError.ioFailure("empty trash: \(error)")
@@ -316,7 +332,7 @@ public actor LibraryStore {
     private func loadTrashedManifest(_ notebookID: UUID) throws -> NotebookManifest {
         let file = layout.trashedNotebookDirectory(notebookID)
             .appendingPathComponent("notebook.json")
-        return try ManifestCodec.decode(try readData(file), path: file.path)
+        return try readManifest(notebookID, at: file)
     }
 
     private func creationDate(of url: URL) -> Date? {
@@ -355,10 +371,11 @@ public actor LibraryStore {
             }
 
             copy.updatedAt = Date()
-            try writeDocument(copy, to: layout.manifestFile(copy.id))
+            try writeManifest(copy, for: copy.id)
             return copy
         } catch {
             // A half-copied notebook would list as a broken duplicate.
+            forgetManifest(copy.id)
             try? fileManager.removeItem(at: layout.notebookDirectory(copy.id))
             throw error
         }
@@ -371,6 +388,7 @@ public actor LibraryStore {
         }
         do {
             try fileManager.removeItem(at: directory)
+            forgetManifest(notebookID)
         } catch {
             throw NoteCoreError.ioFailure("purge notebook: \(error)")
         }
@@ -396,7 +414,7 @@ public actor LibraryStore {
         let position = min(max(0, index), manifest.pageOrder.count)
         manifest.pageOrder.insert(page.id, at: position)
         manifest.updatedAt = Date()
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
         return page
     }
 
@@ -480,7 +498,7 @@ public actor LibraryStore {
             manifest.pageOrder.append(page.id)
         }
         manifest.updatedAt = Date()
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
     }
 
     /// Removes the page from `notebook.json` first, then deletes the page file.
@@ -488,7 +506,7 @@ public actor LibraryStore {
         var manifest = try loadManifest(notebookID)
         manifest.pageOrder.removeAll { $0 == pageID }
         manifest.updatedAt = Date()
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
 
         let file = layout.pageFile(pageID, in: notebookID)
         guard fileManager.fileExists(atPath: file.path) else { return }
@@ -510,7 +528,7 @@ public actor LibraryStore {
         }
         manifest.pageOrder = order
         manifest.updatedAt = Date()
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
     }
 
     /// Copies a page, giving the copy, every layer, stroke and element a new id, and
@@ -563,7 +581,7 @@ public actor LibraryStore {
         let position = (manifest.pageOrder.firstIndex(of: pageID) ?? manifest.pageOrder.count - 1) + 1
         manifest.pageOrder.insert(copy.id, at: min(max(0, position), manifest.pageOrder.count))
         manifest.updatedAt = Date()
-        try writeDocument(manifest, to: layout.manifestFile(notebookID))
+        try writeManifest(manifest, for: notebookID)
         return copy
     }
 
@@ -789,6 +807,8 @@ public actor LibraryStore {
             do {
                 manifests.append(try ManifestCodec.decode(try readData(file), path: file.path))
             } catch {
+                // A file that no longer decodes must not be served from the cache.
+                forgetManifest(id)
                 unreadable.append(id)
             }
         }
@@ -887,6 +907,101 @@ public actor LibraryStore {
 
     private func writeDocument<T: Encodable>(_ value: T, to url: URL) throws {
         try writeAtomically(try JSONDocument.encode(value, path: url.path), to: url)
+    }
+
+    // MARK: - Manifest cache
+
+    /// A manifest this store has read or written, with the identity of the file
+    /// it came from, so a change made behind the store's back is noticed.
+    private struct CachedManifest {
+        var manifest: NotebookManifest
+        var path: String
+        var size: Int
+        var modified: Date?
+    }
+
+    /// Reads a manifest, using the cache only while the file is unchanged.
+    ///
+    /// Every page save re-reads `notebook.json` and then rewrites it; the cache
+    /// skips the read when the store wrote the manifest itself. The size and
+    /// modification date are checked before a cached value is used, so a manifest
+    /// that another store instance, a sync process or a person edited is decoded
+    /// again, exactly as it would be without the cache.
+    private func readManifest(_ notebookID: UUID, at file: URL) throws -> NotebookManifest {
+        if let cached = manifestCache[notebookID],
+           cached.path == file.path,
+           let stamp = fileStamp(of: file),
+           stamp.size == cached.size,
+           stamp.modified == cached.modified {
+            return cached.manifest
+        }
+        manifestCache[notebookID] = nil
+        let manifest = try ManifestCodec.decode(try readData(file), path: file.path)
+        rememberManifest(manifest, at: file, for: notebookID)
+        return manifest
+    }
+
+    /// Writes a manifest and remembers exactly what reached the disk.
+    private func writeManifest(
+        _ manifest: NotebookManifest,
+        to file: URL,
+        for notebookID: UUID
+    ) throws {
+        try writeDocument(manifest, to: file)
+        rememberManifest(manifest, at: file, for: notebookID)
+    }
+
+    /// Writes a notebook's library manifest (`notebooks/<id>/notebook.json`).
+    private func writeManifest(_ manifest: NotebookManifest, for notebookID: UUID) throws {
+        try writeManifest(
+            manifest,
+            to: layout.manifestFile(notebookID),
+            for: notebookID
+        )
+    }
+
+    private func rememberManifest(
+        _ manifest: NotebookManifest,
+        at file: URL,
+        for notebookID: UUID
+    ) {
+        guard let stamp = fileStamp(of: file) else {
+            manifestCache[notebookID] = nil
+            return
+        }
+        manifestCache[notebookID] = CachedManifest(
+            manifest: manifest,
+            path: file.path,
+            size: stamp.size,
+            modified: stamp.modified
+        )
+    }
+
+    private func forgetManifest(_ notebookID: UUID) {
+        manifestCache[notebookID] = nil
+    }
+
+    /// The manifest this store is holding for a notebook, or nil when the next
+    /// read will come from the file. Internal, so tests can prove that every
+    /// manifest write keeps the cache in step with the disk.
+    func cachedManifest(_ notebookID: UUID) -> NotebookManifest? {
+        manifestCache[notebookID]?.manifest
+    }
+
+    /// Drops a cached manifest so the next read comes from the file. Backup
+    /// restore writes `notebook.json` itself before it moves the notebook in.
+    func forgetCachedManifest(_ notebookID: UUID) {
+        forgetManifest(notebookID)
+    }
+
+    private func fileStamp(of file: URL) -> (size: Int, modified: Date?)? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: file.path) else {
+            return nil
+        }
+        return (
+            size: (attributes[.size] as? NSNumber)?.intValue ?? -1,
+            modified: attributes[.modificationDate] as? Date
+        )
     }
 
     private func writePageFile(_ page: Page, in notebookID: UUID) throws {
