@@ -373,12 +373,22 @@ struct NotebookPane: View {
         }
         .onChange(of: session.currentPageID) {
             // A selection belongs to the page it was made on.
-            selection.clear()
+            animateSelectionChange { selection.clear() }
         }
         .task(id: showsLassoHint) {
             guard showsLassoHint else { return }
             try? await Task.sleep(for: .seconds(4))
             if !Task.isCancelled { showsLassoHint = false }
+        }
+        .task(id: session.isLoadingPage) {
+            // A page turn is usually instant; the spinner would only flash.
+            guard session.isLoadingPage else {
+                showsPageSpinner = false
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            showsPageSpinner = true
         }
         .sheet(isPresented: $showsDeleteItems) {
             DeleteSpecificItemsView(counts: session.itemCounts()) { kinds in
@@ -1905,9 +1915,14 @@ struct NotebookPane: View {
     @ViewBuilder
     private var pagePlaceholder: some View {
         if session.isLoadingPage {
-            ProgressView()
+            // A page turn is usually instant; the spinner waits so it cannot
+            // flash and vanish.
+            if showsPageSpinner {
+                ProgressView()
+                    .accessibilityLabel("Loading page")
+            }
         } else if session.pageCount == 0 {
-            VStack(spacing: 14) {
+            VStack(spacing: AppSpacing.m) {
                 Image(systemName: "doc.badge.plus")
                     .font(.system(size: 40))
                     .foregroundStyle(.secondary)
