@@ -1,6 +1,51 @@
 import SearchKit
 import SwiftUI
 
+/// One result row: every hit on one page, with the page's hits kept in the
+/// order the search returned them.
+struct FindBarPageResult: Identifiable, Hashable {
+    let pageID: UUID
+    let pageIndex: Int
+    let hits: [SearchKit.SearchHit]
+
+    var id: UUID { pageID }
+
+    /// One row per page, in page order, with every source's hit on that page.
+    /// Computed when the hits change, never while the bar draws.
+    static func group(_ hits: [SearchKit.SearchHit]) -> [FindBarPageResult] {
+        var order: [UUID] = []
+        var grouped: [UUID: [SearchKit.SearchHit]] = [:]
+        for hit in hits {
+            if grouped[hit.pageID] == nil { order.append(hit.pageID) }
+            grouped[hit.pageID, default: []].append(hit)
+        }
+        return order.compactMap { pageID in
+            guard let pageHits = grouped[pageID] else { return nil }
+            return FindBarPageResult(
+                pageID: pageID,
+                pageIndex: pageHits.first?.pageIndex ?? 0,
+                hits: pageHits
+            )
+        }
+        .sorted { $0.pageIndex < $1.pageIndex }
+    }
+
+    var title: String {
+        pageIndex > 0 ? "Page \(pageIndex)" : "Page"
+    }
+
+    /// What VoiceOver reads: the page, the first match and the hit count.
+    var accessibilityLabel: String {
+        let snippet = hits.first?.snippet.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var parts = [title]
+        if !snippet.isEmpty { parts.append("“\(snippet)”") }
+        if hits.count > 1 {
+            parts.append("\(hits.count) matches")
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// In-notebook search as a find bar: one query row over the page and the
 /// results dropping beneath it in the same material.
 ///
@@ -23,6 +68,9 @@ struct NotebookFindBar: View {
     @State private var sources = Set(PageTextSource.allCases)
     @State private var dateRange = SearchDateRange.anyTime
     @State private var hits: [SearchKit.SearchHit] = []
+    /// The hits grouped into rows when they arrive, so a body pass never
+    /// regroups or re-sorts them.
+    @State private var pageResults: [FindBarPageResult] = []
     @State private var selectedPageID: UUID?
     /// Consumed by the first search, so later searches start at the first result.
     @State private var pendingInitialPageID: UUID?
@@ -241,14 +289,14 @@ struct NotebookFindBar: View {
         .accessibilityLabel("Go to Page \(page)")
     }
 
-    private func pageRow(_ result: PageResult) -> some View {
+    private func pageRow(_ result: FindBarPageResult) -> some View {
         let isSelected = result.pageID == selectedPageID
         return Button {
             jump(to: result)
         } label: {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text(pageTitle(result))
+                    Text(result.title)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     if result.hits.count > 1 {
@@ -275,7 +323,7 @@ struct NotebookFindBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(pageTitle(result))
+        .accessibilityLabel(result.accessibilityLabel)
     }
 
     private var noMatches: some View {
@@ -289,13 +337,6 @@ struct NotebookFindBar: View {
 
     // MARK: State
 
-    private struct PageResult: Identifiable {
-        let pageID: UUID
-        let pageIndex: Int
-        let hits: [SearchKit.SearchHit]
-        var id: UUID { pageID }
-    }
-
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -303,25 +344,6 @@ struct NotebookFindBar: View {
     /// The 1-based page a pure page-number query names, if any.
     private var pageTarget: Int? {
         PageNumberQuery.page(in: query, pageCount: pageCount)
-    }
-
-    /// One row per page, in page order, with every source's hit on that page.
-    private var pageResults: [PageResult] {
-        var order: [UUID] = []
-        var grouped: [UUID: [SearchKit.SearchHit]] = [:]
-        for hit in hits {
-            if grouped[hit.pageID] == nil { order.append(hit.pageID) }
-            grouped[hit.pageID, default: []].append(hit)
-        }
-        return order.compactMap { pageID in
-            guard let pageHits = grouped[pageID] else { return nil }
-            return PageResult(
-                pageID: pageID,
-                pageIndex: pageHits.first?.pageIndex ?? 0,
-                hits: pageHits
-            )
-        }
-        .sorted { $0.pageIndex < $1.pageIndex }
     }
 
     private var selectedIndex: Int {
@@ -342,15 +364,12 @@ struct NotebookFindBar: View {
         return "\(count) match\(count == 1 ? "" : "es")"
     }
 
-    private func pageTitle(_ result: PageResult) -> String {
-        result.pageIndex > 0 ? "Page \(result.pageIndex)" : "Page"
-    }
-
     private func scheduleSearch(_ value: String) {
         searchTask?.cancel()
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             hits = []
+            pageResults = []
             settledQuery = ""
             selectedPageID = nil
             onHighlight(nil)
@@ -364,17 +383,20 @@ struct NotebookFindBar: View {
             guard !Task.isCancelled else { return }
             let found = await search.search(trimmed, in: notebookID, sources: sources, dateRange: dateRange)
             guard !Task.isCancelled else { return }
+            // Group once, here, so the body never sorts the whole result set.
+            let grouped = FindBarPageResult.group(found)
             hits = found
+            pageResults = grouped
             settledQuery = trimmed
             onHighlight(SearchHighlight(query: trimmed, sources: sources, dateRange: dateRange))
             // The first search lands on the page a search hit asked for; every
             // later search starts at the first result.
             let requested = pendingInitialPageID
             pendingInitialPageID = nil
-            if let requested, pageResults.contains(where: { $0.pageID == requested }) {
+            if let requested, grouped.contains(where: { $0.pageID == requested }) {
                 selectedPageID = requested
             } else {
-                selectedPageID = pageResults.first?.pageID
+                selectedPageID = grouped.first?.pageID
             }
         }
     }
@@ -393,7 +415,7 @@ struct NotebookFindBar: View {
     }
 
     /// Tapping a row jumps and folds the list away; the toggle brings it back.
-    private func jump(to result: PageResult) {
+    private func jump(to result: FindBarPageResult) {
         selectedPageID = result.pageID
         showsResults = false
         onSelectPage(result.pageID)
