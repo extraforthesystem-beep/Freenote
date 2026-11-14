@@ -76,7 +76,7 @@ struct PencilSearchPad: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.m) {
             HStack {
-                Text("Write to Search")
+                Text("Search by Handwriting")
                     .font(.headline)
                 Spacer()
                 Button("Clear") {
@@ -181,7 +181,7 @@ struct PencilSearchButton: View {
         Button {
             isPresented = true
         } label: {
-            Label("Write to Search", systemImage: "applepencil.and.scribble")
+            Label("Search by Handwriting", systemImage: "applepencil.and.scribble")
         }
         .popover(isPresented: $isPresented) {
             PencilSearchPad(search: search, onQuery: onQuery)
