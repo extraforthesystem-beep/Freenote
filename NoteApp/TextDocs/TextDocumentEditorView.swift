@@ -716,7 +716,7 @@ private struct BlockRow: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .frame(width: 30, height: 16)
-                    .contentShape(Rectangle())
+                    .hitTarget()
                     .draggable(block.id.uuidString)
                     .accessibilityLabel("Drag to reorder")
 
@@ -737,6 +737,7 @@ private struct BlockRow: View {
                     )
                 }
                 .accessibilityLabel("\(choice.title) options")
+                .hitTarget()
             }
         }
         .frame(width: 33)
@@ -852,6 +853,7 @@ private struct BlockRow: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .hitTarget()
                 .accessibilityLabel("Delete divider")
             }
             .padding(.vertical, 8)
@@ -924,7 +926,7 @@ private struct BlockRow: View {
                         Image(systemName: item.isChecked ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 20))
                             .foregroundStyle(item.isChecked ? Color.accentColor : Color.secondary)
-                            .frame(width: 30, height: 28)
+                            .hitTarget()
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(item.text.isEmpty ? "Checklist item" : item.text)
