@@ -246,7 +246,7 @@ struct NotebookFindBar<Idle: View>: View {
         guard !hits.isEmpty else {
             // A page-number query has no text matches, but is still a target.
             if let pageTarget { return "Page \(pageTarget)" }
-            return "No matches"
+            return settledQuery == trimmedQuery ? "No matches" : "Searching…"
         }
         let matchWord = hits.count == 1 ? "match" : "matches"
         let pageWord = pageResults.count == 1 ? "page" : "pages"
