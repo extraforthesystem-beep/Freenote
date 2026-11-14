@@ -1,5 +1,8 @@
 import SwiftUI
 import TextDocKit
+#if os(iOS)
+import UIKit
+#endif
 
 /// Edits one `TextDocument` as a stack of typed blocks.
 ///
@@ -109,9 +112,13 @@ struct TextDocumentEditorView: View {
         }
         .onChange(of: document) { _, _ in scheduleSave() }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { flushIfNeeded() }
+            guard phase != .active else { return }
+            // `.inactive` keeps foreground time for a quick write;
+            // `.background` can be suspended at any moment, so it needs the
+            // background assertion to finish.
+            flush(holdingBackgroundTime: phase == .background)
         }
-        .onDisappear { flushIfNeeded() }
+        .onDisappear { flush(holdingBackgroundTime: true) }
         .task {
             // A new document opens ready to type in its first block.
             guard focusedKey == nil else { return }
@@ -511,13 +518,26 @@ struct TextDocumentEditorView: View {
     /// Saves the document as it is now: leaving the screen or the app going to
     /// the background must persist the latest edit, including an undo, redo or
     /// structural change. The snapshot is taken before the async write.
-    private func flushIfNeeded() {
+    ///
+    /// The write is awaited inside a background assertion, as the board and
+    /// `RootView` do: a bare `Task` gets no execution time once iOS suspends.
+    private func flush(holdingBackgroundTime: Bool) {
         pendingSave?.cancel()
         pendingSave = nil
         guard hasUnsavedChanges else { return }
         let snapshot = document
+        #if os(iOS)
+        let assertion = holdingBackgroundTime
+            ? UIApplication.shared.beginBackgroundTask(withName: "Save text document")
+            : .invalid
+        #endif
         Task {
             await model.save(snapshot)
+            #if os(iOS)
+            if assertion != .invalid {
+                UIApplication.shared.endBackgroundTask(assertion)
+            }
+            #endif
         }
     }
 
