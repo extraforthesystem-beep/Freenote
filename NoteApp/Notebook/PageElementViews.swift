@@ -47,7 +47,7 @@ struct TextElementComposer: View {
                         Stepper("\(Int(fontSize)) pt", value: $fontSize, in: 9...72)
                     }
                     Section("Style") {
-                        HStack(spacing: 10) {
+                        HStack(spacing: AppSpacing.s) {
                             styleButton("Bold", symbol: "bold", isOn: $style.isBold)
                             styleButton("Italic", symbol: "italic", isOn: $style.isItalic)
                             styleButton("Underline", symbol: "underline", isOn: $style.isUnderline)
@@ -91,10 +91,13 @@ struct TextElementComposer: View {
                 .frame(width: 38, height: 32)
                 .background(
                     isOn.wrappedValue ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1),
-                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                 )
         }
         .buttonStyle(.plain)
+        // The three most-tapped controls in this sheet: a 44 pt target around
+        // the small pill.
+        .hitTarget()
         .accessibilityLabel(label)
     }
 }
@@ -103,6 +106,15 @@ struct PageElementsSheet: View {
     let session: NotebookSession
     @Environment(\.dismiss) private var dismiss
     @State private var editing: EditingElement?
+    /// The page's elements in drawing order, sorted once per edit rather than
+    /// on every body pass.
+    @State private var elements: [PageElement]
+
+    init(session: NotebookSession) {
+        self.session = session
+        // Sorted once here as well, so the sheet's first frame is not empty.
+        _elements = State(initialValue: (session.page?.elements ?? []).inPageOrder)
+    }
 
     /// The editor to show for a row. A text box and a sticky note are edited the
     /// same way, with a different set of controls.
@@ -124,10 +136,6 @@ struct PageElementsSheet: View {
         }
     }
 
-    private var elements: [PageElement] {
-        (session.page?.elements ?? []).sorted { $0.zIndex < $1.zIndex }
-    }
-
     var body: some View {
         NavigationStack {
             Group {
@@ -147,6 +155,10 @@ struct PageElementsSheet: View {
             }
             .navigationTitle("Page Elements")
             .navigationBarTitleDisplayModeInline()
+            .task(id: session.revision) {
+                // One sort per edit, and not one per body pass.
+                elements = (session.page?.elements ?? []).inPageOrder
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -274,6 +286,18 @@ private extension View {
 
 // MARK: - Sticky notes and tape
 
+extension Array where Element == PageElement {
+    /// Page elements in drawing order: by z, then by id so an equal z keeps one
+    /// order everywhere. Sorting is what both lists used to do per body pass.
+    var inPageOrder: [PageElement] {
+        sorted {
+            $0.zIndex == $1.zIndex
+                ? $0.id.uuidString < $1.id.uuidString
+                : $0.zIndex < $1.zIndex
+        }
+    }
+}
+
 /// A sticky note drawn sharply over the page, for the elements sheet's preview
 /// and for any place a note is shown while it is being edited. On the page
 /// itself the note is part of the rendered background.
@@ -359,9 +383,7 @@ struct TapeOverlay: View {
                 if case .tape = element.content { return true }
                 return false
             }
-            .sorted {
-                $0.zIndex == $1.zIndex ? $0.id.uuidString < $1.id.uuidString : $0.zIndex < $1.zIndex
-            }
+            .inPageOrder
     }
 
     var body: some View {

@@ -275,6 +275,52 @@ extension RGBAColor {
     }
 }
 
+/// The cache key of a page's paper, rebuilt only when what feeds it changes.
+/// The page content is handed to `PaperBackground` again on every stroke, and
+/// a stroke does not change the paper, so the key is kept until an input
+/// differs. The key is the same one the pre-render path stores under.
+final class BackgroundKeyMemo {
+    /// Everything `PageBackgroundCache.baseKey` reads, apart from the strokes.
+    private struct Inputs: Equatable {
+        let pageID: UUID
+        let width: Double
+        let height: Double
+        let template: PageTemplate
+        let layers: [Page.Layer]
+        let elements: [PageElement]
+        let assetsPath: String?
+        let usesDarkPaper: Bool
+
+        init(page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) {
+            pageID = page.id
+            width = page.width
+            height = page.height
+            template = page.template
+            layers = page.layers
+            elements = page.elements
+            assetsPath = assetsDirectory?.path
+            self.usesDarkPaper = usesDarkPaper
+        }
+    }
+
+    private var inputs: Inputs?
+    private var storedKey: String?
+
+    func key(for page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) -> String {
+        let inputs = Inputs(page: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
+        if inputs == self.inputs, let storedKey { return storedKey }
+        // `withoutTape` is the page as drawn, the same page `prewarm` keys.
+        let key = PageBackgroundCache.baseKey(
+            for: page.withoutTape,
+            assetsDirectory: assetsDirectory,
+            usesDarkPaper: usesDarkPaper
+        )
+        self.inputs = inputs
+        storedKey = key
+        return key
+    }
+}
+
 /// The full page background — paper and elements — drawn by InkKit. The ink is
 /// left to the canvas on top.
 ///
@@ -295,14 +341,9 @@ struct PaperBackground: View {
     @Environment(\.displayScale) private var displayScale
     @State private var base: (key: String, image: InkImage)?
     @State private var sharp: (key: String, image: InkImage)?
-
-    private var baseKey: String {
-        PageBackgroundCache.baseKey(
-            for: page,
-            assetsDirectory: assetsDirectory,
-            usesDarkPaper: usesDarkPaper
-        )
-    }
+    /// The cache key, kept across the per-stroke updates that hand this view
+    /// the whole page again.
+    @State private var keys = BackgroundKeyMemo()
 
     /// The page's own identity, without its elements: while an element drag
     /// invalidates the image, the last one for this page stays up.
@@ -315,7 +356,7 @@ struct PaperBackground: View {
     }
 
     var body: some View {
-        let key = baseKey
+        let key = keys.key(for: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
         Group {
             if let image = image(for: key) {
                 Image(inkImage: image)
@@ -326,7 +367,7 @@ struct PaperBackground: View {
                 AppColor.paper(usesDarkPaper: usesDarkPaper)
             }
         }
-        .task(id: "\(key)@\(targetScale)") {
+        .task(id: BackgroundRenderKey(key: key, scale: targetScale)) {
             await renderBase(key: key)
             await renderSharp(key: key, scale: targetScale)
         }
@@ -403,6 +444,13 @@ struct PaperBackground: View {
     }
 }
 
+/// What the background's renders are keyed on: the paper's cache key and the
+/// zoom bucket, as a value rather than a joined string.
+private struct BackgroundRenderKey: Hashable {
+    let key: String
+    let scale: CGFloat
+}
+
 extension Page {
     /// The page as its paper is drawn: tape is an overlay the user reveals,
     /// not part of the paper. Paper backgrounds and their cache keys use this.
@@ -413,6 +461,56 @@ extension Page {
             return false
         }
         return page
+    }
+}
+
+/// Which paper pre-renders are waiting, which one is drawing, and which have
+/// gone stale. Kept apart from the drawing so the rules — one at a time, one
+/// draw per key, a page that left is never drawn — can be tested without a
+/// renderer.
+nonisolated struct PagePrewarmQueue {
+    private var waiting: [String] = []
+    private var known: Set<String> = []
+    /// The key being drawn, if any.
+    private(set) var running: String?
+
+    var isIdle: Bool { known.isEmpty }
+    /// The keys still waiting for their turn, in order.
+    var waitingKeys: [String] { waiting }
+
+    func contains(_ key: String) -> Bool { known.contains(key) }
+
+    /// Adds `key` unless it is already drawn, waiting or drawing. Returns
+    /// whether it was added, so a caller never draws one key twice.
+    @discardableResult
+    mutating func enqueue(_ key: String) -> Bool {
+        guard known.insert(key).inserted else { return false }
+        waiting.append(key)
+        return true
+    }
+
+    /// The next key to draw, or `nil` while one is still drawing.
+    mutating func start() -> String? {
+        guard running == nil, !waiting.isEmpty else { return nil }
+        let key = waiting.removeFirst()
+        running = key
+        return key
+    }
+
+    /// The draw for `key` is over, whatever it produced.
+    mutating func finish(_ key: String) {
+        known.remove(key)
+        if running == key { running = nil }
+    }
+
+    /// The page left the viewport before its turn: it never draws. A key that
+    /// is already drawing is not dropped (its draw cannot be stopped here).
+    @discardableResult
+    mutating func drop(_ key: String) -> Bool {
+        guard running != key, let index = waiting.firstIndex(of: key) else { return false }
+        waiting.remove(at: index)
+        known.remove(key)
+        return true
     }
 }
 
@@ -448,6 +546,10 @@ enum PageBackgroundCache {
     /// ~77 ms on an M-class Mac, release, more on a base iPad) would otherwise
     /// show plain paper until its image arrived. Only such pages are
     /// pre-rendered; `page` is the page as drawn (`withoutTape`).
+    ///
+    /// The caller runs one of these at a time through `PagePrewarmQueue`, and
+    /// checks the cache before calling; this rechecks it around the draw so a
+    /// page that became active meanwhile is never drawn twice.
     static func prewarm(_ page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) async {
         let isCostly = page.visibleElements.contains { element in
             switch element.content {
@@ -455,7 +557,7 @@ enum PageBackgroundCache {
             default: false
             }
         }
-        guard isCostly else { return }
+        guard isCostly, !Task.isCancelled else { return }
         let key = baseKey(for: page, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
         guard cached(key: key, scale: baseScale) == nil else { return }
         let scale = baseScale
@@ -470,7 +572,7 @@ enum PageBackgroundCache {
                 usesDarkPaper: usesDarkPaper
             )
         }.value
-        guard let rendered, cached(key: key, scale: scale) == nil else { return }
+        guard !Task.isCancelled, let rendered, cached(key: key, scale: scale) == nil else { return }
         store(rendered, key: key, scale: scale, page: page)
     }
 

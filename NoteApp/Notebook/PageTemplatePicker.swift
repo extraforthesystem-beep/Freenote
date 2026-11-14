@@ -54,7 +54,7 @@ struct PageTemplatePicker: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
+                LazyVStack(alignment: .leading, spacing: AppSpacing.xxl) {
                     if let onApplySize {
                         sizeSection(onApplySize)
                         Divider()
@@ -118,7 +118,7 @@ struct PageTemplatePicker: View {
                 if isApplying {
                     ProgressView("Applying…")
                         .padding(20)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppRadius.l))
                 }
             }
         }
@@ -129,7 +129,7 @@ struct PageTemplatePicker: View {
     private func sizeSection(
         _ onApplySize: @escaping (PaperSize, PageOrientation, Bool) -> Void
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text("Size")
                 .font(.headline)
                 .padding(.horizontal, 20)
@@ -179,7 +179,7 @@ struct PageTemplatePicker: View {
     }
 
     private func categorySection(_ category: PageTemplateItem.Category) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             Text(category.rawValue)
                 .font(.headline)
                 .padding(.horizontal, 20)
@@ -195,12 +195,12 @@ struct PageTemplatePicker: View {
 
     /// Imported templates, and the way in for a new one.
     private var customSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppSpacing.m) {
             HStack {
                 Text(PageTemplateItem.Category.custom.rawValue)
                     .font(.headline)
                 Spacer()
-                Button("Import PDF or PNG…", systemImage: "plus") {
+                Button("Import PDF or image…", systemImage: "plus") {
                     showsTemplateImporter = true
                 }
                 .font(.subheadline)
@@ -208,16 +208,18 @@ struct PageTemplatePicker: View {
                 .frame(minHeight: 44)
                 .accessibilityHint("Imports a page background from a PDF or a picture")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, AppSpacing.xl)
 
             let items = customItems
-            if items.isEmpty {
+            if customTemplates?.indexUnreadable == true {
+                unreadableIndexRow
+            } else if items.isEmpty {
                 Text("A planner page, a form or a picture of your own, imported once and reused on any page.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, AppSpacing.xl)
             } else {
-                LazyVGrid(columns: columns, spacing: 16) {
+                LazyVGrid(columns: columns, spacing: AppSpacing.l) {
                     ForEach(items) { item in
                         templateButton(item)
                             .contextMenu {
@@ -228,9 +230,28 @@ struct PageTemplatePicker: View {
                             }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, AppSpacing.xl)
             }
         }
+    }
+
+    /// The index could not be read, so the list is unknown rather than empty:
+    /// say so and offer to try again instead of hinting at a first import.
+    private var unreadableIndexRow: some View {
+        HStack(spacing: AppSpacing.s) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
+            Text("Your imported templates could not be read.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Retry") {
+                customTemplates?.load()
+            }
+            .font(.caption.weight(.semibold))
+            .frame(minHeight: 44)
+        }
+        .padding(.horizontal, AppSpacing.xl)
     }
 
     private var customItems: [PageTemplateItem] {
@@ -267,31 +288,21 @@ struct PageTemplatePicker: View {
             }
             onApply(item, applyToAllPages)
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: AppSpacing.s) {
                 ZStack(alignment: .topTrailing) {
-                    if let preview = customPreview(item) {
-                        Image(inkImage: preview)
-                            .resizable()
-                            .scaledToFit()
-                    } else if let image = TemplateImageCache.preview(for: item.template) {
-                        Image(inkImage: image)
-                            .resizable()
-                            .scaledToFit()
-                    } else {
-                        Rectangle().fill(.white)
-                    }
+                    TemplatePreviewImage(item: item, customTemplates: customTemplates)
 
                     if isSelected(item) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.title3)
                             .foregroundStyle(.white, Color.accentColor)
-                            .padding(7)
+                            .padding(AppSpacing.s)
                     }
                 }
                 .aspectRatio(PageTemplateCatalog.pageWidth / PageTemplateCatalog.pageHeight, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: AppRadius.s, style: .continuous)
                         .strokeBorder(
                             isSelected(item) ? Color.accentColor : Color.secondary.opacity(0.25),
                             lineWidth: isSelected(item) ? 2.5 : 1
@@ -309,14 +320,57 @@ struct PageTemplatePicker: View {
         .buttonStyle(.plain)
     }
 
-    private func customPreview(_ item: PageTemplateItem) -> InkImage? {
-        guard let custom = item.custom, let customTemplates else { return nil }
-        return customTemplates.preview(for: custom)
-    }
-
     private func isSelected(_ item: PageTemplateItem) -> Bool {
         guard let current else { return false }
         return PageTemplateCatalog.sameLayout(item.template, current)
+    }
+}
+
+/// A template's preview, drawn off the main actor and kept until it lands. A
+/// first-appearance preview decodes an imported picture or draws the page,
+/// which is too slow for a cell body.
+private struct TemplatePreviewImage: View {
+    let item: PageTemplateItem
+    let customTemplates: CustomTemplateStore?
+
+    @State private var image: InkImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(inkImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                // Paper is the page's own colour whatever the appearance.
+                AppColor.paper(usesDarkPaper: false)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: item.id) {
+            await load()
+        }
+    }
+
+    private func load() async {
+        if let custom = item.custom, let customTemplates {
+            if let cached = customTemplates.cachedPreview(for: custom) {
+                image = cached
+                return
+            }
+            let rendered = await customTemplates.renderPreview(for: custom)
+            guard !Task.isCancelled, let rendered else { return }
+            image = rendered
+            return
+        }
+        if let cached = TemplateImageCache.cachedPreview(for: item.template) {
+            image = cached
+            return
+        }
+        let rendered = await TemplateImageCache.renderedPreview(for: item.template)
+        guard !Task.isCancelled, let rendered else { return }
+        TemplateImageCache.storePreview(rendered, for: item.template)
+        image = rendered
     }
 }
 

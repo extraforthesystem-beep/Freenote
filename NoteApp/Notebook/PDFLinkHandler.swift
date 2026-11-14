@@ -19,11 +19,24 @@ enum PDFLinkHandler {
     /// an imprecise stylus (the 44 pt enhanced target of WCAG 2.5.5).
     static let minimumTargetSize: CGFloat = 44
 
-    /// The last document opened here, with the URL it came from. A tap on a
-    /// PDF page would otherwise parse the whole file again (0.2 ms for a
-    /// synthetic page, over a millisecond for a 1,000-page book) for one
-    /// annotation lookup, on the main actor.
-    private static var lastDocument: (url: URL, document: PDFDocument)?
+    /// The last document opened here, with the URL it came from and when a tap
+    /// last used it. A tap on a PDF page would otherwise parse the whole file
+    /// again (0.2 ms for a synthetic page, over a millisecond for a 1,000-page
+    /// book) for one annotation lookup, on the main actor.
+    ///
+    /// It is not kept for the app's life: PDFKit holds the page caches of a
+    /// scanned book, and a reader that closed the notebook an hour ago does not
+    /// need them. A minute without a tap drops it, and a memory warning drops it
+    /// at once.
+    private static var lastDocument: (url: URL, document: PDFDocument, usedAt: ContinuousClock.Instant)?
+
+    /// How long an idle document stays parsed for the next tap on the same PDF.
+    private static let documentIdleTimeout: Duration = .seconds(60)
+
+    /// Drops the retained PDF, releasing PDFKit's page caches.
+    static func removeCachedDocument() {
+        lastDocument = nil
+    }
 
     static func target(
         at point: CGPoint,
@@ -144,13 +157,17 @@ enum PDFLinkHandler {
         return nil
     }
 
-    /// The document at `url`, reused when it is the one last opened here.
+    /// The document at `url`, reused when it is the one last opened here and a
+    /// tap used it recently.
     private static func document(at url: URL) -> PDFDocument? {
-        if let lastDocument, lastDocument.url == url {
-            return lastDocument.document
+        if let cached = lastDocument, cached.url == url,
+           ContinuousClock.now - cached.usedAt < documentIdleTimeout {
+            lastDocument?.usedAt = .now
+            return cached.document
         }
+        lastDocument = nil
         guard let document = PDFDocument(url: url) else { return nil }
-        lastDocument = (url, document)
+        lastDocument = (url, document, .now)
         return document
     }
 }
@@ -251,7 +268,7 @@ struct PDFLinkHistoryChip: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: AppSpacing.xs) {
                 Image(systemName: systemImage)
                     .font(.system(size: 12, weight: .semibold))
                 Text("Page \(pageNumber)")

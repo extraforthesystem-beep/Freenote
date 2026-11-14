@@ -28,8 +28,8 @@ import UIKit.UIGestureRecognizerSubclass
 // show an image rendered off the main actor with `PageRenderer`, cached in
 // `PageImageCache` by notebook token + page id at a scale that follows the
 // settled zoom. A nearby page with a PDF page or photo also gets its live
-// paper pre-rendered (`PageBackgroundCache.prewarm`), so activating it does
-// not draw that paper on the main actor.
+// paper pre-rendered off the main actor, queued one at a time (`PagePrewarmQueue`),
+// so activating it does not draw that paper on the main actor.
 //
 // Slots are created lazily for the pages near the viewport (plus the active
 // page) and dropped as they scroll away, so a 300-page notebook only has a
@@ -236,6 +236,9 @@ class PagesView: UIView {
     }
 
     private(set) var pageOrder: [UUID] = []
+    /// Where each page sits in `pageOrder`, so a page's index is a lookup
+    /// rather than a scan of a 1,000-page notebook.
+    private(set) var pageIndices: [UUID: Int] = [:]
     private(set) var activePageID: UUID?
     private var activePage: Page?
     private var source: PageImageSource?
@@ -275,6 +278,19 @@ class PagesView: UIView {
     private var renderOverrides: [UUID: Page] = [:]
     private var renderTask: Task<Void, Never>?
 
+    /// A paper pre-render waiting for its turn (see `schedulePrewarm`).
+    private struct PrewarmRequest {
+        let page: Page
+        let assetsDirectory: URL?
+        let usesDarkPaper: Bool
+    }
+
+    /// Paper pre-renders are queued, not started: one draws at a time and each
+    /// key draws once. A page image does not wait for them.
+    private var prewarmQueue = PagePrewarmQueue()
+    private var prewarmRequests: [String: PrewarmRequest] = [:]
+    private var prewarmTask: Task<Void, Never>?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
@@ -286,12 +302,23 @@ class PagesView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// The view left the hierarchy (the notebook closed or the page container
+    /// was rebuilt): stop the renders that belong to it, instead of finishing a
+    /// paper draw for a page nobody will see.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window == nil else { return }
+        renderTask?.cancel()
+        prewarmTask?.cancel()
+        prewarmRequests.removeAll()
+    }
+
     func pageSize(at index: Int) -> CGSize {
         sizes[pageOrder[index]] ?? defaultSize
     }
 
     var activeIndex: Int? {
-        activePageID.flatMap { pageOrder.firstIndex(of: $0) }
+        activePageID.flatMap { pageIndices[$0] }
     }
 
     var displayScale: CGFloat {
@@ -320,8 +347,8 @@ class PagesView: UIView {
         }
         source = newSource
 
-        if newOrder != pageOrder {
-            pageOrder = newOrder
+        if !Self.sameOrder(newOrder, pageOrder) {
+            setOrder(newOrder)
             layoutChanged = true
         }
         let size = CGSize(width: newPage.width, height: newPage.height)
@@ -334,7 +361,7 @@ class PagesView: UIView {
         let previousID = activePageID
         let activeChanged = previousID != newPage.id
         if activeChanged, let previousID, let leaving = activePage, leaving.id == previousID,
-           newOrder.contains(previousID) {
+           pageIndices[previousID] != nil {
             // Keep the page being left on screen as it looks now, then redraw
             // it from the in-memory copy, which may hold ink not yet on disk.
             if let slot = slots[previousID] {
@@ -364,6 +391,28 @@ class PagesView: UIView {
         controller?.scrollView = zoomingScrollView
         scheduleRenders()
         performPendingReveal()
+    }
+
+    private func setOrder(_ newOrder: [UUID]) {
+        pageOrder = newOrder
+        pageIndices.removeAll(keepingCapacity: true)
+        pageIndices.reserveCapacity(newOrder.count)
+        // First occurrence wins, like `firstIndex(of:)` did.
+        for (index, pageID) in newOrder.enumerated() where pageIndices[pageID] == nil {
+            pageIndices[pageID] = index
+        }
+    }
+
+    /// Whether the two orders are the same. The page content is handed back on
+    /// every stroke, so this runs per stroke; the manifest's array storage is
+    /// reused until the order changes, so comparing identity first settles the
+    /// usual case without walking every id.
+    private static func sameOrder(_ new: [UUID], _ old: [UUID]) -> Bool {
+        guard new.count == old.count else { return false }
+        let newStart = new.withUnsafeBufferPointer { $0.baseAddress }
+        let oldStart = old.withUnsafeBufferPointer { $0.baseAddress }
+        if let newStart, newStart == oldStart { return true }
+        return new == old
     }
 
     // MARK: Revealing a rect
@@ -414,8 +463,36 @@ class PagesView: UIView {
         guard abs(target.x - scroll.contentOffset.x) > 0.5 || abs(target.y - scroll.contentOffset.y) > 0.5 else {
             return
         }
+        jump(scroll, to: target)
+    }
+
+    /// A page jump's timing, the `AppMotion.emphasized` spring: the same move
+    /// in both scroll modes.
+    private enum JumpMotion {
+        static let duration: TimeInterval = 0.35
+        static let damping: CGFloat = 0.82
+    }
+
+    /// Scrolls a programmatic page move into place. Reduce Motion makes it an
+    /// instant change; the completion does what `scrollViewDidEndScrollingAnimation`
+    /// does for the animated path.
+    func jump(_ scroll: UIScrollView, to target: CGPoint) {
+        guard !UIAccessibility.isReduceMotionEnabled else {
+            scroll.setContentOffset(target, animated: false)
+            return
+        }
         didStartProgrammaticScroll()
-        scroll.setContentOffset(target, animated: true)
+        UIView.animate(
+            withDuration: JumpMotion.duration,
+            delay: 0,
+            usingSpringWithDamping: JumpMotion.damping,
+            initialSpringVelocity: 0
+        ) {
+            scroll.setContentOffset(target, animated: false)
+        } completion: { _ in
+            self.scheduleRenders()
+            self.programmaticScrollDidEnd()
+        }
     }
 
     /// The content offset that brings `rect` (in `scroll`'s coordinates)
@@ -483,6 +560,7 @@ class PagesView: UIView {
     func dropSlot(_ pageID: UUID) {
         slots[pageID]?.removeFromSuperview()
         slots[pageID] = nil
+        dropPrewarm(for: pageID)
     }
 
     func configure(_ slot: PageSlotView) {
@@ -608,6 +686,8 @@ class PagesView: UIView {
         var queue: [UUID] = []
         for pageID in renderPriority() where pageID != activePageID {
             guard let slot = slots[pageID] else { continue }
+            // A page that just failed to read is tried again after a pause.
+            guard slot.mayRetry else { continue }
             if slot.renderedScale >= scale * 0.8 { continue }
             if let cached = PageImageCache.entry(key(for: pageID, source: source)),
                cached.scale >= scale * 0.8,
@@ -623,7 +703,8 @@ class PagesView: UIView {
         renderOverrides = renderOverrides.filter { queue.contains($0.key) }
         guard renderTask == nil, !renderQueue.isEmpty else { return }
         renderTask = Task { [weak self] in
-            while let self, !self.renderQueue.isEmpty {
+            // A cancelled task (the view left the hierarchy) draws nothing more.
+            while let self, !Task.isCancelled, !self.renderQueue.isEmpty {
                 let pageID = self.renderQueue.removeFirst()
                 await self.render(pageID)
             }
@@ -632,15 +713,29 @@ class PagesView: UIView {
     }
 
     private func render(_ pageID: UUID) async {
-        guard let source, slots[pageID] != nil, pageID != activePageID else { return }
+        guard let source, !Task.isCancelled, slots[pageID] != nil, pageID != activePageID else { return }
         let page: Page
         if let override = renderOverrides.removeValue(forKey: pageID) {
             page = override
         } else {
-            guard let loaded = try? await source.store.loadPage(pageID, in: source.notebookID) else { return }
-            page = loaded
+            do {
+                page = try await source.store.loadPage(pageID, in: source.notebookID)
+            } catch {
+                // A page that cannot be read says so on its slot instead of
+                // staying blank paper, as though it had been erased.
+                if !Task.isCancelled { slots[pageID]?.showFailure() }
+                return
+            }
         }
-        guard self.source?.token == source.token, self.source?.notebookID == source.notebookID else { return }
+        // Reading the page takes a moment: the slot may have gone and the task
+        // may have been cancelled while it waited. Drawing paper for a page
+        // that scrolled away would delay the one on screen.
+        guard !Task.isCancelled,
+              slots[pageID] != nil,
+              pageID != activePageID,
+              self.source?.token == source.token,
+              self.source?.notebookID == source.notebookID
+        else { return }
         learnSize(of: page)
 
         let scale = desiredRenderScale()
@@ -655,20 +750,62 @@ class PagesView: UIView {
             )
         }.value
         guard let image,
+              !Task.isCancelled,
               self.source?.token == source.token,
               self.source?.notebookID == source.notebookID
         else { return }
         PageImageCache.store(image, scale: scale, key: key(for: pageID, source: source))
         if pageID != activePageID {
             slots[pageID]?.show(image, scale: scale)
-            // Not awaited: the next page image should not wait for it.
-            Task {
+            // Queued, never awaited: the next page image should not wait for it.
+            schedulePrewarm(page.withoutTape, assetsDirectory: assetsDirectory, usesDarkPaper: usesDarkPaper)
+        }
+    }
+
+    // MARK: Paper pre-renders
+
+    /// Queues the 2× paper of a nearby page so activating it does not draw a
+    /// PDF page or photo on the main actor. One pre-render runs at a time, and
+    /// a key that is cached, waiting or drawing is not queued again.
+    private func schedulePrewarm(_ page: Page, assetsDirectory: URL?, usesDarkPaper: Bool) {
+        let key = PageBackgroundCache.baseKey(
+            for: page,
+            assetsDirectory: assetsDirectory,
+            usesDarkPaper: usesDarkPaper
+        )
+        guard PageBackgroundCache.cached(key: key, scale: PageBackgroundCache.baseScale) == nil,
+              prewarmQueue.enqueue(key)
+        else { return }
+        prewarmRequests[key] = PrewarmRequest(
+            page: page,
+            assetsDirectory: assetsDirectory,
+            usesDarkPaper: usesDarkPaper
+        )
+        guard prewarmTask == nil else { return }
+        prewarmTask = Task { [weak self] in
+            while let self, !Task.isCancelled, let key = self.prewarmQueue.start() {
+                defer { self.prewarmQueue.finish(key) }
+                guard let request = self.prewarmRequests.removeValue(forKey: key) else { continue }
+                // The page scrolled away while it waited: nothing to pre-render.
+                guard self.slots[request.page.id] != nil, request.page.id != self.activePageID else {
+                    continue
+                }
                 await PageBackgroundCache.prewarm(
-                    page.withoutTape,
-                    assetsDirectory: assetsDirectory,
-                    usesDarkPaper: usesDarkPaper
+                    request.page,
+                    assetsDirectory: request.assetsDirectory,
+                    usesDarkPaper: request.usesDarkPaper
                 )
             }
+            self?.prewarmTask = nil
+        }
+    }
+
+    /// The page left the viewport before its pre-render began: drop it.
+    private func dropPrewarm(for pageID: UUID) {
+        guard !prewarmQueue.isIdle else { return }
+        for key in prewarmQueue.waitingKeys where prewarmRequests[key]?.page.id == pageID {
+            prewarmQueue.drop(key)
+            prewarmRequests[key] = nil
         }
     }
 
@@ -778,9 +915,11 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
         let minY = -scroll.contentInset.top
         let maxY = max(scroll.contentSize.height + scroll.contentInset.bottom - scroll.bounds.height, minY)
         let target = CGPoint(x: scroll.contentOffset.x, y: min(max(y, minY), maxY))
-        if abs(target.y - scroll.contentOffset.y) > 0.5 {
-            if animated { didStartProgrammaticScroll() }
-            scroll.setContentOffset(target, animated: animated)
+        guard abs(target.y - scroll.contentOffset.y) > 0.5 else { return }
+        if animated {
+            jump(scroll, to: target)
+        } else {
+            scroll.setContentOffset(target, animated: false)
         }
     }
 
@@ -919,7 +1058,7 @@ final class VerticalPagesView: PagesView, UIScrollViewDelegate {
     override func renderPriority() -> [UUID] {
         guard let centre = centreIndex() else { return [] }
         return slots.keys
-            .compactMap { id in pageOrder.firstIndex(of: id).map { (id, abs($0 - centre)) } }
+            .compactMap { id in pageIndices[id].map { (id, abs($0 - centre)) } }
             .sorted { $0.1 < $1.1 }
             .map(\.0)
     }
@@ -1163,16 +1302,20 @@ final class HorizontalPagesView: PagesView, UIScrollViewDelegate {
         guard stride > 1, let index = activeIndex else { return }
         let target = CGPoint(x: CGFloat(index) * stride, y: 0)
         guard abs(pager.contentOffset.x - target.x) > 0.5 else { return }
-        let isNeighbour = abs((currentIndex() ?? index) - index) == 1
-        if animated && isNeighbour { didStartProgrammaticScroll() }
-        pager.setContentOffset(target, animated: animated && isNeighbour)
+        // A far jump animates too: a thumbnail tap moves the page the same way
+        // in both scroll modes.
+        if animated {
+            jump(pager, to: target)
+        } else {
+            pager.setContentOffset(target, animated: false)
+        }
         refreshSlots()
     }
 
     override func renderPriority() -> [UUID] {
         guard let current = currentIndex() else { return [] }
         return cells.keys
-            .compactMap { id in pageOrder.firstIndex(of: id).map { (id, abs($0 - current)) } }
+            .compactMap { id in pageIndices[id].map { (id, abs($0 - current)) } }
             .sorted { $0.1 < $1.1 }
             .map(\.0)
     }
@@ -1267,11 +1410,17 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
             backgroundColor = PaperAppearance.pageBackgroundColor(usesDarkPaper: usesDarkPaper)
             imageView.image = nil
             renderedScale = 0
+            failedAt = nil
+            updateFailureLabel()
         }
     }
 
     private let imageView = UIImageView()
     private var placeholder: UIView?
+    /// Says a page could not be read, instead of leaving blank paper.
+    private let failureLabel = UILabel()
+    /// When the page last failed to read; `nil` while it is fine.
+    private(set) var failedAt: ContinuousClock.Instant?
     private let pencilDown = InkCaptureRecognizer()
     private let fingerTap = UITapGestureRecognizer()
     /// Previews of caught strokes, above the live content until replayed.
@@ -1294,6 +1443,7 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
             guard oldValue != isActive else { return }
             imageView.isHidden = isActive
             placeholder?.isHidden = isActive
+            updateFailureLabel()
             // The capture recognizer stays on: a stroke that began while the
             // page loaded must reach its end. It ignores touches that start
             // on the active page, which belong to the live canvas.
@@ -1314,6 +1464,17 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
         imageView.contentMode = .scaleToFill
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(imageView)
+
+        failureLabel.text = "This page could not be read"
+        failureLabel.font = .preferredFont(forTextStyle: .footnote)
+        failureLabel.adjustsFontForContentSizeCategory = true
+        failureLabel.textAlignment = .center
+        failureLabel.numberOfLines = 0
+        failureLabel.isHidden = true
+        failureLabel.isAccessibilityElement = true
+        failureLabel.accessibilityHint = "It will be tried again when it comes back on screen"
+        addSubview(failureLabel)
+        updateFailureLabel()
 
         inkPreview.isUserInteractionEnabled = false
         inkPreview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -1344,6 +1505,7 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
         super.layoutSubviews()
         imageView.frame = bounds
         placeholder?.frame = bounds
+        failureLabel.frame = bounds.insetBy(dx: 16, dy: 16)
         inkPreview.frame = bounds
         layer.shadowPath = UIBezierPath(rect: bounds).cgPath
     }
@@ -1351,8 +1513,35 @@ final class PageSlotView: UIView, UIGestureRecognizerDelegate {
     func show(_ image: UIImage, scale: CGFloat) {
         imageView.image = image
         renderedScale = scale
+        failedAt = nil
+        updateFailureLabel()
         placeholder?.removeFromSuperview()
         placeholder = nil
+    }
+
+    /// The page could not be read: say so on the paper instead of staying
+    /// blank. The next image clears it.
+    func showFailure() {
+        failedAt = .now
+        imageView.image = nil
+        renderedScale = 0
+        updateFailureLabel()
+    }
+
+    /// A page that just failed is retried after a pause, so a broken page does
+    /// not re-read on every scroll frame but does recover on its own.
+    var mayRetry: Bool {
+        guard let failedAt else { return true }
+        return ContinuousClock.now - failedAt > .seconds(3)
+    }
+
+    private func updateFailureLabel() {
+        failureLabel.isHidden = isActive || failedAt == nil
+        // Paper keeps its own colour whatever the appearance, so the message
+        // does not follow the interface: it must read on the paper it sits on.
+        failureLabel.textColor = usesDarkPaper
+            ? UIColor(white: 0.72, alpha: 1)
+            : UIColor(white: 0.42, alpha: 1)
     }
 
     /// Keeps caught ink above the live page content when it moves in.
