@@ -148,7 +148,7 @@ struct EditorBanner: View {
     var onDismiss: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: AppSpacing.s) {
             Image(systemName: systemImage)
                 .foregroundStyle(tint)
             Text(message)
@@ -166,20 +166,20 @@ struct EditorBanner: View {
                     Image(systemName: "xmark")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 44)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Dismiss")
             }
         }
-        .padding(.leading, 14)
-        .padding(.trailing, onDismiss == nil ? 14 : 4)
+        .padding(.leading, AppSpacing.m)
+        .padding(.trailing, onDismiss == nil ? AppSpacing.m : AppSpacing.xs)
         .frame(minHeight: 44)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, AppSpacing.l)
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 }

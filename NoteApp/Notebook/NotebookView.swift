@@ -39,7 +39,7 @@ struct NotebookView: View {
     private var tabBar: some View {
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: AppSpacing.s) {
                     ForEach(model.tabs) { tab in
                         tabChip(tab)
                     }
@@ -100,11 +100,18 @@ struct NotebookView: View {
 
     private func tabChip(_ tab: NotebookSession) -> some View {
         let isActive = tab.notebookID == model.activeNotebookID
-        return HStack(spacing: 2) {
+        return HStack(spacing: AppSpacing.xxs) {
+            // Selecting is the title's gesture, not the chip's, so the close
+            // button's 44 pt area cannot also switch tabs.
             Text(tab.manifest.title)
                 .font(.subheadline.weight(isActive ? .semibold : .regular))
                 .lineLimit(1)
                 .frame(maxWidth: 180, alignment: .leading)
+                .padding(.leading, AppSpacing.m)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.activateTab(tab.notebookID)
+                }
 
             Button {
                 model.closeTab(tab)
@@ -112,23 +119,18 @@ struct NotebookView: View {
                 Image(systemName: "xmark")
                     .font(.caption2.weight(.semibold))
                     .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .accessibilityLabel("Close \(tab.manifest.title)")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 3)
+        .padding(.trailing, AppSpacing.xs)
+        .padding(.vertical, AppSpacing.xs)
         .background(
             isActive ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08),
             in: Capsule()
         )
-        .contentShape(Capsule())
-        .onTapGesture {
-            model.activateTab(tab.notebookID)
-        }
     }
 }
 
