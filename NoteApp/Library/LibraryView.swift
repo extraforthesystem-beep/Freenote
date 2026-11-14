@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var renameTarget: NotebookManifest?
     @State private var renameText = ""
@@ -1133,11 +1134,24 @@ struct LibraryView: View {
                         }
                         .contextMenu { cardMenu(notebook) }
                         .draggable(notebook.id.uuidString)
+                        .transition(cardTransition)
                     }
                 }
+                .appAnimation(gridAnimation, value: visibleNotebooks.map(\.id))
             }
             .padding(20)
         }
+    }
+
+    /// Inserts, removals and sort changes in the grid follow the shared standard
+    /// curve; Reduce Motion keeps only the fade.
+    private var gridAnimation: Animation {
+        reduceMotion ? AppMotion.fade : AppMotion.standard
+    }
+
+    /// A card the grid gains or loses, without moving the neighbours' content.
+    private var cardTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.92).combined(with: .opacity)
     }
 
     /// The tags narrowing the grid, with one way to clear them. Empty when no
@@ -1151,11 +1165,7 @@ struct LibraryView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(names, id: \.self) { name in
-                    Text(name)
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                    TagChip(tag: name, isActive: true)
                 }
                 Spacer(minLength: 4)
                 Button("Clear") {
@@ -1399,6 +1409,24 @@ private struct LibraryInputs: Equatable {
 private struct CoverTarget: Identifiable {
     let notebook: NotebookManifest
     var id: UUID { notebook.id }
+}
+
+/// One tag, in the active-filter bar and on a notebook card. Both drew their
+/// own chip before, with different padding and fonts, so the same tag changed
+/// size as it moved.
+private struct TagChip: View {
+    let tag: String
+    /// The filter bar tints its chips with the accent to read as active.
+    var isActive = false
+
+    var body: some View {
+        Text(tag)
+            .font(.caption2)
+            .lineLimit(1)
+            .padding(.horizontal, AppSpacing.s)
+            .padding(.vertical, AppSpacing.xxs)
+            .background((isActive ? Color.accentColor : Color.secondary).opacity(0.14), in: Capsule())
+    }
 }
 
 /// One page of search hits: "p.12" plus the excerpt with the match marked.
@@ -1672,12 +1700,7 @@ private struct NotebookCard: View {
     private var tagRow: some View {
         HStack(spacing: 6) {
             ForEach(tags.prefix(3), id: \.self) { tag in
-                Text(tag)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.14), in: Capsule())
+                TagChip(tag: tag)
             }
             if tags.count > 3 {
                 Text("+\(tags.count - 3)")
