@@ -386,6 +386,8 @@ struct LibraryView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(showsPinnedPages ? [.isSelected] : [])
+        .accessibilityValue(Text(verbatim: showsPinnedPages ? "Selected" : ""))
     }
 
     private func tagRow(_ summary: TagSummary) -> some View {
@@ -404,6 +406,8 @@ struct LibraryView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityValue(Text(verbatim: isSelected ? "Selected" : ""))
     }
 
     private func toggleTag(_ key: String) {
@@ -1522,10 +1526,21 @@ private struct NotebookCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("\(notebook.title), \(pageCountText), \(dateText)"))
+        .accessibilityLabel(Text(accessibilityDescription))
         .task(id: coverTaskID) {
             await loadCover()
         }
+    }
+
+    /// The card's explicit label replaces its children, so the grid's own Open
+    /// badge, favourite star and tag chips would never be announced. Fold them
+    /// into the text instead.
+    private var accessibilityDescription: String {
+        var parts = [notebook.title, pageCountText, dateText]
+        if isOpen { parts.append("open") }
+        if isFavourite { parts.append("favourite") }
+        if !tags.isEmpty { parts.append("tags: " + tags.joined(separator: ", ")) }
+        return parts.joined(separator: ", ")
     }
 
     private var coverArt: some View {
