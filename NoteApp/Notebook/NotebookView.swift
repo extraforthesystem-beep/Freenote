@@ -160,6 +160,7 @@ struct NotebookPane: View {
     @AppStorage(AppSettings.Key.holdToDrawShapes) private var holdToDrawShapes = true
     @AppStorage(AppSettings.Key.darkPaper) private var darkPaperInDarkMode = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AppSettings.Key.pageScrollMode) private var defaultScrollMode: PageScrollMode = .vertical
     @State private var showsCoverPicker = false
     @State private var showsTextComposer = false
@@ -650,7 +651,9 @@ struct NotebookPane: View {
                 Task { await session.goToPage(index) }
             },
             onClose: {
-                withAnimation(.easeInOut(duration: 0.2)) { pagesPanelBinding.wrappedValue = false }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+                    pagesPanelBinding.wrappedValue = false
+                }
             }
         )
         .frame(width: 220)
@@ -719,10 +722,16 @@ struct NotebookPane: View {
     /// Opens the side panel on its Search tab; the page keeps its size.
     private func openSearch() {
         pagesPanelTab = .search
-        withAnimation(.easeInOut(duration: 0.2)) {
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
             showsThumbnails = true
             if !pagesPanelIsInline { showsCompactPages = true }
         }
+    }
+
+    /// The selection bar's move-and-fade transition only runs when the change
+    /// that inserts or removes it is animated.
+    private func animateSelectionChange(_ change: () -> Void) {
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion, change)
     }
 
     // MARK: - Banners
@@ -1250,7 +1259,9 @@ struct NotebookPane: View {
             .help(editor.isReadOnly ? "Read Only: tap to edit again" : "Hide the tools and stop editing")
             .accessibilityAddTraits(editor.isReadOnly ? .isSelected : [])
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { pagesPanelBinding.wrappedValue.toggle() }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+                    pagesPanelBinding.wrappedValue.toggle()
+                }
             } label: {
                 Label("Pages", systemImage: pagesOnLeft ? "sidebar.leading" : "sidebar.trailing")
             }
@@ -1316,7 +1327,7 @@ struct NotebookPane: View {
     /// Read Only with the chrome gone: one page, a tap on either edge turns it,
     /// and PDF links still work. Leaving it brings the tools back.
     private func startReadingMode() {
-        withAnimation(.easeInOut(duration: 0.2)) {
+        AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
             pagesPanelBinding.wrappedValue = false
             editor.isReadingMode = true
             editor.isReadOnly = true
@@ -1328,18 +1339,18 @@ struct NotebookPane: View {
     private var readingModeExit: some View {
         if editor.isReadingMode {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
                     editor.isReadingMode = false
                     editor.isReadOnly = false
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: AppSpacing.xs) {
                     Image(systemName: "book")
                         .font(.caption.weight(.semibold))
                     Text("Done")
                         .font(.subheadline.weight(.semibold))
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, AppSpacing.m)
                 .frame(minHeight: 36)
                 .background(.regularMaterial, in: Capsule())
                 .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
@@ -1810,7 +1821,9 @@ struct NotebookPane: View {
             onForward: { stepZoomBand(page) { $0.step() } },
             onNewLine: { stepZoomBand(page) { $0.wrap() } },
             onClose: {
-                withAnimation(.easeInOut(duration: 0.2)) { editor.isZoomViewShown = false }
+                AppMotion.animate(AppMotion.standard, reduceMotion: reduceMotion) {
+                    editor.isZoomViewShown = false
+                }
             }
         ) { band in
             PencilCanvasView(
