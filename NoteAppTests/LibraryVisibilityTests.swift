@@ -4,6 +4,7 @@ import XCTest
 
 /// The library grid derives its lists once per input change. These compare that
 /// one-pass work with a fresh, naive computation over seeded random libraries.
+@MainActor
 final class LibraryVisibilityTests: XCTestCase {
     /// A seeded generator, so a failure is reproducible from its seed.
     private struct SeededGenerator: RandomNumberGenerator {
