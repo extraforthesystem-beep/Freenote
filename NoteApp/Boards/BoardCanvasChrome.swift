@@ -163,20 +163,6 @@ enum BoardResizeCorner: CaseIterable, Hashable {
     }
 }
 
-/// An alignment guide shown while dragging: a thin line through the board at
-/// a world coordinate.
-struct BoardSnapGuide: Equatable, Identifiable {
-    enum Axis {
-        case vertical, horizontal
-    }
-
-    let axis: Axis
-    /// The world coordinate of the line.
-    let position: CGFloat
-
-    var id: String { "\(axis == .vertical ? "v" : "h")-\(position)" }
-}
-
 // MARK: - Selection chrome
 
 /// The selection's outline, corner handles, snap guides and floating bar.

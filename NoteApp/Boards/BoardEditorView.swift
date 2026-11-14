@@ -607,17 +607,29 @@ struct BoardEditorView: View {
         Self.translated(board, by: CGPoint(x: -Self.worldOffset.x, y: -Self.worldOffset.y))
     }
 
-    /// Debounces an edit into one write. The write waits for any save already
-    /// in flight, so an older snapshot can never land after a newer one.
-    private func scheduleSave() {
+    /// Notes that the board changed and invalidates any older write, without
+    /// arming one. A drag calls this on every frame: the debounce is armed once
+    /// when the gesture ends, so no frame pays for a whole-board snapshot.
+    ///
+    /// The dirty flag is enough for the background and close paths, which read
+    /// the current board rather than a snapshot.
+    private func markDirty() {
         hasUnsavedChanges = true
         saveGeneration += 1
+    }
+
+    /// Debounces an edit into one write. The write waits for any save already
+    /// in flight, so an older snapshot can never land after a newer one.
+    ///
+    /// The snapshot is built when the debounce fires, not when it is armed: a
+    /// gesture that moves the same object for a second copies the board once,
+    /// not sixty times.
+    private func scheduleSave() {
+        markDirty()
         let generation = saveGeneration
-        let snapshot = savedBoard
-        let camera = currentCamera
         let previous = saveTask
         previous?.cancel()
-        isSaving = true
+        if !isSaving { isSaving = true }
 
         saveTask = Task {
             do {
@@ -625,9 +637,22 @@ struct BoardEditorView: View {
             } catch {
                 return false
             }
-            guard !Task.isCancelled else { return false }
-            return await write(snapshot, camera: camera, generation: generation, after: previous)
+            guard !Task.isCancelled, generation == saveGeneration else { return false }
+            return await writeCurrent(generation: generation, after: previous)
         }
+    }
+
+    /// Copies the board as it is now and writes it. Read on the main actor at
+    /// the moment the debounce fires, so the write always carries the latest
+    /// state; the generation is checked again around the copy.
+    private func writeCurrent(
+        generation: Int,
+        after previous: Task<Bool, Never>?
+    ) async -> Bool {
+        guard generation == saveGeneration else { return false }
+        let snapshot = savedBoard
+        let camera = currentCamera
+        return await write(snapshot, camera: camera, generation: generation, after: previous)
     }
 
     /// Done: wait for the write before dismissing, so a failure keeps the board
@@ -800,6 +825,9 @@ private struct BoardItemDrag {
     let frame: CGRect
     let corner: BoardResizeCorner?
     let keepsSquare: Bool
+    /// Edges of every other item, collected when the drag begins. Nothing else
+    /// can move mid-drag, so a per-frame rebuild would be wasted work.
+    var targets = BoardSnapTargets(xEdges: [], yEdges: [])
 }
 
 extension BoardEditorView {
@@ -948,7 +976,10 @@ extension BoardEditorView {
     }
 
     private func beginDrag(at point: CGPoint) -> Bool {
-        guard let target = dragTarget(at: point) else { return false }
+        guard var target = dragTarget(at: point) else { return false }
+        // Snap targets are read from the board once, here: the other items
+        // cannot move while this one is being dragged.
+        target.targets = BoardSnapTargets(items: board.visibleItems, ignoring: target.itemID)
         drag = target
         dragMoved = false
         return true
@@ -967,22 +998,26 @@ extension BoardEditorView {
                 keepsSquare: drag.keepsSquare
             )
             board.setFrame(drag.itemID, to: frame, at: now)
-            snapGuides = []
+            if !snapGuides.isEmpty {
+                snapGuides = []
+            }
         } else {
             var frame = drag.frame
             frame.origin.x += translation.x
             frame.origin.y += translation.y
-            let snapped = Self.snapped(
+            let snapped = drag.targets.snap(
                 frame,
-                items: board.visibleItems,
-                ignoring: drag.itemID,
                 tolerance: 6 / max(viewport.zoom, 0.001)
             )
             board.setFrame(drag.itemID, to: snapped.frame, at: now)
-            snapGuides = snapped.guides
+            // Assigning an equal array would invalidate the overlay for nothing.
+            if snapped.guides != snapGuides {
+                snapGuides = snapped.guides
+            }
         }
 
-        scheduleSave()
+        // The debounce is armed when the finger lifts, not per frame.
+        markDirty()
     }
 
     private func endDrag() {
@@ -1023,69 +1058,6 @@ extension BoardEditorView {
             width: width,
             height: height
         )
-    }
-
-    private struct SnapOutcome {
-        var frame: CGRect
-        var guides: [BoardSnapGuide]
-    }
-
-    /// Pulls a dragged frame onto another item's edges or centres when it is
-    /// within `tolerance` world points, and reports the guide lines to draw.
-    private static func snapped(
-        _ frame: CGRect,
-        items: [BoardItem],
-        ignoring itemID: UUID,
-        tolerance: CGFloat
-    ) -> SnapOutcome {
-        let frames = items.compactMap { item -> CGRect? in
-            guard item.id != itemID else { return nil }
-            return item.frame
-        }
-        guard !frames.isEmpty else {
-            return SnapOutcome(frame: frame, guides: [])
-        }
-
-        let xTargets = frames.flatMap { [$0.minX, $0.midX, $0.maxX] }
-        let yTargets = frames.flatMap { [$0.minY, $0.midY, $0.maxY] }
-        var result = frame
-        var guides: [BoardSnapGuide] = []
-
-        if let snap = nearestSnap(
-            edges: [frame.minX, frame.midX, frame.maxX],
-            targets: xTargets,
-            tolerance: tolerance
-        ) {
-            result.origin.x += snap.delta
-            guides.append(BoardSnapGuide(axis: .vertical, position: snap.line))
-        }
-        if let snap = nearestSnap(
-            edges: [frame.minY, frame.midY, frame.maxY],
-            targets: yTargets,
-            tolerance: tolerance
-        ) {
-            result.origin.y += snap.delta
-            guides.append(BoardSnapGuide(axis: .horizontal, position: snap.line))
-        }
-        return SnapOutcome(frame: result, guides: guides)
-    }
-
-    private static func nearestSnap(
-        edges: [CGFloat],
-        targets: [CGFloat],
-        tolerance: CGFloat
-    ) -> (delta: CGFloat, line: CGFloat)? {
-        var best: (delta: CGFloat, line: CGFloat)?
-        for edge in edges {
-            for target in targets {
-                let delta = target - edge
-                guard abs(delta) <= tolerance else { continue }
-                if abs(delta) < abs(best?.delta ?? .infinity) {
-                    best = (delta, target)
-                }
-            }
-        }
-        return best
     }
 
     // MARK: - Insert
