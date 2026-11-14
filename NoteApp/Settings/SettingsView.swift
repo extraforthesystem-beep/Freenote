@@ -113,7 +113,7 @@ struct SettingsView: View {
             Toggle("Hide Status Bar in Notebooks", isOn: $hideStatusBar)
             Toggle("Keep iPad Awake", isOn: $keepScreenAwake)
             Toggle("Pages Panel on Left", isOn: $pagesPanelOnLeft)
-            Button("Customize Toolbar…", systemImage: "slider.horizontal.3") {
+            Button("Customise Toolbar…", systemImage: "slider.horizontal.3") {
                 showsToolbarEditor = true
             }
             #endif
