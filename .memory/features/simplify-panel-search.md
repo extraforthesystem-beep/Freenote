@@ -127,3 +127,15 @@ Mac header (`macHeader`) layout, Settings UI, library search, any InkKit/package
 - `xcodebuild test -project NoteApp.xcodeproj -scheme NoteApp -destination 'platform=macOS' -derivedDataPath /tmp/simplify-panel-mac CODE_SIGN_IDENTITY="Apple Development" DEVELOPMENT_TEAM=CQ65B26KFJ 2>&1 | grep -E "error:|Executed|TEST (SUCCEEDED|FAILED)" | tail -15` → TEST SUCCEEDED
 - `grep -rn "NotebookPanelTab\|PageCounterPill(" NoteApp/Notebook/NotebookView.swift NoteApp/Notebook/PagesSidePanel.swift` → nothing
 - Commits use `feat:/refactor:/test:` prefixes, imperative, < 70 chars. No `print`/console logging added.
+
+## Worker report
+- Status: done
+- Changed: NoteApp/Notebook/EditorToolbar.swift — Pages toggle moved to the trailing edge, last after More
+- Changed: NoteApp/Notebook/NotebookView.swift — bottom page pill and history pill removed, transient indicator, search focus plumbing
+- Changed: NoteApp/Notebook/PagesSidePanel.swift — tabs and close button replaced by the embedded find bar
+- Changed: NoteApp/Search/NotebookFindBar.swift — generic bar: one field, results header, list stays after a jump
+- Changed: NoteApp/Search/PanelSearchFilter.swift — new filter popover for sources, page range and last edited
+- Changed: NoteApp/Notebook/PageChangeIndicator.swift — new capsule that fades out 1.5 s after a page change
+- Changed: NoteAppTests/FindBarPageRangeTests.swift — page-range filter unit tests
+- Checks: iOS Simulator build → pass | macOS test (114) → pass | chrome grep → nothing
+- Open: AppModelOpenTests concurrent-open test flaked once, passed on rerun; unrelated to this change
