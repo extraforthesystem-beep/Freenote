@@ -146,6 +146,8 @@ struct RenderBenchmarks {
     /// the measurement.
     static func oneStrokeAppend(
         strokeCount: Int,
+        appendOnly: Bool,
+        appendedPointCount: Int = 64,
         clock: ContinuousClock
     ) -> Duration {
         let layerID = UUID()
@@ -155,20 +157,68 @@ struct RenderBenchmarks {
         let converter = IncrementalStrokeConverter()
         let records = converter.records(from: strokes) { _ in layerID }
         converter.seed(strokes: strokes, records: records)
-        strokes.append(SampleStroke.stroke(style: .pen, index: 1, pointCount: 64))
+        strokes.append(SampleStroke.stroke(style: .pen, index: 1, pointCount: appendedPointCount))
         return clock.measure {
-            _ = converter.changedRecords(from: strokes) { _ in layerID }
+            _ = converter.changedRecords(
+                from: strokes,
+                layerID: { _ in layerID },
+                appendOnly: appendOnly
+            )
         }
+    }
+
+    static func seconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds)
+            + Double(duration.components.attoseconds) / 1e18
     }
 
     @Test func inkOneStrokeAppend() throws {
         let clock = ContinuousClock()
         for strokeCount in [200, 2_000] {
-            let elapsed = Self.median((0..<5).map { _ in
-                Self.oneStrokeAppend(strokeCount: strokeCount, clock: clock)
-            })
-            print("BENCH inkAppend \(strokeCount) strokes, full path: median \(elapsed)")
+            for appendOnly in [false, true] {
+                let elapsed = Self.median((0..<5).map { _ in
+                    Self.oneStrokeAppend(
+                        strokeCount: strokeCount,
+                        appendOnly: appendOnly,
+                        clock: clock
+                    )
+                })
+                let path = appendOnly ? "append fast path" : "full path"
+                print("BENCH inkAppend \(strokeCount) strokes, \(path): median \(elapsed)")
+            }
         }
+    }
+
+    /// The fast path must cost the size of the change, not the page: appending
+    /// one stroke to 2,000 must not take twice as long as to 200.
+    @Test func inkAppendScalesWithTheChange() throws {
+        let clock = ContinuousClock()
+        // About four seconds of handwriting: the added stroke's own encoding
+        // is a constant cost, as it must be, and the page must not add to it.
+        let appendedPoints = 1_000
+        let small = Self.median((0..<7).map { _ in
+            Self.oneStrokeAppend(
+                strokeCount: 200,
+                appendOnly: true,
+                appendedPointCount: appendedPoints,
+                clock: clock
+            )
+        })
+        let large = Self.median((0..<7).map { _ in
+            Self.oneStrokeAppend(
+                strokeCount: 2_000,
+                appendOnly: true,
+                appendedPointCount: appendedPoints,
+                clock: clock
+            )
+        })
+        print(
+            "BENCH inkAppendScaling: N=200 median \(small) "
+                + "(\(Self.seconds(small)) s), N=2000 median \(large) "
+                + "(\(Self.seconds(large)) s), ratio "
+                + String(format: "%.2f", Self.seconds(large) / Self.seconds(small))
+        )
+        #expect(large <= small * 2)
     }
 
     /// What one finished stroke costs on a busy page: the converter's change
