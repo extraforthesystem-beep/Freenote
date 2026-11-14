@@ -834,7 +834,7 @@ struct NotebookPane: View {
                 .overlay(alignment: .bottom) {
                     if let exportProgress {
                         ProgressView(value: exportProgress.fraction)
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, AppSpacing.m)
                             .padding(.bottom, 4)
                     }
                 }
@@ -1292,7 +1292,7 @@ struct NotebookPane: View {
             }
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, AppSpacing.m)
         .padding(.vertical, 8)
         .background(.bar)
     }
@@ -1634,7 +1634,7 @@ struct NotebookPane: View {
                 Text("\(session.currentPageNumber)")
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                     .foregroundStyle(AppColor.pageAnnotation(usesDarkPaper: usesDarkPaper))
-                    .padding([.bottom, .trailing], 14)
+                    .padding([.bottom, .trailing], AppSpacing.m)
                     // Bottom-trailing, clear of the page counter pill at the bottom centre.
                     .frame(width: page.width, height: page.height, alignment: .bottomTrailing)
                     .allowsHitTesting(false)

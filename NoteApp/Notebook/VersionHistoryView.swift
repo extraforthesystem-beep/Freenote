@@ -73,13 +73,13 @@ struct VersionHistoryView: View {
     }
 
     private func row(_ snapshot: VersionSnapshot) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: AppSpacing.m) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text(snapshot.createdAt.formatted(date: .abbreviated, time: .standard))
                     .font(.body.weight(.medium))
                 Text("\(snapshot.reason) · \(ByteCountFormatter.string(fromByteCount: Int64(snapshot.byteCount), countStyle: .file))")
@@ -95,7 +95,7 @@ struct VersionHistoryView: View {
             .buttonStyle(.bordered)
             .disabled(restoringID != nil)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, AppSpacing.xs)
     }
 
     private func restore(_ snapshot: VersionSnapshot) {

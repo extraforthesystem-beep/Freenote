@@ -29,7 +29,7 @@ struct PageCounterPill: View {
                 Text("No pages")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, AppSpacing.l)
                     .frame(minHeight: 44)
             } else {
                 pillButton("Previous Page", systemImage: "chevron.backward") {
