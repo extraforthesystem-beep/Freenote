@@ -16,7 +16,7 @@ final class PencilCanvasControllerTests: XCTestCase {
 
         let undoManager = try XCTUnwrap(canvas.undoManager)
         undoManager.beginUndoGrouping()
-        undoManager.registerUndo(withTarget: canvas) { _ in }
+        Self.registerReversibleStep(on: undoManager, target: canvas)
         undoManager.endUndoGrouping()
         // The observation is delivered on the main queue.
         try await Task.sleep(for: .milliseconds(50))
@@ -32,6 +32,14 @@ final class PencilCanvasControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(controller.canUndo)
         XCTAssertFalse(controller.canRedo)
+    }
+
+    /// A step whose undo registers its redo, the way PencilKit's own steps do;
+    /// an undo action that registers nothing leaves nothing to redo.
+    private static func registerReversibleStep(on manager: UndoManager, target: InkCanvasView) {
+        manager.registerUndo(withTarget: target) { target in
+            registerReversibleStep(on: manager, target: target)
+        }
     }
 
     func testOneCanvasReplacingAnotherRefreshesAvailability() async throws {
