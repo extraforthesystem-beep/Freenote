@@ -1514,14 +1514,23 @@ private struct SearchNotebookCover: View {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
         }
-        .task(id: notebook.id) {
+        .task(id: coverTaskID) {
             guard coverStyle == nil else { return }
             if let cached = LibraryCovers.cached(notebook: notebook) {
                 cover = cached
                 return
             }
-            cover = await LibraryCovers.image(for: notebook, store: store)
+            let image = await LibraryCovers.image(for: notebook, store: store)
+            guard !Task.isCancelled else { return }
+            cover = image
         }
+    }
+
+    /// The same key the grid card uses: the notebook's first page and
+    /// `updatedAt`, so an edited notebook's cover is drawn again.
+    private var coverTaskID: String {
+        "\(notebook.id.uuidString)-\(notebook.pageOrder.first?.uuidString ?? "none")"
+            + "-\(Int(notebook.updatedAt.timeIntervalSince1970))"
     }
 }
 
@@ -1694,6 +1703,8 @@ private struct NotebookCard: View {
             return
         }
         let image = await LibraryCovers.image(for: notebook, store: store)
+        // The card may have been recycled while the render ran.
+        guard !Task.isCancelled else { return }
         cover = image
         coverFailed = image == nil
     }
