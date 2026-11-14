@@ -742,7 +742,7 @@ private struct BlockRow: View {
         }
         .frame(width: 33)
         .padding(.top, 1)
-        .animation(.easeOut(duration: 0.12), value: isFocused)
+        .appAnimation(AppMotion.quick, value: isFocused)
     }
 
     private var typeGlyph: String {
