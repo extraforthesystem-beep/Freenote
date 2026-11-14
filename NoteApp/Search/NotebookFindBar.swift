@@ -165,11 +165,15 @@ struct NotebookFindBar: View {
     /// One 44 pt row. Floating, at narrow widths the count goes first, then the
     /// steppers; in a narrow split view everything but the field and close moves
     /// into one menu. Inside the panel's 220 pt column the same menu holds the
-    /// controls that cannot be 44 pt wide.
+    /// controls that cannot be 44 pt wide; the panel's sheet is wide enough for
+    /// the full row.
     private var bar: some View {
         Group {
             if isEmbedded {
-                embeddedBarRow
+                ViewThatFits(in: .horizontal) {
+                    barRow(showsCount: true, showsSteppers: true)
+                    embeddedBarRow
+                }
             } else {
                 ViewThatFits(in: .horizontal) {
                     barRow(showsCount: true, showsSteppers: true)
