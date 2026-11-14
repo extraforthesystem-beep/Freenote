@@ -99,9 +99,18 @@ struct BoardThumbnail: View {
             return
         }
         let pixels = side * 3
-        let rendered = await Task.detached(priority: .utility) {
-            BoardInkThumbnail.renderer(strokes: strokes, crop: crop, pixels: pixels)
-        }.value
+        // A detached task does not inherit this view's `.task` cancellation, so
+        // pass it on: a board scrolled out of the list is skipped instead of
+        // building a drawing from all its strokes and rasterising it.
+        let render = Task.detached(priority: .utility) { () -> CGImage? in
+            guard !Task.isCancelled else { return nil }
+            return BoardInkThumbnail.renderer(strokes: strokes, crop: crop, pixels: pixels)
+        }
+        let rendered = await withTaskCancellationHandler {
+            await render.value
+        } onCancel: {
+            render.cancel()
+        }
         guard !Task.isCancelled else { return }
         image = rendered
     }
