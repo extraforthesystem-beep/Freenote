@@ -678,8 +678,10 @@ struct EditorToolbar<InsertMenu: View, MoreMenu: View, ItemMenu: View>: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
-                        ForEach(Array(favorites.colors.enumerated()), id: \.element) { index, color in
-                            favoriteSwatch(color, index: index)
+                        // Keyed by slot, so a reorder moves a swatch instead of
+                        // rebuilding it, and `.id` matches the ForEach identity.
+                        ForEach(favorites.colors.indices, id: \.self) { index in
+                            favoriteSwatch(favorites.colors[index], index: index)
                                 .id(index)
                         }
                         if !favorites.isFull {
