@@ -299,6 +299,17 @@ class PagesView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// The view left the hierarchy (the notebook closed or the page container
+    /// was rebuilt): stop the renders that belong to it, instead of finishing a
+    /// paper draw for a page nobody will see.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window == nil else { return }
+        renderTask?.cancel()
+        prewarmTask?.cancel()
+        prewarmRequests.removeAll()
+    }
+
     func pageSize(at index: Int) -> CGSize {
         sizes[pageOrder[index]] ?? defaultSize
     }
@@ -637,7 +648,8 @@ class PagesView: UIView {
         renderOverrides = renderOverrides.filter { queue.contains($0.key) }
         guard renderTask == nil, !renderQueue.isEmpty else { return }
         renderTask = Task { [weak self] in
-            while let self, !self.renderQueue.isEmpty {
+            // A cancelled task (the view left the hierarchy) draws nothing more.
+            while let self, !Task.isCancelled, !self.renderQueue.isEmpty {
                 let pageID = self.renderQueue.removeFirst()
                 await self.render(pageID)
             }
@@ -646,7 +658,7 @@ class PagesView: UIView {
     }
 
     private func render(_ pageID: UUID) async {
-        guard let source, slots[pageID] != nil, pageID != activePageID else { return }
+        guard let source, !Task.isCancelled, slots[pageID] != nil, pageID != activePageID else { return }
         let page: Page
         if let override = renderOverrides.removeValue(forKey: pageID) {
             page = override
@@ -654,7 +666,15 @@ class PagesView: UIView {
             guard let loaded = try? await source.store.loadPage(pageID, in: source.notebookID) else { return }
             page = loaded
         }
-        guard self.source?.token == source.token, self.source?.notebookID == source.notebookID else { return }
+        // Reading the page takes a moment: the slot may have gone and the task
+        // may have been cancelled while it waited. Drawing paper for a page
+        // that scrolled away would delay the one on screen.
+        guard !Task.isCancelled,
+              slots[pageID] != nil,
+              pageID != activePageID,
+              self.source?.token == source.token,
+              self.source?.notebookID == source.notebookID
+        else { return }
         learnSize(of: page)
 
         let scale = desiredRenderScale()
@@ -669,6 +689,7 @@ class PagesView: UIView {
             )
         }.value
         guard let image,
+              !Task.isCancelled,
               self.source?.token == source.token,
               self.source?.notebookID == source.notebookID
         else { return }
