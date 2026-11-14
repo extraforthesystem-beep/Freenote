@@ -172,36 +172,51 @@ struct BoardShapeView: View {
 }
 
 /// A board image, read from the board assets folder on either platform.
+///
+/// The file is decoded once, off the main actor, and kept in
+/// `BoardImageCache`; the view never touches the disk while it is being drawn.
 struct BoardAssetImage: View {
     let assetName: String
     let assetsDirectory: URL
 
+    @State private var image: CGImage?
+
+    private var fileURL: URL {
+        assetsDirectory.appendingPathComponent(assetName)
+    }
+
     var body: some View {
         Group {
-            #if os(iOS)
-            if let image = UIImage(contentsOfFile: path) {
-                Image(uiImage: image)
+            if let image {
+                Image(decorative: image, scale: 1)
                     .resizable()
                     .scaledToFill()
                     .clipped()
             } else {
                 placeholder
             }
-            #else
-            if let image = NSImage(contentsOf: assetsDirectory.appendingPathComponent(assetName)) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .clipped()
-            } else {
-                placeholder
-            }
-            #endif
+        }
+        // Keyed by the asset, so the last image stays up while a new one
+        // decodes and a re-render never repeats the work.
+        .task(id: assetName) {
+            await load()
         }
     }
 
-    private var path: String {
-        assetsDirectory.appendingPathComponent(assetName).path
+    private func load() async {
+        let url = fileURL
+        if let cached = BoardImageCache.shared.image(for: url) {
+            image = cached
+            return
+        }
+
+        let decoded = await Task.detached(priority: .userInitiated) {
+            BoardImageDecoder.decode(fileAt: url)
+        }.value
+        guard !Task.isCancelled, let decoded else { return }
+
+        BoardImageCache.shared.store(decoded, for: url)
+        image = decoded
     }
 
     private var placeholder: some View {
