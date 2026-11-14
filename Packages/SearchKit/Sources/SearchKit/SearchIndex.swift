@@ -177,6 +177,96 @@ public enum SearchIndexError: Error, Hashable, Sendable, CustomStringConvertible
     }
 }
 
+/// Extracts the text of one page of a PDF asset. Production reads the text
+/// layer with PDFKit and falls back to on-device OCR for a scanned page. The
+/// call runs off the index actor, so a slow scan never stalls a search.
+typealias PDFTextExtractor = @Sendable (_ url: URL, _ pageIndex: Int) async -> String
+
+/// Streams the fields a page's fingerprint is made of straight into SHA256,
+/// without encoding the strokes to JSON first. Every field the index cares
+/// about is fed with a fixed width, so any change changes the digest.
+private struct InkHasher {
+    private var hasher = SHA256()
+
+    mutating func add(_ value: UInt64) {
+        var bits = value.littleEndian
+        withUnsafeBytes(of: &bits) { hasher.update(bufferPointer: $0) }
+    }
+
+    mutating func add(_ value: Int) {
+        add(UInt64(bitPattern: Int64(value)))
+    }
+
+    mutating func add(_ value: Double) {
+        add(value.bitPattern)
+    }
+
+    mutating func add(_ value: Bool) {
+        add(UInt64(value ? 1 : 0))
+    }
+
+    mutating func add(_ value: UUID) {
+        withUnsafeBytes(of: value.uuid) { hasher.update(bufferPointer: $0) }
+    }
+
+    mutating func add(_ value: String) {
+        let data = Data(value.utf8)
+        add(UInt64(data.count))
+        hasher.update(data: data)
+    }
+
+    /// Points are the bulk of the data, so their fields go in one pass.
+    mutating func add(_ value: StrokePoint) {
+        withUnsafeBytes(of: value) { hasher.update(bufferPointer: $0) }
+    }
+
+    mutating func add(_ value: PathElement) {
+        switch value {
+        case let .move(x, y):
+            add(UInt64(0))
+            add(x)
+            add(y)
+        case let .line(x, y):
+            add(UInt64(1))
+            add(x)
+            add(y)
+        case let .quad(cx, cy, x, y):
+            add(UInt64(2))
+            add(cx)
+            add(cy)
+            add(x)
+            add(y)
+        case let .cubic(c1x, c1y, c2x, c2y, x, y):
+            add(UInt64(3))
+            add(c1x)
+            add(c1y)
+            add(c2x)
+            add(c2y)
+            add(x)
+            add(y)
+        case .close:
+            add(UInt64(4))
+        }
+    }
+
+    mutating func add(optional value: UUID?) {
+        add(value != nil)
+        if let value { add(value) }
+    }
+
+    mutating func add(optional value: StrokeRecord.GrainOffset?) {
+        add(value != nil)
+        if let value {
+            add(value.x)
+            add(value.y)
+        }
+    }
+
+    func digest() -> String {
+        hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 /// Page text plus the ink fingerprint it was recognised from, persisted as one JSON file.
 public actor SearchIndex {
     private struct PageKey: Hashable, Sendable {
@@ -184,14 +274,47 @@ public actor SearchIndex {
         var pageID: UUID
     }
 
-    private struct InkSnapshot: Encodable {
-        var strokes: [StrokeRecord]
-        var deletedStrokeIDs: [String]
-        /// Typed text boxes are searchable too, and changing one must re-index.
-        var typedText: String
-        /// PDF page references are part of the fingerprint so pointing a page at
-        /// a different PDF asset re-indexes it.
-        var pdfRefs: [String]
+    /// One searchable word of a segment, folded once, with its range in the
+    /// original text so a hit snippet reads exactly like the stored text.
+    private struct FoldedWord {
+        var text: String
+        var range: Range<String.Index>
+    }
+
+    /// A segment's text folded for case and diacritics, plus its folded words.
+    /// Built once and reused by every query; never written to disk. The whole
+    /// text is UTF-8 so a miss can be ruled out with a byte scan.
+    private struct FoldedSegment {
+        var text: Data
+        var words: [FoldedWord]
+    }
+
+    private struct PreparedTerm {
+        var text: String
+        var folded: String
+        var foldedBytes: Data
+        var isPhrase: Bool
+
+        init(term: SearchQuery.Term) {
+            text = term.text
+            folded = SearchIndex.fold(term.text)
+            foldedBytes = Data(
+                term.text.folding(options: SearchIndex.foldOptions, locale: nil).utf8
+            )
+            isPhrase = term.isPhrase
+        }
+    }
+
+    private struct PreparedQuery {
+        var groups: [[PreparedTerm]]
+        var excluded: [String]
+
+        init(_ query: SearchQuery) {
+            groups = query.groups.map { group in
+                group.map(PreparedTerm.init(term:))
+            }
+            excluded = query.excluded.map(\.text)
+        }
     }
 
     private static let indexFileName = "search-index.json"
@@ -202,9 +325,22 @@ public actor SearchIndex {
     private static let tolerantMinimumLength = 3
     private static let matchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
     private static let foldOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+    /// Extracted PDF pages kept in memory. Assets are named by SHA-256 and never
+    /// change, so a cached entry never goes stale; the cap only bounds memory.
+    private static let pdfTextCacheLimit = 256
 
     private let root: URL
+    private let pdfTextExtractor: PDFTextExtractor
     private var records: [PageKey: PageSearchRecord] = [:]
+    /// Per-record folded segment text, built when a record is written and
+    /// reused by every later query. Memory only; the file format is unchanged.
+    private var foldedTextCache: [PageKey: [FoldedSegment]] = [:]
+    /// Test seam: false folds each segment during every search, the old way.
+    private var usesFoldedTextCache = true
+    /// Text of PDF asset pages, keyed `"\(assetName)#\(pageIndex)"`.
+    private var pdfTextCache: [String: String] = [:]
+    /// Insertion order of `pdfTextCache`, oldest first, for eviction.
+    private var pdfTextCacheOrder: [String] = []
     private var loaded = false
     /// Open `beginDeferringWrites()` calls. While above zero, changes stay in
     /// memory and `isDirty` records that the file is behind.
@@ -213,7 +349,15 @@ public actor SearchIndex {
 
     /// `root` is the library cache directory; the index lives at `root/search-index.json`.
     public init(root: URL) {
+        self.init(root: root) { url, pageIndex in
+            SearchIndex.pdfPageText(at: url, pageIndex: pageIndex)
+        }
+    }
+
+    /// `pdfTextExtractor` is a test seam: production always uses PDFKit.
+    init(root: URL, pdfTextExtractor: @escaping PDFTextExtractor) {
         self.root = root
+        self.pdfTextExtractor = pdfTextExtractor
     }
 
     // MARK: Loading and saving
@@ -225,6 +369,7 @@ public actor SearchIndex {
         let url = indexURL
         guard FileManager.default.fileExists(atPath: url.path) else {
             records = [:]
+            foldedTextCache = [:]
             loaded = true
             return
         }
@@ -238,9 +383,11 @@ public actor SearchIndex {
                 current.map { (PageKey(notebookID: $0.notebookID, pageID: $0.pageID), $0) },
                 uniquingKeysWith: { _, latest in latest }
             )
+            foldedTextCache = [:]
             loaded = true
         } catch {
             records = [:]
+            foldedTextCache = [:]
             loaded = false
             throw SearchIndexError.corruptIndex(
                 file: url.lastPathComponent,
@@ -366,7 +513,10 @@ public actor SearchIndex {
         if !typed.isEmpty {
             segments.append(PageTextSegment(source: .typedText, text: typed))
         }
-        let pdfText = Self.pdfText(in: page, assetsDirectory: assetsDirectory)
+        let pdfText = await pdfText(for: page, assetsDirectory: assetsDirectory)
+        // A pass cancelled mid-extraction must not store a page without its PDF
+        // text: the unchanged hash would keep the gap forever.
+        guard !Task.isCancelled else { return nil }
         if !pdfText.isEmpty {
             segments.append(PageTextSegment(source: .pdf, text: pdfText))
         }
@@ -398,15 +548,20 @@ public actor SearchIndex {
             editedAt: Self.editedAt(of: page)
         )
         records[key] = record
+        if usesFoldedTextCache {
+            foldedTextCache[key] = Self.foldedSegments(of: record)
+        }
         try persist()
         return record
     }
 
     public func remove(pageID: UUID, notebookID: UUID) throws {
         try ensureLoaded()
-        guard records.removeValue(forKey: PageKey(notebookID: notebookID, pageID: pageID)) != nil else {
+        let key = PageKey(notebookID: notebookID, pageID: pageID)
+        guard records.removeValue(forKey: key) != nil else {
             return
         }
+        foldedTextCache[key] = nil
         try persist()
     }
 
@@ -415,6 +570,7 @@ public actor SearchIndex {
         let kept = records.filter { $0.key.notebookID != notebookID }
         guard kept.count != records.count else { return }
         records = kept
+        foldedTextCache = foldedTextCache.filter { $0.key.notebookID != notebookID }
         try persist()
     }
 
@@ -443,11 +599,26 @@ public actor SearchIndex {
             candidates = Array(records.values)
         }
 
+        // Folding the query terms once is enough for every segment.
+        let prepared = PreparedQuery(query)
         var hits: [SearchHit] = []
         for record in candidates {
             if let editedAfter = filter.editedAfter, record.lastEdited < editedAfter { continue }
-            for segment in record.segments where !segment.text.isEmpty && filter.sources.contains(segment.source) {
-                guard let excerpt = Self.excerpt(in: segment.text, matching: query) else { continue }
+            let hasSearchableSegment = record.segments.contains {
+                !$0.text.isEmpty && filter.sources.contains($0.source)
+            }
+            guard hasSearchableSegment else { continue }
+            let key = PageKey(notebookID: record.notebookID, pageID: record.pageID)
+            let folded: [FoldedSegment]? = usesFoldedTextCache
+                ? foldedSegments(for: key, record: record)
+                : nil
+            for (index, segment) in record.segments.enumerated()
+            where !segment.text.isEmpty && filter.sources.contains(segment.source) {
+                guard let excerpt = Self.excerpt(
+                    in: segment.text,
+                    matching: prepared,
+                    folded: folded.flatMap { index < $0.count ? $0[index] : nil }
+                ) else { continue }
                 hits.append(
                     SearchHit(
                         id: "\(record.notebookID.uuidString):\(record.pageID.uuidString):\(segment.source.rawValue)",
@@ -481,15 +652,54 @@ public actor SearchIndex {
         return hits
     }
 
+    /// The folded text and words for one record, computed on first use when a
+    /// record came from disk and after every write otherwise.
+    private func foldedSegments(for key: PageKey, record: PageSearchRecord) -> [FoldedSegment] {
+        if let cached = foldedTextCache[key] { return cached }
+        let built = Self.foldedSegments(of: record)
+        foldedTextCache[key] = built
+        return built
+    }
+
+    private static func foldedSegments(of record: PageSearchRecord) -> [FoldedSegment] {
+        record.segments.map { segment in
+            var words: [FoldedWord] = []
+            let text = segment.text
+            text.enumerateSubstrings(
+                in: text.startIndex..<text.endIndex,
+                options: [.byWords, .substringNotRequired]
+            ) { _, range, _, _ in
+                let folded = fold(String(text[range]))
+                // Shorter words cannot satisfy either tolerant direction.
+                guard folded.count >= tolerantMinimumLength else { return }
+                words.append(FoldedWord(text: folded, range: range))
+            }
+            return FoldedSegment(text: Data(foldForBytes(text).utf8), words: words)
+        }
+    }
+
+    /// Test seam: false folds every segment during each search instead of using
+    /// the precomputed copy.
+    func setFoldedTextCacheEnabled(_ enabled: Bool) {
+        usesFoldedTextCache = enabled
+        if !enabled { foldedTextCache = [:] }
+    }
+
     /// Every group must match and no excluded term may appear. Returns the earliest match's excerpt.
-    private static func excerpt(in text: String, matching query: SearchQuery) -> (snippet: String, matchRange: Range<String.Index>?)? {
-        for term in query.excluded where phraseMatch(of: term.text, in: text) != nil {
+    private static func excerpt(
+        in text: String,
+        matching query: PreparedQuery,
+        folded: FoldedSegment?
+    ) -> (snippet: String, matchRange: Range<String.Index>?)? {
+        for term in query.excluded where phraseMatch(of: term, in: text) != nil {
             return nil
         }
         var matches: [Range<String.Index>] = []
         for group in query.groups {
             let found = group.compactMap { term in
-                term.isPhrase ? phraseMatch(of: term.text, in: text) : firstMatch(of: term.text, in: text)
+                term.isPhrase
+                    ? phraseMatch(of: term.text, in: text)
+                    : firstMatch(of: term, in: text, folded: folded)
             }
             guard let earliest = found.min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
             matches.append(earliest)
@@ -512,27 +722,48 @@ public actor SearchIndex {
 
     /// An exact case- and diacritic-insensitive substring match first, then a
     /// tolerant word-prefix match so "force" still finds the misrecognised "forc"
-    /// and "forc" finds "force".
-    private static func firstMatch(of term: String, in text: String) -> Range<String.Index>? {
-        guard !term.isEmpty else { return nil }
-        if let range = text.range(of: term, options: matchOptions) {
+    /// and "forc" finds "force". `folded` is the segment's precomputed form; the
+    /// exact scan still runs on the original text so the returned range is exact.
+    private static func firstMatch(
+        of term: PreparedTerm,
+        in text: String,
+        folded: FoldedSegment?
+    ) -> Range<String.Index>? {
+        guard !term.text.isEmpty else { return nil }
+        if let folded, !term.foldedBytes.isEmpty {
+            if folded.text.range(of: term.foldedBytes) != nil,
+               let range = text.range(of: term.text, options: matchOptions) {
+                return range
+            }
+        } else if let range = text.range(of: term.text, options: matchOptions) {
             return range
         }
 
-        let foldedTerm = fold(term)
-        guard foldedTerm.count >= tolerantMinimumLength else { return nil }
+        guard term.folded.count >= tolerantMinimumLength else { return nil }
+
+        if let folded {
+            for word in folded.words {
+                // The query may be longer than the recognised word ("force" → "forc"),
+                // but only for words long enough to be a real recognition, so a short
+                // query is not answered by a stray fragment.
+                if word.text.hasPrefix(term.folded) {
+                    return word.range
+                }
+                if word.text.count >= 4, term.folded.hasPrefix(word.text) {
+                    return word.range
+                }
+            }
+            return nil
+        }
 
         var found: Range<String.Index>?
         text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byWords, .substringNotRequired]) { _, range, _, stop in
             let foldedWord = fold(String(text[range]))
             guard foldedWord.count >= tolerantMinimumLength else { return }
-            // The query may be longer than the recognised word ("force" → "forc"),
-            // but only for words long enough to be a real recognition, so a short
-            // query is not answered by a stray fragment.
-            if foldedWord.hasPrefix(foldedTerm) {
+            if foldedWord.hasPrefix(term.folded) {
                 found = range
                 stop = true
-            } else if foldedWord.count >= 4, foldedTerm.hasPrefix(foldedWord) {
+            } else if foldedWord.count >= 4, term.folded.hasPrefix(foldedWord) {
                 found = range
                 stop = true
             }
@@ -542,6 +773,13 @@ public actor SearchIndex {
 
     private static func fold(_ text: String) -> String {
         text.folding(options: foldOptions, locale: .current)
+    }
+
+    /// Folding for the byte prefilter, without a locale, so it matches the
+    /// `range(of:options:)` call it stands in for. Tolerant word matching keeps
+    /// the `.current` locale `fold` has always used.
+    private static func foldForBytes(_ text: String) -> String {
+        text.folding(options: foldOptions, locale: nil)
     }
 
     /// A single-line excerpt of about `snippetLength` characters around `match`,
@@ -648,31 +886,78 @@ public actor SearchIndex {
         .joined(separator: "\n")
     }
 
-    /// The text of every PDF page on the page. A scanned page has no text layer,
-    /// so its words are read from an on-device image render instead.
-    private static func pdfText(in page: Page, assetsDirectory: URL?) -> String {
+    /// The text of every PDF page on the page, read outside the actor. A scanned
+    /// page has no text layer, so its words are read from an on-device image
+    /// render instead. Extracted text is cached per immutable asset page, so two
+    /// pages showing the same scan extract it once.
+    private func pdfText(for page: Page, assetsDirectory: URL?) async -> String {
         guard let assetsDirectory else { return "" }
         var parts: [String] = []
-        for element in page.elements {
-            guard case let .pdfPage(assetName, pageIndex) = element.content,
-                  pageIndex >= 0
-            else { continue }
-            let url = assetsDirectory.appendingPathComponent(assetName)
-            guard let document = PDFDocument(url: url),
-                  let pdfPage = document.page(at: pageIndex)
-            else { continue }
-            let stored = pdfPage.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let text = stored.isEmpty ? ocrText(from: pdfPage) : stored
-            guard !text.isEmpty else { continue }
-            parts.append(text)
+        for reference in Self.pdfReferences(in: page) {
+            let key = "\(reference.assetName)#\(reference.pageIndex)"
+            let text: String
+            if let cached = pdfTextCache[key] {
+                text = cached
+            } else {
+                let url = assetsDirectory.appendingPathComponent(reference.assetName)
+                text = await Self.extractPDFPageText(
+                    pdfTextExtractor,
+                    at: url,
+                    pageIndex: reference.pageIndex
+                )
+                cachePDFText(text, for: key)
+            }
+            if !text.isEmpty {
+                parts.append(text)
+            }
         }
         return parts.joined(separator: "\n")
+    }
+
+    private func cachePDFText(_ text: String, for key: String) {
+        if pdfTextCache[key] == nil {
+            pdfTextCacheOrder.append(key)
+        }
+        pdfTextCache[key] = text
+        while pdfTextCacheOrder.count > Self.pdfTextCacheLimit {
+            let oldest = pdfTextCacheOrder.removeFirst()
+            pdfTextCache[oldest] = nil
+        }
+    }
+
+    /// Runs the extractor on a detached task so PDFKit and Vision never hold the
+    /// actor while a search is waiting. Cancellation propagates to the work.
+    private static func extractPDFPageText(
+        _ extractor: @escaping PDFTextExtractor,
+        at url: URL,
+        pageIndex: Int
+    ) async -> String {
+        let work = Task.detached(priority: .utility) {
+            await extractor(url, pageIndex)
+        }
+        return await withTaskCancellationHandler {
+            await work.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    /// The text layer of one PDF page, or its scanned words. Synchronous, so only
+    /// call it from `extractPDFPageText`'s detached task.
+    static func pdfPageText(at url: URL, pageIndex: Int) -> String {
+        guard !Task.isCancelled,
+              let document = PDFDocument(url: url),
+              let pdfPage = document.page(at: pageIndex)
+        else { return "" }
+        let stored = pdfPage.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? ocrText(from: pdfPage) : stored
     }
 
     /// Reads the words in a scanned PDF page with Vision. Runs once per page,
     /// because the index keeps the result until the page or PDF reference
     /// changes; it is deliberately not run on every search.
     private static func ocrText(from pdfPage: PDFPage) -> String {
+        guard !Task.isCancelled else { return "" }
         let bounds = pdfPage.bounds(for: .mediaBox)
         guard bounds.width > 0, bounds.height > 0 else { return "" }
         // A4 at about 2.5× is enough for the recogniser without a huge bitmap.
@@ -720,6 +1005,16 @@ public actor SearchIndex {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The PDF pages on a page that can be read, in element order.
+    private static func pdfReferences(in page: Page) -> [(assetName: String, pageIndex: Int)] {
+        page.elements.compactMap { element in
+            guard case let .pdfPage(assetName, pageIndex) = element.content,
+                  pageIndex >= 0
+            else { return nil }
+            return (assetName, pageIndex)
+        }
+    }
+
     private static func pdfRefs(in page: Page) -> [String] {
         page.elements.compactMap { element in
             guard case let .pdfPage(assetName, pageIndex) = element.content else { return nil }
@@ -728,17 +1023,40 @@ public actor SearchIndex {
         .sorted()
     }
 
-    private static func contentHash(of page: Page) -> String {
-        let snapshot = InkSnapshot(
-            strokes: page.strokes,
-            deletedStrokeIDs: page.deletedStrokeIDs.map(\.uuidString).sorted(),
-            typedText: typedText(in: page),
-            pdfRefs: pdfRefs(in: page)
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        guard let data = try? encoder.encode(snapshot) else { return "" }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    static func contentHash(of page: Page) -> String {
+        var hash = InkHasher()
+        hash.add(page.strokes.count)
+        for stroke in page.strokes {
+            hash.add(stroke.id)
+            hash.add(stroke.layerID)
+            hash.add(stroke.tool.engine)
+            hash.add(stroke.tool.inkType)
+            hash.add(stroke.tool.color.r)
+            hash.add(stroke.tool.color.g)
+            hash.add(stroke.tool.color.b)
+            hash.add(stroke.tool.color.a)
+            hash.add(stroke.tool.width)
+            hash.add(stroke.tool.isHighlighter)
+            hash.add(stroke.createdAt.timeIntervalSince1970)
+            hash.add(stroke.transform.count)
+            for value in stroke.transform { hash.add(value) }
+            hash.add(UInt64(stroke.randomSeed))
+            hash.add(stroke.mask?.count ?? -1)
+            for element in stroke.mask ?? [] { hash.add(element) }
+            hash.add(optional: stroke.renderGroupID)
+            hash.add(optional: stroke.pathID)
+            hash.add(optional: stroke.grainOffset)
+            hash.add(stroke.points.count)
+            for point in stroke.points { hash.add(point) }
+        }
+        let deleted = page.deletedStrokeIDs.map(\.uuidString).sorted()
+        hash.add(deleted.count)
+        for identifier in deleted { hash.add(identifier) }
+        hash.add(typedText(in: page))
+        let refs = pdfRefs(in: page)
+        hash.add(refs.count)
+        for reference in refs { hash.add(reference) }
+        return hash.digest()
     }
 
     private func sortedRecords() -> [PageSearchRecord] {
